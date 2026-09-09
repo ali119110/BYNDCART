@@ -1,0 +1,457 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model Merchant {
+  id            String         @id @default(uuid())
+  name          String
+  email         String?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  shopifyStores ShopifyStore[]
+  users         User[]
+}
+
+model ShopifyStore {
+  id               String            @id @default(uuid())
+  merchantId       String
+  shop             String            @unique
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  merchant         Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  returnRequests   ReturnRequest[]
+  exchangeRequests ExchangeRequest[]
+  webhookEvents    WebhookEvent[]
+  auditLogs        AuditLog[]
+  storeSettings    StoreSettings?
+  orders        Order[]
+  productCaches ProductCache[]
+  backgroundJobs BackgroundJob[]
+  shipments     ShipmentTrack[]
+  warehouseIntakes WarehouseIntake[]
+  customerOtps  CustomerOTP[]
+  courierConfigs MerchantCourierConfig[]
+  returnPolicyRule ReturnPolicyRule?
+  billingSubscription BillingSubscription?
+  notificationTemplates NotificationTemplate[]
+  notificationLogs      NotificationLog[]
+}
+
+model User {
+  id         String     @id @default(uuid())
+  merchantId String
+  email      String     @unique
+  name       String?
+  role       String     @default("MEMBER") // ADMIN, MEMBER
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+  merchant   Merchant   @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  auditLogs  AuditLog[]
+}
+
+model ReturnRequest {
+  id             String       @id @default(uuid())
+  shopifyStoreId String
+  shopifyOrderId String       // e.g. gid://shopify/Order/123456789
+  orderNumber    String       // e.g. #1001
+  customerEmail  String
+  customerName   String?
+  status         String       @default("PENDING") // PENDING, APPROVED, REJECTED, COMPLETED, CANCELLED
+  reason         String?
+  customerNote   String?
+  adminNote      String?
+  refundAmount   Decimal?     @db.Decimal(10, 2)
+  shopifyReturnId String?     // e.g. gid://shopify/Return/123456789
+  shopifyRefundId String?     // e.g. gid://shopify/Refund/987654321
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  shopifyStore   ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+  items          ReturnItem[]
+  warehouseIntakes WarehouseIntake[]
+
+  @@index([shopifyStoreId])
+  @@index([shopifyStoreId, status])
+  @@index([shopifyStoreId, createdAt])
+}
+
+model ReturnItem {
+  id                String        @id @default(uuid())
+  returnRequestId   String
+  shopifyLineItemId String        // e.g. gid://shopify/LineItem/123
+  quantity          Int
+  reason            String        // e.g. SIZE_TOO_SMALL, DEFECTIVE, etc.
+  reasonNote        String?
+  status            String        @default("PENDING") // PENDING, RECEIVED, INSPECTED, REJECTED
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  returnRequest     ReturnRequest @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  itemInspections   ItemInspection[]
+
+  @@index([returnRequestId])
+}
+
+model ExchangeRequest {
+  id             String         @id @default(uuid())
+  shopifyStoreId String
+  shopifyOrderId String         // Original order ID
+  orderNumber    String         // Original order number
+  customerEmail  String
+  customerName   String?
+  status         String         @default("PENDING") // PENDING, APPROVED, REJECTED, FULFILLED, COMPLETED, CANCELLED
+  newOrderId     String?        // Replacement draft/actual order ID in Shopify
+  newOrderNumber String?        // Replacement order number
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  shopifyStore   ShopifyStore   @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+  items          ExchangeItem[]
+
+  @@index([shopifyStoreId])
+  @@index([shopifyStoreId, status])
+  @@index([shopifyStoreId, createdAt])
+}
+
+model ExchangeItem {
+  id                   String          @id @default(uuid())
+  exchangeRequestId    String
+  originalLineItemId   String          // Original shopify line item ID
+  originalQuantity     Int
+  replacementVariantId String          // Shopify product variant ID
+  replacementQuantity  Int
+  replacementTitle     String?
+  priceDifference      Decimal         @default(0.00) @db.Decimal(10, 2)
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+  exchangeRequest      ExchangeRequest @relation(fields: [exchangeRequestId], references: [id], onDelete: Cascade)
+
+  @@index([exchangeRequestId])
+}
+
+model WebhookEvent {
+  id             String       @id // We will map this to the unique Shopify-Webhook-Id header
+  shopifyStoreId String
+  topic          String       // e.g. orders/create
+  payload        Json
+  processed      Boolean      @default(false)
+  processedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  shopifyStore   ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@index([shopifyStoreId])
+  @@index([processed])
+}
+
+model AuditLog {
+  id             String       @id @default(uuid())
+  shopifyStoreId String
+  userId         String?
+  action         String       // e.g. RETURN_APPROVED
+  entityType     String       // e.g. ReturnRequest
+  entityId       String?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+  shopifyStore   ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+  user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([shopifyStoreId])
+  @@index([shopifyStoreId, createdAt])
+}
+
+model StoreSettings {
+  id                    String       @id @default(uuid())
+  shopifyStoreId        String       @unique
+  returnWindowDays       Int          @default(30)
+  restockingFeePercent   Decimal      @default(0.00) @db.Decimal(5, 2)
+  exchangeWindowDays     Int          @default(30)
+  exchangeShippingCost   Decimal      @default(0.00) @db.Decimal(10, 2)
+  notificationEmail      String?
+  emailNotificationsEnabled Boolean @default(false)
+  fraudFlagReturnCount    Int         @default(5)
+  fraudFlagWindowDays     Int         @default(30)
+  fraudFlagWindowCount    Int         @default(3)
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+  shopifyStore           ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+}
+
+model Order {
+  id                 String       @id @default(uuid())
+  shopifyStoreId     String
+  shopifyOrderId     String       @unique   // gid://shopify/Order/...
+  orderNumber        String
+  customerEmail      String?
+  customerName       String?
+  totalPrice         Decimal      @db.Decimal(10, 2)
+  currency           String       @default("USD")
+  financialStatus    String?
+  fulfillmentStatus  String?
+  lineItems          Json         // snapshot: [{lineItemId, variantId, productId, title, sku, quantity, price}]
+  shopifyCreatedAt   DateTime
+  syncedAt           DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  shopifyStore       ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@index([shopifyStoreId])
+  @@index([shopifyStoreId, shopifyCreatedAt])
+}
+
+model ProductCache {
+  id               String       @id @default(uuid())
+  shopifyStoreId   String
+  shopifyVariantId String       @unique   // gid://shopify/ProductVariant/...
+  shopifyProductId String
+  title            String
+  variantTitle     String?
+  sku              String?
+  imageUrl         String?
+  price            Decimal      @db.Decimal(10, 2)
+  fetchedAt        DateTime     @default(now())
+  shopifyStore     ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@index([shopifyStoreId])
+}
+
+model BackgroundJob {
+  id             String        @id @default(uuid())
+  shopifyStoreId String?
+  type           String        // WEBHOOK_PROCESS, DRAFT_ORDER_CREATE, COURIER_LABEL_GENERATE, RETRY_OPERATION
+  payload        Json
+  status         String        @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  attempts       Int           @default(0)
+  maxAttempts    Int           @default(3)
+  lastError      String?
+  runAt          DateTime      @default(now())
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  shopifyStore   ShopifyStore? @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@index([shopifyStoreId])
+  @@index([status, runAt])
+}
+
+model ShipmentTrack {
+  id                 String       @id @default(uuid())
+  shopifyStoreId     String
+  shopifyOrderId     String
+  orderNumber        String
+  type               String       @default("RETURN") // FORWARD, RETURN, EXCHANGE
+  courier            String       @default("STANDARD") // STANDARD, DHL, FEDEX, UPS
+  trackingNumber     String       @unique
+  labelUrl           String?
+  status             String       @default("LABEL_CREATED") // LABEL_CREATED, IN_TRANSIT, OUT_FOR_DELIVERY, DELIVERED, FAILED
+  location           String?
+  estimatedDelivery  DateTime?
+  returnRequestId    String?
+  exchangeRequestId  String?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  shopifyStore       ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+  warehouseIntakes   WarehouseIntake[]
+  events             ShipmentEvent[]
+
+  @@index([shopifyStoreId])
+  @@index([shopifyStoreId, type])
+  @@index([shopifyStoreId, status])
+}
+
+model WarehouseIntake {
+  id                 String           @id @default(uuid())
+  shopifyStoreId     String
+  shipmentTrackId    String?
+  returnRequestId    String
+  scannedAwb         String
+  receivedByUserId   String?
+  status             String           @default("RECEIVED") // RECEIVED, INSPECTED, REJECTED
+  notes              String?
+  receivedAt         DateTime         @default(now())
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  shopifyStore       ShopifyStore     @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+  returnRequest      ReturnRequest    @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  shipmentTrack      ShipmentTrack?   @relation(fields: [shipmentTrackId], references: [id], onDelete: SetNull)
+  inspections        ItemInspection[]
+
+  @@index([shopifyStoreId])
+  @@index([shopifyStoreId, scannedAwb])
+  @@index([returnRequestId])
+}
+
+model ItemInspection {
+  id                String          @id @default(uuid())
+  warehouseIntakeId String
+  returnItemId      String?
+  shopifyLineItemId String
+  title             String?
+  sku               String?
+  expectedQuantity  Int
+  receivedQuantity  Int
+  condition         String          @default("RESTOCKABLE") // RESTOCKABLE, DAMAGED, DEFECTIVE, WRONG_ITEM, MISSING_ITEM, DISCARD
+  inspectionNotes   String?
+  restockedInShopify Boolean        @default(false)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  warehouseIntake   WarehouseIntake @relation(fields: [warehouseIntakeId], references: [id], onDelete: Cascade)
+  returnItem        ReturnItem?     @relation(fields: [returnItemId], references: [id], onDelete: SetNull)
+
+  @@index([warehouseIntakeId])
+}
+
+model CustomerOTP {
+  id             String       @id @default(uuid())
+  shopifyStoreId String
+  orderNumber    String       // e.g. #1001
+  destination    String       // Email or Phone number
+  otpHash        String
+  expiresAt      DateTime
+  attempts       Int          @default(0)
+  maxAttempts    Int          @default(3)
+  verified       Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  shopifyStore   ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@index([shopifyStoreId])
+  @@index([shopifyStoreId, orderNumber, destination])
+}
+
+model MerchantCourierConfig {
+  id                 String       @id @default(uuid())
+  shopifyStoreId     String
+  providerName       String       // POSTEX, LEOPARDS, TRAX, TCS, MNP, CALLCOURIER
+  encryptedApiToken  String       // Encrypted API key / token / password
+  accountNumber      String?      // Account number / Client ID / User ID
+  additionalConfig   Json?        // Additional config (e.g. city, hub, environment)
+  enabled            Boolean      @default(true)
+  isDefaultReverse   Boolean      @default(false)
+  isDefaultForward   Boolean      @default(false)
+  isLive             Boolean      @default(false)
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  shopifyStore       ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@unique([shopifyStoreId, providerName])
+  @@index([shopifyStoreId])
+}
+
+model ShipmentEvent {
+  id              String        @id @default(uuid())
+  shipmentTrackId String
+  status          String        // Standard BYNDCART status or carrier raw status
+  description     String?
+  location        String?
+  timestamp       DateTime      @default(now())
+  rawPayload      Json?
+  shipmentTrack   ShipmentTrack @relation(fields: [shipmentTrackId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentTrackId])
+}
+
+model ReturnPolicyRule {
+  id                      String       @id @default(uuid())
+  shopifyStoreId          String       @unique
+  returnWindowDays        Int          @default(30)
+  exchangeWindowDays      Int          @default(30)
+  returnsAllowed          Boolean      @default(true)
+  exchangesAllowed        Boolean      @default(true)
+  allowSaleItems          Boolean      @default(true)
+  maxReturnQuantity       Int          @default(5)
+  preventPreviousReturns  Boolean      @default(true)
+  excludedSkus            String[]     @default([])
+  excludedProductIds      String[]     @default([])
+  excludedCategories      String[]     @default([])
+  eligibleCategories      String[]     @default([])
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+  shopifyStore            ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@index([shopifyStoreId])
+}
+
+model BillingSubscription {
+  id                    String       @id @default(uuid())
+  shopifyStoreId        String       @unique
+  shopifySubscriptionId String?      @unique
+  name                  String       @default("Free") // Free, Basic, Growth, Pro
+  planCode              String       @default("FREE") // FREE, BASIC, GROWTH, PRO
+  status                String       @default("ACTIVE") // ACTIVE, PENDING, CANCELLED, DECLINED, EXPIRED
+  price                 Decimal      @default(0.00) @db.Decimal(10, 2)
+  currency              String       @default("USD")
+  interval              String       @default("EVERY_30_DAYS")
+  monthlyReturnLimit    Int          @default(15) // Free: 15, Basic: 100, Growth: 500, Pro: Unlimited (-1)
+  currentPeriodStart    DateTime?
+  currentPeriodEnd      DateTime?
+  cappedAmount          Decimal?     @db.Decimal(10, 2)
+  trialDays             Int          @default(0)
+  test                  Boolean      @default(false)
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+  shopifyStore          ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@index([shopifyStoreId])
+  @@index([shopifySubscriptionId])
+  @@index([status])
+}
+
+model NotificationTemplate {
+  id             String       @id @default(uuid())
+  shopifyStoreId String
+  eventType      String       // RETURN_SUBMITTED, RETURN_APPROVED, RETURN_REJECTED, COURIER_PICKUP_BOOKED, TRACKING_UPDATE, RETURN_RECEIVED, INSPECTION_COMPLETED, REFUND_INITIATED, EXCHANGE_APPROVED, REPLACEMENT_CREATED, REPLACEMENT_DELIVERED, LIFECYCLE_COMPLETED
+  channel        String       @default("EMAIL") // EMAIL, WHATSAPP
+  enabled        Boolean      @default(true)
+  subject        String       // Email subject line template
+  body           String       // Body text/HTML template with {{variables}}
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  shopifyStore   ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@unique([shopifyStoreId, eventType, channel])
+  @@index([shopifyStoreId])
+}
+
+model NotificationLog {
+  id             String       @id @default(uuid())
+  shopifyStoreId String
+  eventType      String
+  channel        String       @default("EMAIL") // EMAIL, WHATSAPP
+  recipient      String       // Email or phone number
+  subject        String?
+  body           String?      // Rendered body with secrets masked
+  status         String       @default("PENDING") // PENDING, SENT, FAILED, SKIPPED
+  idempotencyKey String       @unique
+  error          String?
+  sentAt         DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  shopifyStore   ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@index([shopifyStoreId])
+  @@index([idempotencyKey])
+  @@index([status])
+}

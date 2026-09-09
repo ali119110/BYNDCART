@@ -1,0 +1,104 @@
+openapi: 3.0.3
+info:
+  title: BYNDCART API
+  version: "1.0.0"
+  description: >
+    API surface for the BYNDCART Shopify app. Currently documents the
+    Shopify webhook receiver — the only externally-callable endpoint that
+    exists today. Everything else in the app is server-rendered React
+    Router routes (loaders/actions), not a standalone API, and isn't
+    documented here.
+
+    A merchant-facing public API (for external integrations to query
+    returns/exchanges/orders) is planned but not yet built — see the
+    placeholder path below for where that will land.
+
+servers:
+  - url: https://{your-app-domain}
+    variables:
+      your-app-domain:
+        default: your-app.example.com
+
+paths:
+  /webhooks:
+    post:
+      summary: Shopify webhook receiver
+      description: >
+        Receives all subscribed Shopify webhook topics (orders/create,
+        orders/updated, products/create, products/update,
+        customers/data_request, customers/redact, shop/redact,
+        app/uninstalled, app/scopes_update). Not intended to be called by
+        anything other than Shopify — requests are authenticated via HMAC
+        signature verification (handled by the Shopify app SDK) and rate
+        limited to 120 requests/minute per shop.
+      operationId: receiveShopifyWebhook
+      security:
+        - shopifyHmac: []
+      parameters:
+        - name: X-Shopify-Topic
+          in: header
+          required: true
+          schema:
+            type: string
+          example: orders/create
+        - name: X-Shopify-Shop-Domain
+          in: header
+          required: true
+          schema:
+            type: string
+          example: your-store.myshopify.com
+        - name: X-Shopify-Webhook-Id
+          in: header
+          required: true
+          description: Unique ID used for duplicate-delivery detection.
+          schema:
+            type: string
+        - name: X-Shopify-Hmac-Sha256
+          in: header
+          required: true
+          description: Base64-encoded HMAC signature, verified against the app's client secret.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Shape varies per topic — matches Shopify's REST webhook payload for that resource.
+      responses:
+        "200":
+          description: Webhook received and processed (or already processed — duplicates return 200 too, per Shopify's retry contract).
+        "400":
+          description: Missing required X-Shopify-Webhook-Id header.
+        "401":
+          description: HMAC signature verification failed.
+        "429":
+          description: Rate limit exceeded for this shop (120/min).
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+              description: Seconds until the rate limit window resets.
+        "500":
+          description: Unexpected server error while processing the webhook.
+
+  /api/v1/orders:
+    post:
+      summary: (Planned) Merchant public API — not yet implemented
+      description: >
+        Placeholder for the merchant-facing public API described in the
+        project roadmap (external integrations querying orders/returns/
+        exchanges). No implementation exists yet.
+      x-status: not-implemented
+      responses:
+        "501":
+          description: Not implemented.
+
+components:
+  securitySchemes:
+    shopifyHmac:
+      type: apiKey
+      in: header
+      name: X-Shopify-Hmac-Sha256
+      description: HMAC-SHA256 signature of the raw request body, verified server-side against the app's client secret.

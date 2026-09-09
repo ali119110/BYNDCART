@@ -1,0 +1,43 @@
+node_modules
+
+# IDE & AI Tooling artifacts
+.claude/
+.cursor/
+.gemini/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Build outputs & caches
+/.cache
+/build
+/app/build
+/public/build/
+/public/_dev
+/app/public/build
+*.log
+logs/
+
+# Database SQLite dev files
+/prisma/dev.sqlite
+/prisma/dev.sqlite-journal
+database.sqlite
+
+# Secrets & Environment variables
+.env
+.env.*
+!.env.example
+
+# Lockfiles (yarn/pnpm ignored, npm package-lock.json tracked for deterministic builds)
+yarn.lock
+pnpm-lock.yaml
+
+/extensions/*/dist
+
+# Shopify dev artifacts
+.shopify/*
+.shopify.lock
+
+# React Router auto-generated files
+.react-router/
