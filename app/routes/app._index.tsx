@@ -1,6 +1,6 @@
 import React from "react";
-import { useLoaderData, useFetcher } from "react-router";
-import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
+import { useLoaderData } from "react-router";
+import type { LoaderFunctionArgs } from "react-router";
 import { requireTenantContext } from "../utils/tenant.server";
 import prisma from "../db.server";
 import { executeInitialShopifySync } from "../services/shopifySync.server";
@@ -15,9 +15,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
         shop: true,
         syncStatus: true,
         lastSyncAt: true,
-        lastReconciledAt: true,
-        webhookStatus: true,
-        lastSyncError: true,
       },
     });
 
@@ -31,9 +28,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
             shop: true,
             syncStatus: true,
             lastSyncAt: true,
-            lastReconciledAt: true,
-            webhookStatus: true,
-            lastSyncError: true,
           },
         });
       } catch (syncErr) {
@@ -42,11 +36,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
 
     // Query real counts from Database
-    const [ordersCount, returnsCount, exchangesCount, customersCount, recentReturnsDb, recentExchangesDb] = await Promise.all([
+    const [ordersCount, returnsCount, exchangesCount, customerCacheCount, exchangeItems, recentReturnsDb, recentExchangesDb] = await Promise.all([
       prisma.order.count({ where: { shopifyStoreId } }),
       prisma.returnRequest.count({ where: { shopifyStoreId } }),
       prisma.exchangeRequest.count({ where: { shopifyStoreId } }),
-      prisma.customer.count({ where: { shopifyStoreId } }),
+      prisma.customerCache.count({ where: { shopifyStoreId } }),
+      prisma.exchangeItem.findMany({
+        where: { exchangeRequest: { shopifyStoreId } },
+        select: { priceDifference: true },
+      }),
       prisma.returnRequest.findMany({
         where: { shopifyStoreId },
         take: 5,
@@ -60,31 +58,31 @@ export async function loader({ request }: LoaderFunctionArgs) {
       }),
     ]);
 
+    // Calculate revenue retained from exchanges
+    const revenueRetained = exchangeItems.reduce((acc, item) => {
+      const val = item.priceDifference ? parseFloat(item.priceDifference.toString()) : 0;
+      return acc + (isNaN(val) ? 0 : val);
+    }, 0);
+
+    // If customerCacheCount is 0, count unique customer emails from Orders
+    let customersCount = customerCacheCount;
+    if (customersCount === 0) {
+      const distinctCustomers = await prisma.order.findMany({
+        where: { shopifyStoreId, customerEmail: { not: null } },
+        select: { customerEmail: true },
+        distinct: ["customerEmail"],
+      });
+      customersCount = distinctCustomers.length;
+    }
+
     return {
-      storeStatus: store
-        ? {
-            connected: true,
-            shop: store.shop,
-            syncStatus: store.syncStatus,
-            lastSyncAt: store.lastSyncAt ? new Date(store.lastSyncAt).toLocaleString() : "Just now",
-            lastReconciledAt: store.lastReconciledAt ? new Date(store.lastReconciledAt).toLocaleString() : "Just now",
-            webhookStatus: store.webhookStatus,
-            lastSyncError: store.lastSyncError,
-          }
-        : {
-            connected: false,
-            shop: "Disconnected",
-            syncStatus: "UNKNOWN",
-            lastSyncAt: "Never",
-            lastReconciledAt: "Never",
-            webhookStatus: "UNKNOWN",
-            lastSyncError: null,
-          },
+      shop: store?.shop ?? "Connected Store",
       metrics: {
         ordersCount,
         returnsCount,
         exchangesCount,
         customersCount,
+        revenueRetained,
       },
       recentReturns: recentReturnsDb.map((r) => ({
         id: r.id,
@@ -103,22 +101,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
       })),
     };
   } catch (error) {
-    // Fallback for local dev or testing
+    console.error("[Dashboard Loader] Error:", error);
     return {
-      storeStatus: {
-        connected: true,
-        shop: "byndcart-demo.myshopify.com",
-        syncStatus: "COMPLETED",
-        lastSyncAt: new Date().toLocaleString(),
-        lastReconciledAt: new Date().toLocaleString(),
-        webhookStatus: "REGISTERED",
-        lastSyncError: null,
-      },
+      shop: "Connected Store",
       metrics: {
-        ordersCount: 42,
-        returnsCount: 8,
-        exchangesCount: 3,
-        customersCount: 35,
+        ordersCount: 0,
+        returnsCount: 0,
+        exchangesCount: 0,
+        customersCount: 0,
+        revenueRetained: 0,
       },
       recentReturns: [],
       recentExchanges: [],
@@ -126,137 +117,39 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 }
 
-export async function action({ request }: ActionFunctionArgs) {
-  const { shopifyStoreId, admin } = await requireTenantContext(request);
-  const result = await executeInitialShopifySync({ shopifyStoreId, admin });
-  return result;
-}
-
 export default function Dashboard() {
   const loaderData = useLoaderData<typeof loader>();
-  const fetcher = useFetcher<typeof action>();
 
-  const storeStatus = loaderData?.storeStatus ?? {
-    connected: true,
-    shop: "store.myshopify.com",
-    syncStatus: "COMPLETED",
-    lastSyncAt: "Just now",
-    lastReconciledAt: "Just now",
-    webhookStatus: "REGISTERED",
-    lastSyncError: null,
-  };
-
+  const shop = loaderData?.shop ?? "Connected Store";
   const metrics = loaderData?.metrics ?? {
     ordersCount: 0,
     returnsCount: 0,
     exchangesCount: 0,
     customersCount: 0,
+    revenueRetained: 0,
   };
 
   const recentReturns = loaderData?.recentReturns ?? [];
   const recentExchanges = loaderData?.recentExchanges ?? [];
-  const isSyncing = fetcher.state !== "idle" || storeStatus.syncStatus === "SYNCING";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "24px", maxWidth: "1240px", margin: "0 auto", padding: "8px 0" }}>
       {/* Header Banner */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "16px" }}>
-        <div>
-          <h1 style={{ fontSize: "24px", fontWeight: "700", color: "#0f172a", margin: 0, fontFamily: "Outfit, sans-serif" }}>
-            BYNDCART Overview
-          </h1>
-          <p style={{ margin: "4px 0 0 0", color: "#64748b", fontSize: "14px" }}>
-            Automated Returns & Exchanges Portal for {storeStatus.shop}
-          </p>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <span
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              fontSize: "12px",
-              fontWeight: 600,
-              padding: "6px 12px",
-              borderRadius: "20px",
-              backgroundColor: isSyncing ? "#fef3c7" : storeStatus.syncStatus === "COMPLETED" ? "#dcfce7" : "#fee2e2",
-              color: isSyncing ? "#d97706" : storeStatus.syncStatus === "COMPLETED" ? "#15803d" : "#b91c1c",
-            }}
-          >
-            <span
-              style={{
-                width: "8px",
-                height: "8px",
-                borderRadius: "50%",
-                backgroundColor: isSyncing ? "#f59e0b" : storeStatus.syncStatus === "COMPLETED" ? "#22c55e" : "#ef4444",
-              }}
-            />
-            {isSyncing ? "Syncing Shopify Data..." : `Sync Status: ${storeStatus.syncStatus}`}
-          </span>
-          <button
-            onClick={() => fetcher.submit({}, { method: "POST" })}
-            disabled={isSyncing}
-            style={{
-              background: "#ffffff",
-              color: "#475569",
-              border: "1px solid #cbd5e1",
-              borderRadius: "8px",
-              padding: "8px 14px",
-              fontSize: "13px",
-              fontWeight: 600,
-              cursor: isSyncing ? "not-allowed" : "pointer",
-            }}
-          >
-            {isSyncing ? "Syncing..." : "Sync Shopify Now"}
-          </button>
-        </div>
+      <div style={{ borderBottom: "1px solid #e2e8f0", paddingBottom: "16px" }}>
+        <h1 style={{ fontSize: "24px", fontWeight: "700", color: "#0f172a", margin: 0, fontFamily: "Outfit, sans-serif" }}>
+          BYNDCART Dashboard
+        </h1>
+        <p style={{ margin: "4px 0 0 0", color: "#64748b", fontSize: "14px" }}>
+          Real-time metrics for {shop}
+        </p>
       </div>
 
-      {/* Sync Diagnostics Strip */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px" }}>
-        <div style={{ background: "#ffffff", padding: "16px", borderRadius: "12px", border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,0.02)" }}>
-          <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Connection</div>
-          <div style={{ fontSize: "16px", fontWeight: 700, color: "#0f172a", marginTop: "4px" }}>
-            {storeStatus.connected ? "Active & Linked" : "Disconnected"}
-          </div>
-          <div style={{ fontSize: "12px", color: "#10b981", marginTop: "2px" }}>{storeStatus.shop}</div>
-        </div>
-
-        <div style={{ background: "#ffffff", padding: "16px", borderRadius: "12px", border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,0.02)" }}>
-          <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Last Sync</div>
-          <div style={{ fontSize: "16px", fontWeight: 700, color: "#0f172a", marginTop: "4px" }}>
-            {storeStatus.lastSyncAt}
-          </div>
-          <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>Auto-synced via GraphQL</div>
-        </div>
-
-        <div style={{ background: "#ffffff", padding: "16px", borderRadius: "12px", border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,0.02)" }}>
-          <div style={{ fontSize: "12px", color: "#64748b", fontWeight: "600", textTransform: "uppercase", letterSpacing: "0.05em" }}>Webhooks</div>
-          <div style={{ fontSize: "16px", fontWeight: 700, color: "#0f172a", marginTop: "4px" }}>
-            {storeStatus.webhookStatus}
-          </div>
-          <div style={{ fontSize: "12px", color: "#10b981", marginTop: "2px" }}>11 Topics Subscribed</div>
-        </div>
-
-        <div style={{ background: "#ffffff", padding: "16px", borderRadius: "12px", border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,0.02)" }}>
-          <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>Reconciliation</div>
-          <div style={{ fontSize: "16px", fontWeight: 700, color: "#0f172a", marginTop: "4px" }}>
-            Active Daemon
-          </div>
-          <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>Last: {storeStatus.lastReconciledAt}</div>
-        </div>
-      </div>
-
-      {storeStatus.lastSyncError && (
-        <div style={{ backgroundColor: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px", padding: "12px 16px", color: "#991b1b", fontSize: "13px" }}>
-          <strong>Sync Warning:</strong> {storeStatus.lastSyncError}
-        </div>
-      )}
-
-      {/* Primary KPI Metric Cards */}
+      {/* Business KPI Metric Cards */}
       <div>
-        <h2 style={{ fontSize: "16px", fontWeight: 700, color: "#0f172a", marginBottom: "12px", fontFamily: "Outfit, sans-serif" }}>Store Performance Metrics</h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "16px" }}>
+        <h2 style={{ fontSize: "16px", fontWeight: 700, color: "#0f172a", marginBottom: "14px", fontFamily: "Outfit, sans-serif" }}>
+          Store Performance Metrics
+        </h2>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "16px" }}>
           <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)" }}>
             <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Total Store Orders</div>
             <div style={{ fontSize: "28px", fontWeight: 800, color: "#0f172a", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
@@ -270,7 +163,7 @@ export default function Dashboard() {
             <div style={{ fontSize: "28px", fontWeight: 800, color: "#6366f1", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
               {metrics.returnsCount}
             </div>
-            <div style={{ fontSize: "12px", color: "#6366f1", fontWeight: 600 }}>Customer & Merchant returns</div>
+            <div style={{ fontSize: "12px", color: "#6366f1", fontWeight: 600 }}>Total returns created</div>
           </div>
 
           <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)" }}>
@@ -278,7 +171,7 @@ export default function Dashboard() {
             <div style={{ fontSize: "28px", fontWeight: 800, color: "#10b981", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
               {metrics.exchangesCount}
             </div>
-            <div style={{ fontSize: "12px", color: "#10b981", fontWeight: 600 }}>Retained Store Revenue</div>
+            <div style={{ fontSize: "12px", color: "#10b981", fontWeight: 600 }}>Product replacements</div>
           </div>
 
           <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)" }}>
@@ -287,6 +180,14 @@ export default function Dashboard() {
               {metrics.customersCount}
             </div>
             <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 600 }}>Active store profiles</div>
+          </div>
+
+          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)" }}>
+            <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Revenue Retained</div>
+            <div style={{ fontSize: "28px", fontWeight: 800, color: "#059669", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
+              ${metrics.revenueRetained.toFixed(2)}
+            </div>
+            <div style={{ fontSize: "12px", color: "#059669", fontWeight: 600 }}>Saved via exchanges</div>
           </div>
         </div>
       </div>
@@ -384,4 +285,5 @@ export default function Dashboard() {
     </div>
   );
 }
+
 
