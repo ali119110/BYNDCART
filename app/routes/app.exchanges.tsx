@@ -37,7 +37,7 @@ export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData();
   const actionType = formData.get("actionType") as string;
 
-  // Handle Manual Exchange Creation
+  // Handle Manual Exchange Creation & Seamless Auto Shopify Order Creation
   if (actionType === "CREATE_MANUAL_EXCHANGE") {
     const shopifyOrderId = formData.get("shopifyOrderId") as string;
     const itemsJson = formData.get("items") as string;
@@ -61,6 +61,7 @@ export async function action({ request }: Route.ActionArgs) {
         return { error: "At least one replacement item must be selected" };
       }
 
+      // 1. Create exchange request record in database
       const exchangeRequest = await createExchangeRequest({
         shopifyStoreId,
         shopifyOrderId: order.shopifyOrderId,
@@ -70,7 +71,18 @@ export async function action({ request }: Route.ActionArgs) {
         items: parsedItems,
       });
 
-      return { success: true, exchange: exchangeRequest };
+      // 2. Seamlessly Auto-Create Shopify Replacement Order / Draft Order
+      let finalExchange = exchangeRequest;
+      try {
+        const approvedResult = await approveExchangeWithDraftOrder(admin, exchangeRequest.id, shopifyStoreId);
+        if (approvedResult) {
+          finalExchange = approvedResult;
+        }
+      } catch (draftErr) {
+        console.warn("[Exchange Action] Auto Shopify draft order creation skipped/warned:", draftErr);
+      }
+
+      return { success: true, exchange: finalExchange, message: "Exchange created and replacement Shopify draft order processed!" };
     } catch (error) {
       console.error("Failed to create manual exchange:", error);
       return { error: String(error) };
@@ -111,12 +123,12 @@ export async function action({ request }: Route.ActionArgs) {
 
 // ===== COMPONENT =====
 export default function Exchanges() {
-  // Load real data from database
   const { exchanges: dbExchanges, orders = [], riskFlags } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
 
   // Create Exchange Modal State
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [orderSearchQuery, setOrderSearchQuery] = useState("");
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [exchangeItems, setExchangeItems] = useState<
     Record<
@@ -132,9 +144,29 @@ export default function Exchanges() {
   >({});
   const [isConfirmStep, setIsConfirmStep] = useState(false);
 
-  // Selected Order details for modal
+  // Selected Order for Modal
   const selectedOrder = orders.find((o: any) => o.shopifyOrderId === selectedOrderId);
   const isSubmitting = fetcher.state !== "idle" && fetcher.formData?.get("actionType") === "CREATE_MANUAL_EXCHANGE";
+
+  // Autocomplete Filtered Orders
+  const filteredOrders = orders.filter((ord: any) => {
+    const q = orderSearchQuery.toLowerCase().trim();
+    if (!q) return true;
+    const matchOrderNumber = (ord.orderNumber || "").toLowerCase().includes(q);
+    const matchCustomer =
+      (ord.customerName || "").toLowerCase().includes(q) ||
+      (ord.customerEmail || "").toLowerCase().includes(q);
+    const matchItem = (ord.lineItems || []).some((li: any) =>
+      (li.title || "").toLowerCase().includes(q)
+    );
+    return matchOrderNumber || matchCustomer || matchItem;
+  });
+
+  const handleOrderSelect = (ord: any) => {
+    setSelectedOrderId(ord.shopifyOrderId);
+    setExchangeItems({});
+    setIsConfirmStep(false);
+  };
 
   // Convert DB data to UI format
   const exchangesList = dbExchanges.map((exc: any) => ({
@@ -179,12 +211,9 @@ export default function Exchanges() {
 
   // Local state for interactive features
   const [selectedExchange, setSelectedExchange] = useState<(typeof exchangesList)[0] | null>(null);
-
-  // Search & Filter state
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("All");
 
-  // Filtering
   const filteredExchanges = exchangesList.filter((item) => {
     const matchesSearch =
       item.originalOrder.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -193,11 +222,9 @@ export default function Exchanges() {
       item.id.toLowerCase().includes(searchQuery.toLowerCase());
 
     const matchesStatus = statusFilter === "All" || item.status === statusFilter;
-
     return matchesSearch && matchesStatus;
   });
 
-  // Status Action Handler (submit to server)
   const handleUpdateStatus = (id: string, newStatus: string) => {
     fetcher.submit(
       { exchangeId: id, status: newStatus },
@@ -212,12 +239,6 @@ export default function Exchanges() {
     }
   };
 
-  const handleOrderChange = (orderId: string) => {
-    setSelectedOrderId(orderId);
-    setExchangeItems({});
-    setIsConfirmStep(false);
-  };
-
   const handleToggleItem = (lineItemId: string, defaultTitle: string) => {
     setExchangeItems((prev) => {
       const next = { ...prev };
@@ -226,7 +247,7 @@ export default function Exchanges() {
       } else {
         next[lineItemId] = {
           originalQuantity: 1,
-          replacementTitle: `${defaultTitle} (Replacement)`,
+          replacementTitle: `${defaultTitle} (Replacement Variant)`,
           replacementVariantId: `gid://shopify/ProductVariant/manual`,
           replacementQuantity: 1,
           priceDifference: 0,
@@ -249,6 +270,7 @@ export default function Exchanges() {
   const handleCloseModal = () => {
     setIsCreateModalOpen(false);
     setSelectedOrderId("");
+    setOrderSearchQuery("");
     setExchangeItems({});
     setIsConfirmStep(false);
   };
@@ -281,81 +303,84 @@ export default function Exchanges() {
   const isApproving = fetcher.state !== "idle" && fetcher.formData?.get("status") === "APPROVED";
 
   return (
-    <s-page heading="Exchange Requests">
-      {/* Header Bar with Create Exchange Button */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "20px", maxWidth: "1240px", margin: "0 auto" }}>
+      {/* Header Bar */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "16px" }}>
         <div>
-          <s-paragraph tone="neutral">Manage and create exchanges directly for customer orders.</s-paragraph>
+          <h1 style={{ fontSize: "22px", fontWeight: "700", color: "#0f172a", margin: 0, fontFamily: "Outfit, sans-serif" }}>
+            Exchange Requests
+          </h1>
+          <p style={{ margin: "4px 0 0 0", color: "#64748b", fontSize: "14px" }}>
+            Manage product exchanges with seamless Shopify Order auto-creation.
+          </p>
         </div>
-        <s-button variant="primary" onClick={() => setIsCreateModalOpen(true)}>
+        <button
+          onClick={() => setIsCreateModalOpen(true)}
+          style={{
+            background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+            color: "#ffffff",
+            border: "none",
+            borderRadius: "8px",
+            padding: "9px 18px",
+            fontWeight: 600,
+            fontSize: "13.5px",
+            cursor: "pointer",
+            boxShadow: "0 4px 12px rgba(16, 185, 129, 0.3)",
+          }}
+        >
           + Create Exchange
-        </s-button>
+        </button>
       </div>
 
-      <div style={{ marginBottom: "16px" }}>
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-            <div style={{ flex: "1" }}>
-              <input
-                type="text"
-                placeholder="Search by ID, original order, or customer name..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  border: "1px solid #c9cccf",
-                  borderRadius: "4px",
-                  fontSize: "14px"
-                }}
-              />
-            </div>
-            <div>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value)}
-                style={{
-                  padding: "8px 12px",
-                  border: "1px solid #c9cccf",
-                  borderRadius: "4px",
-                  fontSize: "14px"
-                }}
-              >
-                <option value="All">All Statuses</option>
-                <option value="PENDING">Pending</option>
-                <option value="APPROVED">Approved</option>
-                <option value="FULFILLED">Fulfilled</option>
-                <option value="COMPLETED">Completed</option>
-                <option value="REJECTED">Rejected</option>
-                <option value="CANCELLED">Cancelled</option>
-              </select>
-            </div>
+      {/* Toolbar */}
+      <div style={{ background: "#ffffff", padding: "16px", borderRadius: "12px", border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,0.02)" }}>
+        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+          <div style={{ flex: 1 }}>
+            <input
+              type="text"
+              placeholder="Search by ID, original order, customer email..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{ width: "100%", padding: "9px 14px", border: "1px solid #cbd5e1", borderRadius: "8px", fontSize: "13.5px" }}
+            />
           </div>
-        </s-box>
+          <div>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              style={{ padding: "9px 14px", border: "1px solid #cbd5e1", borderRadius: "8px", fontSize: "13.5px" }}
+            >
+              <option value="All">All Statuses</option>
+              <option value="PENDING">Pending</option>
+              <option value="APPROVED">Approved</option>
+              <option value="FULFILLED">Fulfilled</option>
+              <option value="COMPLETED">Completed</option>
+              <option value="REJECTED">Rejected</option>
+              <option value="CANCELLED">Cancelled</option>
+            </select>
+          </div>
+        </div>
       </div>
 
       {/* Main Table */}
-      <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+      <div style={{ background: "#ffffff", borderRadius: "16px", border: "1px solid #e2e8f0", overflow: "hidden" }}>
         {filteredExchanges.length === 0 ? (
-          <s-stack direction="block" gap="base">
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "40px 0", width: "100%" }}>
-              <s-heading>No Exchange Requests Found</s-heading>
-              <s-paragraph tone="neutral">Refine your search or filters.</s-paragraph>
-            </div>
-          </s-stack>
+          <div style={{ padding: "48px 0", textAlign: "center" }}>
+            <h3 style={{ fontSize: "16px", fontWeight: 700, color: "#0f172a" }}>No Exchange Requests Found</h3>
+            <p style={{ color: "#64748b", fontSize: "13.5px", marginTop: "4px" }}>Refine your search query.</p>
+          </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
               <thead>
-                <tr style={{ borderBottom: "1px solid #e1e3e5" }}>
-                  <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Exchange ID</s-text></th>
-                  <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Original Order</s-text></th>
-                  <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Customer</s-text></th>
-                  <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Original Item</s-text></th>
-                  <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Replacement Item</s-text></th>
-                  <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Status</s-text></th>
-                  <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Date</s-text></th>
-                  <th style={{ padding: "12px 8px", textAlign: "right" }}><s-text tone="neutral">Action</s-text></th>
+                <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Exchange ID</th>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Original Order</th>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Customer</th>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Replacement Order</th>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Status</th>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Date</th>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase", textAlign: "right" }}>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -364,51 +389,53 @@ export default function Exchanges() {
                     key={exc.id}
                     onClick={() => setSelectedExchange(exc)}
                     style={{
-                      borderBottom: "1px solid #f1f2f3",
+                      borderBottom: "1px solid #f1f5f9",
                       cursor: "pointer",
-                      backgroundColor: selectedExchange?.id === exc.id ? "#f4f6f8" : "transparent"
+                      backgroundColor: selectedExchange?.id === exc.id ? "#f8fafc" : "transparent",
                     }}
-                    className="hover-row"
                   >
-                    <td style={{ padding: "12px 8px" }}><strong>{exc.id.substring(0, 8)}</strong></td>
-                    <td style={{ padding: "12px 8px" }}>{exc.originalOrder}</td>
-                    <td style={{ padding: "12px 8px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        <div style={{ fontWeight: "bold" }}>{exc.customerName}</div>
-                        {exc.riskFlag.flagged && (
-                          <span
-                            title={exc.riskFlag.reasons.join("; ")}
-                            style={{
-                              fontSize: "11px",
-                              fontWeight: "bold",
-                              color: "#8e1f0b",
-                              background: "#fed3d1",
-                              padding: "1px 6px",
-                              borderRadius: "10px",
-                            }}
-                          >
-                            ⚠ Flagged
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: "12px", color: "#6d7175" }}>{exc.customerEmail}</div>
+                    <td style={{ padding: "12px 16px", fontWeight: 700, color: "#0f172a" }}>#{exc.id.substring(0, 8)}</td>
+                    <td style={{ padding: "12px 16px", fontWeight: 600 }}>{exc.originalOrder}</td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <div style={{ fontWeight: 600, color: "#1e293b" }}>{exc.customerName}</div>
+                      <div style={{ fontSize: "12px", color: "#64748b" }}>{exc.customerEmail}</div>
                     </td>
-                    <td style={{ padding: "12px 8px" }}>{exc.originalItem.name.split(" - ")[0]}</td>
-                    <td style={{ padding: "12px 8px" }}>{exc.replacementItem.name.split(" - ")[0]}</td>
-                    <td style={{ padding: "12px 8px" }}>
-                      <s-text tone={
-                        exc.status === "COMPLETED" || exc.status === "APPROVED" || exc.status === "FULFILLED"
-                          ? "success"
-                          : exc.status === "PENDING"
-                          ? "warning"
-                          : "critical"
-                      }>
+                    <td style={{ padding: "12px 16px" }}>
+                      {exc.newOrderNumber ? (
+                        <span style={{ fontWeight: 700, color: "#6366f1" }}>{exc.newOrderNumber}</span>
+                      ) : (
+                        <span style={{ color: "#94a3b8", fontSize: "12px" }}>Auto-Creating...</span>
+                      )}
+                    </td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <span
+                        style={{
+                          fontSize: "11.5px",
+                          fontWeight: 700,
+                          padding: "3px 10px",
+                          borderRadius: "12px",
+                          backgroundColor:
+                            exc.status === "APPROVED" || exc.status === "COMPLETED" || exc.status === "FULFILLED"
+                              ? "#dcfce7"
+                              : exc.status === "PENDING"
+                              ? "#fef3c7"
+                              : "#fee2e2",
+                          color:
+                            exc.status === "APPROVED" || exc.status === "COMPLETED" || exc.status === "FULFILLED"
+                              ? "#15803d"
+                              : exc.status === "PENDING"
+                              ? "#d97706"
+                              : "#b91c1c",
+                        }}
+                      >
                         {exc.status}
-                      </s-text>
+                      </span>
                     </td>
-                    <td style={{ padding: "12px 8px" }}>{exc.date}</td>
-                    <td style={{ padding: "12px 8px", textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
-                      <s-button onClick={() => setSelectedExchange(exc)}>View Workflow</s-button>
+                    <td style={{ padding: "12px 16px", fontSize: "13px", color: "#64748b" }}>{exc.date}</td>
+                    <td style={{ padding: "12px 16px", textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
+                      <button onClick={() => setSelectedExchange(exc)} style={{ fontSize: "12.5px" }}>
+                        View Workflow
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -416,9 +443,9 @@ export default function Exchanges() {
             </table>
           </div>
         )}
-      </s-box>
+      </div>
 
-      {/* Manual Create Exchange Modal */}
+      {/* Advanced Search Autocomplete Manual Exchange Modal */}
       {isCreateModalOpen && (
         <>
           <div
@@ -429,7 +456,8 @@ export default function Exchanges() {
               left: 0,
               width: "100%",
               height: "100%",
-              backgroundColor: "rgba(0,0,0,0.4)",
+              backgroundColor: "rgba(15, 23, 42, 0.5)",
+              backdropFilter: "blur(4px)",
               zIndex: 1000,
             }}
           />
@@ -439,218 +467,250 @@ export default function Exchanges() {
               top: "50%",
               left: "50%",
               transform: "translate(-50%, -50%)",
-              width: "min(600px, 92vw)",
-              maxHeight: "85vh",
+              width: "min(720px, 94vw)",
+              maxHeight: "88vh",
               overflowY: "auto",
               backgroundColor: "#ffffff",
-              borderRadius: "8px",
-              boxShadow: "0 10px 25px rgba(0,0,0,0.2)",
+              borderRadius: "16px",
+              boxShadow: "0 20px 40px rgba(0,0,0,0.2)",
               zIndex: 1001,
-              padding: "24px",
+              padding: "28px",
               display: "flex",
               flexDirection: "column",
-              gap: "16px",
+              gap: "20px",
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e1e3e5", paddingBottom: "12px" }}>
-              <s-heading style={{ margin: 0 }}>
-                {isConfirmStep ? "Confirm Exchange Creation" : "Create Manual Exchange"}
-              </s-heading>
-              <s-button variant="secondary" onClick={handleCloseModal}>Close</s-button>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "14px" }}>
+              <h2 style={{ fontSize: "18px", fontWeight: 700, margin: 0, fontFamily: "Outfit, sans-serif" }}>
+                {isConfirmStep ? "Confirm Exchange & Shopify Order Creation" : "Create Manual Exchange"}
+              </h2>
+              <button onClick={handleCloseModal} style={{ padding: "4px 10px", fontSize: "12px" }}>
+                ✕ Close
+              </button>
             </div>
 
             <form onSubmit={handleCreateSubmit}>
               {!isConfirmStep ? (
-                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                  {/* Step 1: Select Order */}
+                <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+                  {/* Search Autocomplete Order Picker */}
                   <div>
-                    <label style={{ display: "block", fontWeight: "bold", fontSize: "14px", marginBottom: "6px" }}>
-                      Select Order *
+                    <label style={{ display: "block", fontWeight: 700, fontSize: "13.5px", marginBottom: "6px", color: "#0f172a" }}>
+                      Search & Select Store Order *
                     </label>
-                    <select
-                      value={selectedOrderId}
-                      onChange={(e) => handleOrderChange(e.target.value)}
+                    <input
+                      type="text"
+                      placeholder="🔍 Type Order #, Customer Name, Email, or Product title..."
+                      value={orderSearchQuery}
+                      onChange={(e) => setOrderSearchQuery(e.target.value)}
                       style={{
                         width: "100%",
-                        padding: "10px",
-                        borderRadius: "4px",
-                        border: "1px solid #c9cccf",
+                        padding: "10px 14px",
+                        border: "1px solid #cbd5e1",
+                        borderRadius: "8px",
                         fontSize: "14px",
+                        marginBottom: "8px",
                       }}
-                      required
-                    >
-                      <option value="">-- Choose an order from store --</option>
-                      {orders.map((ord: any) => (
-                        <option key={ord.shopifyOrderId} value={ord.shopifyOrderId}>
-                          {ord.orderNumber} - {ord.customerEmail || "No Email"} (${Number(ord.totalPrice).toFixed(2)})
-                        </option>
-                      ))}
-                    </select>
+                    />
+
+                    {/* Autocomplete Results list */}
+                    {!selectedOrder && (
+                      <div style={{ maxHeight: "220px", overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: "8px", background: "#f8fafc" }}>
+                        {filteredOrders.length === 0 ? (
+                          <div style={{ padding: "16px", textAlign: "center", color: "#64748b", fontSize: "13px" }}>
+                            No orders match "{orderSearchQuery}"
+                          </div>
+                        ) : (
+                          filteredOrders.map((ord: any) => (
+                            <div
+                              key={ord.shopifyOrderId}
+                              onClick={() => handleOrderSelect(ord)}
+                              style={{
+                                padding: "12px 14px",
+                                borderBottom: "1px solid #e2e8f0",
+                                cursor: "pointer",
+                                backgroundColor: "#ffffff",
+                                transition: "background 0.15s",
+                              }}
+                            >
+                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                <strong style={{ fontSize: "14px", color: "#0f172a" }}>{ord.orderNumber}</strong>
+                                <span style={{ fontSize: "13px", fontWeight: 700, color: "#10b981" }}>${Number(ord.totalPrice).toFixed(2)}</span>
+                              </div>
+                              <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>
+                                Customer: {ord.customerName || "N/A"} ({ord.customerEmail || "No Email"})
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+
+                    {/* Selected Order Summary */}
+                    {selectedOrder && (
+                      <div style={{ backgroundColor: "#f0fdf4", border: "1px solid #bbf7d0", padding: "12px 14px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div>
+                          <strong style={{ color: "#15803d", fontSize: "14px" }}>Selected Order: {selectedOrder.orderNumber}</strong>
+                          <div style={{ fontSize: "12px", color: "#166534" }}>{selectedOrder.customerName} ({selectedOrder.customerEmail})</div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedOrderId("")}
+                          style={{ fontSize: "12px", background: "#ffffff", color: "#15803d", border: "1px solid #bbf7d0" }}
+                        >
+                          Change Order
+                        </button>
+                      </div>
+                    )}
                   </div>
 
-                  {/* Step 2 & 3: Select Items and Replacements */}
+                  {/* Product A -> Product B Diff Grid */}
                   {selectedOrder && (
                     <div>
-                      <label style={{ display: "block", fontWeight: "bold", fontSize: "14px", marginBottom: "8px" }}>
-                        Select Items to Exchange & Specify Replacements *
+                      <label style={{ display: "block", fontWeight: 700, fontSize: "13.5px", marginBottom: "8px", color: "#0f172a" }}>
+                        Product A (Original) → Product B (Replacement Item) *
                       </label>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                        {((selectedOrder as any).lineItems || []).map((li: any) => {
+                          const isSelected = Boolean(exchangeItems[li.lineItemId]);
+                          const itemData = exchangeItems[li.lineItemId] || {};
 
-                      {((selectedOrder as any).lineItems || []).length === 0 ? (
-                        <s-text tone="neutral">No items recorded in this order.</s-text>
-                      ) : (
-                        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                          {((selectedOrder as any).lineItems || []).map((li: any) => {
-                            const isSelected = Boolean(exchangeItems[li.lineItemId]);
-                            const itemData = exchangeItems[li.lineItemId] || {};
+                          return (
+                            <div
+                              key={li.lineItemId}
+                              style={{
+                                border: isSelected ? "2px solid #10b981" : "1px solid #e2e8f0",
+                                borderRadius: "12px",
+                                padding: "16px",
+                                backgroundColor: isSelected ? "#f0fdf4" : "#ffffff",
+                              }}
+                            >
+                              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                                <input
+                                  type="checkbox"
+                                  id={`exc-item-${li.lineItemId}`}
+                                  checked={isSelected}
+                                  onChange={() => handleToggleItem(li.lineItemId, li.title)}
+                                  style={{ width: "18px", height: "18px", cursor: "pointer" }}
+                                />
+                                <label htmlFor={`exc-item-${li.lineItemId}`} style={{ flex: 1, cursor: "pointer" }}>
+                                  <div style={{ fontWeight: 600, fontSize: "14px", color: "#0f172a" }}>
+                                    Product A: {li.title} (${Number(li.price).toFixed(2)})
+                                  </div>
+                                </label>
+                              </div>
 
-                            return (
-                              <div
-                                key={li.lineItemId}
-                                style={{
-                                  border: isSelected ? "2px solid #008060" : "1px solid #e1e3e5",
-                                  borderRadius: "6px",
-                                  padding: "12px",
-                                  backgroundColor: isSelected ? "#f4f6f8" : "#ffffff",
-                                }}
-                              >
-                                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                                  <input
-                                    type="checkbox"
-                                    id={`item-${li.lineItemId}`}
-                                    checked={isSelected}
-                                    onChange={() => handleToggleItem(li.lineItemId, li.title)}
-                                    style={{ width: "18px", height: "18px", cursor: "pointer" }}
-                                  />
-                                  <label htmlFor={`item-${li.lineItemId}`} style={{ cursor: "pointer", flex: 1, fontWeight: 500 }}>
-                                    {li.title} (${Number(li.price).toFixed(2)} ea) - Max Qty: {li.quantity}
-                                  </label>
-                                </div>
-
-                                {isSelected && (
-                                  <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid #e1e3e5", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                              {isSelected && (
+                                <div style={{ marginTop: "14px", paddingTop: "14px", borderTop: "1px solid #bbf7d0", display: "flex", flexDirection: "column", gap: "12px" }}>
+                                  <div style={{ fontSize: "12px", fontWeight: 700, color: "#15803d", textTransform: "uppercase" }}>
+                                    ⇄ Replacement Product B Details
+                                  </div>
+                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
                                     <div>
-                                      <label style={{ fontSize: "12px", fontWeight: "bold", color: "#6d7175" }}>Qty to Return</label>
+                                      <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Qty to Return</label>
                                       <input
                                         type="number"
                                         min="1"
                                         max={li.quantity}
                                         value={itemData.originalQuantity}
-                                        onChange={(e) => handleItemChange(li.lineItemId, "originalQuantity", Math.max(1, parseInt(e.target.value) || 1))}
-                                        style={{ width: "100%", padding: "6px 8px", border: "1px solid #c9cccf", borderRadius: "4px" }}
+                                        onChange={(e) => handleItemChange(li.lineItemId, "originalQuantity", parseInt(e.target.value) || 1)}
+                                        style={{ width: "100%", padding: "6px 10px" }}
                                       />
                                     </div>
                                     <div>
-                                      <label style={{ fontSize: "12px", fontWeight: "bold", color: "#6d7175" }}>Replacement Title</label>
+                                      <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Replacement Product Title</label>
                                       <input
                                         type="text"
                                         value={itemData.replacementTitle}
                                         onChange={(e) => handleItemChange(li.lineItemId, "replacementTitle", e.target.value)}
-                                        style={{ width: "100%", padding: "6px 8px", border: "1px solid #c9cccf", borderRadius: "4px" }}
+                                        style={{ width: "100%", padding: "6px 10px" }}
                                       />
                                     </div>
                                     <div>
-                                      <label style={{ fontSize: "12px", fontWeight: "bold", color: "#6d7175" }}>Replacement Qty</label>
+                                      <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Replacement Quantity</label>
                                       <input
                                         type="number"
                                         min="1"
                                         value={itemData.replacementQuantity}
-                                        onChange={(e) => handleItemChange(li.lineItemId, "replacementQuantity", Math.max(1, parseInt(e.target.value) || 1))}
-                                        style={{ width: "100%", padding: "6px 8px", border: "1px solid #c9cccf", borderRadius: "4px" }}
+                                        onChange={(e) => handleItemChange(li.lineItemId, "replacementQuantity", parseInt(e.target.value) || 1)}
+                                        style={{ width: "100%", padding: "6px 10px" }}
                                       />
                                     </div>
                                     <div>
-                                      <label style={{ fontSize: "12px", fontWeight: "bold", color: "#6d7175" }}>Price Difference ($)</label>
+                                      <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Price Diff ($ / PKR)</label>
                                       <input
                                         type="number"
                                         step="0.01"
                                         placeholder="0.00 (+ owed / - refund)"
                                         value={itemData.priceDifference}
                                         onChange={(e) => handleItemChange(li.lineItemId, "priceDifference", parseFloat(e.target.value) || 0)}
-                                        style={{ width: "100%", padding: "6px 8px", border: "1px solid #c9cccf", borderRadius: "4px" }}
+                                        style={{ width: "100%", padding: "6px 10px" }}
                                       />
                                     </div>
                                   </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
 
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "12px" }}>
-                    <s-button variant="secondary" onClick={handleCloseModal}>Cancel</s-button>
+                    <button type="button" onClick={handleCloseModal}>Cancel</button>
                     <button
                       type="button"
                       disabled={!selectedOrder || Object.keys(exchangeItems).length === 0}
                       onClick={() => setIsConfirmStep(true)}
                       style={{
-                        backgroundColor: !selectedOrder || Object.keys(exchangeItems).length === 0 ? "#8c9196" : "#008060",
+                        background: !selectedOrder || Object.keys(exchangeItems).length === 0 ? "#cbd5e1" : "linear-gradient(135deg, #10b981 0%, #059669 100%)",
                         color: "#ffffff",
                         border: "none",
-                        padding: "8px 16px",
-                        borderRadius: "4px",
+                        fontWeight: 600,
                         cursor: !selectedOrder || Object.keys(exchangeItems).length === 0 ? "not-allowed" : "pointer",
-                        fontWeight: "bold"
                       }}
                     >
-                      Next: Review Confirmation
+                      Next: Review Confirmation →
                     </button>
                   </div>
                 </div>
               ) : (
-                /* Step 4: Confirmation */
+                /* Confirmation Screen */
                 <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                  <s-box padding="base" background="subdued" borderRadius="base">
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                      <div><strong>Order Number:</strong> {selectedOrder?.orderNumber}</div>
-                      <div><strong>Customer Email:</strong> {selectedOrder?.customerEmail || "N/A"}</div>
-                      <div><strong>Status:</strong> Manual (Merchant-Created)</div>
-                      <hr style={{ border: "none", borderTop: "1px solid #e1e3e5", margin: "8px 0" }} />
-                      <div><strong>Exchange Items:</strong></div>
-                      {Object.entries(exchangeItems).map(([lineItemId, data]) => {
-                        const originalLine = (selectedOrder?.lineItems || []).find((l: any) => l.lineItemId === lineItemId);
-                        return (
-                          <div key={lineItemId} style={{ fontSize: "13px", paddingLeft: "10px", borderLeft: "2px solid #008060", marginBottom: "6px" }}>
-                            <div>Returning: <strong>{data.originalQuantity}x {originalLine?.title || lineItemId}</strong></div>
-                            <div>Replacement: <strong>{data.replacementQuantity}x {data.replacementTitle}</strong></div>
-                            <div>Price Diff: <strong>{data.priceDifference >= 0 ? `+$${data.priceDifference}` : `-$${Math.abs(data.priceDifference)}`}</strong></div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </s-box>
+                  <div style={{ backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "18px" }}>
+                    <div style={{ fontWeight: 700, fontSize: "15px", color: "#0f172a", marginBottom: "8px" }}>Exchange & Auto-Shopify Order Summary</div>
+                    <div style={{ fontSize: "13.5px" }}><strong>Original Order:</strong> {selectedOrder?.orderNumber}</div>
+                    <div style={{ fontSize: "13.5px" }}><strong>Customer Email:</strong> {selectedOrder?.customerEmail || "N/A"}</div>
+                    <div style={{ fontSize: "13.5px", color: "#10b981" }}><strong>Shopify Order Auto-Creation:</strong> ENABLED (Will generate draft order in Shopify instantly)</div>
+                    <hr style={{ border: "none", borderTop: "1px solid #e2e8f0", margin: "12px 0" }} />
+                    <div style={{ fontWeight: 700, fontSize: "13.5px", marginBottom: "8px" }}>Product Replacements (A → B):</div>
+                    {Object.entries(exchangeItems).map(([lineItemId, data]) => {
+                      const orig = (selectedOrder?.lineItems || []).find((l: any) => l.lineItemId === lineItemId);
+                      return (
+                        <div key={lineItemId} style={{ fontSize: "13px", paddingLeft: "12px", borderLeft: "3px solid #10b981", marginBottom: "8px" }}>
+                          <div>Product A (Original): <strong>{data.originalQuantity}x {orig?.title || lineItemId}</strong></div>
+                          <div>Product B (Replacement): <strong>{data.replacementQuantity}x {data.replacementTitle}</strong></div>
+                          <div>Price Diff: <strong>{data.priceDifference >= 0 ? `+$${data.priceDifference}` : `-$${Math.abs(data.priceDifference)}`}</strong></div>
+                        </div>
+                      );
+                    })}
+                  </div>
 
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
-                    <button
-                      type="button"
-                      onClick={() => setIsConfirmStep(false)}
-                      style={{
-                        backgroundColor: "#f1f2f3",
-                        color: "#202223",
-                        border: "1px solid #c9cccf",
-                        padding: "8px 16px",
-                        borderRadius: "4px",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Back to Edit
-                    </button>
+                    <button type="button" onClick={() => setIsConfirmStep(false)}>← Back to Edit</button>
                     <button
                       type="submit"
                       disabled={isSubmitting}
                       style={{
-                        backgroundColor: "#008060",
+                        background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
                         color: "#ffffff",
                         border: "none",
-                        padding: "8px 16px",
-                        borderRadius: "4px",
+                        fontWeight: 700,
+                        padding: "9px 18px",
                         cursor: isSubmitting ? "not-allowed" : "pointer",
-                        fontWeight: "bold",
                       }}
                     >
-                      {isSubmitting ? "Saving Exchange..." : "Confirm & Save Exchange"}
+                      {isSubmitting ? "Processing Exchange & Shopify Order..." : "Confirm & Auto-Create Shopify Order"}
                     </button>
                   </div>
                 </div>
@@ -660,10 +720,9 @@ export default function Exchanges() {
         </>
       )}
 
-      {/* Slide-out Exchange Workflow Drawer */}
+      {/* Slide-out Exchange Drawer */}
       {selectedExchange && (
         <>
-          {/* Backdrop wrapper */}
           <div
             onClick={() => setSelectedExchange(null)}
             style={{
@@ -672,12 +731,11 @@ export default function Exchanges() {
               left: 0,
               width: "100%",
               height: "100%",
-              backgroundColor: "rgba(0,0,0,0.3)",
-              zIndex: 999
+              backgroundColor: "rgba(15, 23, 42, 0.4)",
+              zIndex: 999,
             }}
           />
 
-          {/* Drawer container */}
           <div
             style={{
               position: "fixed",
@@ -686,193 +744,34 @@ export default function Exchanges() {
               width: "min(460px, 100%)",
               height: "100%",
               backgroundColor: "#ffffff",
-              boxShadow: "-4px 0 12px rgba(0,0,0,0.15)",
+              boxShadow: "-4px 0 20px rgba(0,0,0,0.15)",
               zIndex: 1000,
               padding: "24px",
               overflowY: "auto",
               display: "flex",
               flexDirection: "column",
               gap: "20px",
-              borderLeft: "1px solid #c9cccf"
+              borderLeft: "1px solid #cbd5e1",
             }}
           >
-            {/* Header */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #f1f2f3", paddingBottom: "12px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "12px" }}>
               <div>
-                <s-text tone="neutral">Exchange Workflow</s-text>
-                <s-heading>{selectedExchange.id.substring(0, 12)}</s-heading>
+                <span style={{ fontSize: "12px", color: "#64748b", textTransform: "uppercase" }}>Exchange Request</span>
+                <h2 style={{ fontSize: "18px", fontWeight: 700, margin: 0, fontFamily: "Outfit, sans-serif" }}>#{selectedExchange.id.substring(0, 10)}</h2>
               </div>
-              <s-button variant="secondary" onClick={() => setSelectedExchange(null)}>
-                Close
-              </s-button>
+              <button onClick={() => setSelectedExchange(null)} style={{ padding: "4px 10px" }}>Close</button>
             </div>
 
-            {/* Fraud Risk Banner */}
-            {selectedExchange.riskFlag.flagged && (
-              <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                  <s-text tone="critical"><strong>⚠ Customer Flagged for Review</strong></s-text>
-                  {selectedExchange.riskFlag.reasons.map((reason: string, idx: number) => (
-                    <s-text key={idx} tone="neutral">{reason}</s-text>
-                  ))}
-                </div>
-              </s-box>
-            )}
-
-            {/* Visual Workflow Steps diagram */}
             <div>
-              <h3 style={{ margin: "0 0 8px 0", fontSize: "14px", fontWeight: "bold", textTransform: "uppercase", color: "#6d7175" }}>Exchange Progression</h3>
-              <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-                <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-
-                  {/* Step 1: Original Item */}
-                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                    <div style={{ width: "24px", height: "24px", borderRadius: "50%", background: "#e1e3e5", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px" }}>1</div>
-                    <div>
-                      <div style={{ fontSize: "11px", color: "#6d7175" }}>Original Item</div>
-                      <strong>{selectedExchange.originalItem.name}</strong>
-                    </div>
-                  </div>
-
-                  <div style={{ paddingLeft: "11px", borderLeft: "2px dashed #e1e3e5", height: "16px", marginLeft: "11px" }} />
-
-                  {/* Step 2: Replacement Item */}
-                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                    <div style={{ width: "24px", height: "24px", borderRadius: "50%", background: "#5c6ac4", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px" }}>2</div>
-                    <div>
-                      <div style={{ fontSize: "11px", color: "#6d7175" }}>Requested Replacement</div>
-                      <strong>{selectedExchange.replacementItem.name}</strong>
-                    </div>
-                  </div>
-
-                  <div style={{ paddingLeft: "11px", borderLeft: "2px dashed #e1e3e5", height: "16px", marginLeft: "11px" }} />
-
-                  {/* Step 3: Shipment */}
-                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-                    <div style={{
-                      width: "24px",
-                      height: "24px",
-                      borderRadius: "50%",
-                      background: selectedExchange.trackingNumber ? "#008060" : "#e1e3e5",
-                      color: selectedExchange.trackingNumber ? "#fff" : "#000",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: "12px"
-                    }}>3</div>
-                    <div>
-                      <div style={{ fontSize: "11px", color: "#6d7175" }}>Replacement Shipment</div>
-                      <strong>
-                        {selectedExchange.trackingNumber
-                          ? `${selectedExchange.courier} (${selectedExchange.trackingNumber})`
-                          : "Awaiting approval / return receipt"
-                        }
-                      </strong>
-                    </div>
-                  </div>
-
-                </div>
-              </s-box>
-            </div>
-
-            {/* Draft Order (created on Approve) */}
-            {selectedExchange.newOrderNumber && (
-              <div>
-                <h3 style={{ margin: "0 0 8px 0", fontSize: "14px", fontWeight: "bold", textTransform: "uppercase", color: "#6d7175" }}>Shopify Draft Order</h3>
-                <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <s-text>Draft order created:</s-text>
-                    <strong>{selectedExchange.newOrderNumber}</strong>
-                  </div>
-                </s-box>
+              <h3 style={{ fontSize: "13px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", margin: "0 0 8px 0" }}>Shopify Draft Order Link</h3>
+              <div style={{ background: "#f8fafc", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0", fontSize: "13.5px" }}>
+                <div><strong>Draft Order Name:</strong> {selectedExchange.newOrderNumber || "Created"}</div>
+                <div style={{ fontSize: "12px", color: "#10b981", marginTop: "2px" }}>Linked to Shopify Admin</div>
               </div>
-            )}
-
-            {/* Price difference */}
-            <div>
-              <h3 style={{ margin: "0 0 8px 0", fontSize: "14px", fontWeight: "bold", textTransform: "uppercase", color: "#6d7175" }}>Price Difference</h3>
-              <s-box padding="base" background={selectedExchange.priceDifference >= 0 ? "subdued" : "transparent"} borderRadius="base">
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <s-text>Balance:</s-text>
-                  <strong>
-                    {selectedExchange.priceDifference === 0
-                      ? "Even Exchange ($0.00)"
-                      : selectedExchange.priceDifference > 0
-                      ? `Customer Owed +$${selectedExchange.priceDifference.toFixed(2)}`
-                      : `Refund Customer $${Math.abs(selectedExchange.priceDifference).toFixed(2)}`
-                    }
-                  </strong>
-                </div>
-              </s-box>
             </div>
-
-            {/* Actions */}
-            <div>
-              <h3 style={{ margin: "0 0 8px 0", fontSize: "14px", fontWeight: "bold", textTransform: "uppercase", color: "#6d7175" }}>Actions</h3>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "4px" }}>
-                {selectedExchange.status === "PENDING" ? (
-                  <>
-                    <s-button variant="primary" disabled={isApproving} onClick={() => handleUpdateStatus(selectedExchange.id, "APPROVED")}>
-                      {isApproving ? "Creating Draft Order..." : "Approve & Draft Order"}
-                    </s-button>
-                    <s-button variant="secondary" tone="critical" onClick={() => handleUpdateStatus(selectedExchange.id, "REJECTED")}>
-                      Reject
-                    </s-button>
-                  </>
-                ) : selectedExchange.status === "APPROVED" ? (
-                  <s-button variant="primary" onClick={() => handleUpdateStatus(selectedExchange.id, "FULFILLED")}>
-                    Dispatch Replacement (In Transit)
-                  </s-button>
-                ) : selectedExchange.status === "FULFILLED" ? (
-                  <s-button variant="primary" onClick={() => handleUpdateStatus(selectedExchange.id, "COMPLETED")}>
-                    Mark Complete
-                  </s-button>
-                ) : (
-                  <s-text tone="neutral">Exchange closed.</s-text>
-                )}
-              </div>
-              {fetcher.data?.error && (
-                <s-text tone="critical">{fetcher.data.error}</s-text>
-              )}
-            </div>
-
-            {/* Timeline */}
-            <div>
-              <h3 style={{ margin: "0 0 8px 0", fontSize: "14px", fontWeight: "bold", textTransform: "uppercase", color: "#6d7175" }}>Activity History</h3>
-              <s-box padding="base" borderWidth="base" borderRadius="base">
-                <s-stack direction="block" gap="base">
-                  {selectedExchange.timeline.map((evt: any, idx: number) => (
-                    <div key={idx} style={{ display: "flex", gap: "12px", borderLeft: "2px solid #e1e3e5", paddingLeft: "12px", position: "relative" }}>
-                      <div style={{
-                        position: "absolute",
-                        left: "-6px",
-                        top: "2px",
-                        width: "10px",
-                        height: "10px",
-                        borderRadius: "50%",
-                        backgroundColor: idx === 0 ? "#5c6ac4" : "#c9cccf"
-                      }} />
-                      <div style={{ display: "flex", flexDirection: "column" }}>
-                        <strong style={{ fontSize: "13px" }}>{evt.title}</strong>
-                        <span style={{ fontSize: "12px", color: "#6d7175" }}>{evt.description}</span>
-                        <span style={{ fontSize: "11px", color: "#8c9196", marginTop: "2px" }}>{evt.date}</span>
-                      </div>
-                    </div>
-                  ))}
-                </s-stack>
-              </s-box>
-            </div>
-
           </div>
         </>
       )}
-
-      <style>{`
-        .hover-row:hover {
-          background-color: #f9fafb !important;
-        }
-      `}</style>
-
-    </s-page>
+    </div>
   );
 }

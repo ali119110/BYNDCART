@@ -131,6 +131,7 @@ export default function Returns() {
 
   // Manual Return Creation Modal State
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [orderSearchQuery, setOrderSearchQuery] = useState<string>("");
   const [selectedOrderId, setSelectedOrderId] = useState<string>("");
   const [selectedItems, setSelectedItems] = useState<Record<string, { quantity: number; reason: string }>>({});
   const [refundAmountInput, setRefundAmountInput] = useState<string>("0.00");
@@ -138,16 +139,28 @@ export default function Returns() {
   const [adminNoteInput, setAdminNoteInput] = useState<string>("");
   const [showConfirmStep, setShowConfirmStep] = useState<boolean>(false);
 
+  // Selected Order for Modal
   const selectedOrder = dbOrders.find((o: any) => o.shopifyOrderId === selectedOrderId);
 
-  const handleOrderChange = (orderId: string) => {
-    setSelectedOrderId(orderId);
+  // Autocomplete Filtered Orders
+  const filteredOrders = dbOrders.filter((ord: any) => {
+    const q = orderSearchQuery.toLowerCase().trim();
+    if (!q) return true;
+    const matchOrderNumber = (ord.orderNumber || "").toLowerCase().includes(q);
+    const matchCustomer =
+      (ord.customerName || "").toLowerCase().includes(q) ||
+      (ord.customerEmail || "").toLowerCase().includes(q);
+    const matchItem = (ord.lineItems || []).some((li: any) =>
+      (li.title || "").toLowerCase().includes(q)
+    );
+    return matchOrderNumber || matchCustomer || matchItem;
+  });
+
+  const handleOrderSelect = (ord: any) => {
+    setSelectedOrderId(ord.shopifyOrderId);
     setSelectedItems({});
     setShowConfirmStep(false);
-    const ord = dbOrders.find((o: any) => o.shopifyOrderId === orderId);
-    if (ord) {
-      setRefundAmountInput(ord.totalPrice.toString());
-    }
+    setRefundAmountInput(Number(ord.totalPrice).toFixed(2));
   };
 
   const handleItemToggle = (item: any) => {
@@ -156,7 +169,7 @@ export default function Returns() {
       if (next[item.lineItemId]) {
         delete next[item.lineItemId];
       } else {
-        next[item.lineItemId] = { quantity: item.quantity, reason: returnReasonInput };
+        next[item.lineItemId] = { quantity: 1, reason: returnReasonInput };
       }
       return next;
     });
@@ -165,7 +178,7 @@ export default function Returns() {
   const handleItemQuantityChange = (lineItemId: string, qty: number) => {
     setSelectedItems((prev) => ({
       ...prev,
-      [lineItemId]: { ...prev[lineItemId], quantity: qty },
+      [lineItemId]: { ...prev[lineItemId], quantity: Math.max(1, qty) },
     }));
   };
 
@@ -199,8 +212,13 @@ export default function Returns() {
       { method: "POST" }
     );
 
+    handleCloseModal();
+  };
+
+  const handleCloseModal = () => {
     setIsCreateModalOpen(false);
     setSelectedOrderId("");
+    setOrderSearchQuery("");
     setSelectedItems({});
     setShowConfirmStep(false);
   };
@@ -217,7 +235,7 @@ export default function Returns() {
     adminNote: ret.adminNote,
     date: new Date(ret.createdAt).toLocaleDateString(),
     riskFlag: riskFlags[ret.customerEmail] ?? { flagged: false, reasons: [] },
-    items: ret.items.map((item: any) => ({
+    items: (ret.items || []).map((item: any) => ({
       name: `Item ${item.id}`,
       sku: item.shopifyLineItemId,
       quantity: item.quantity,
@@ -245,7 +263,7 @@ export default function Returns() {
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 5;
+  const itemsPerPage = 6;
 
   // Filter returns based on search, status, date, and fraud flag
   const filteredReturns = returnsList.filter((item) => {
@@ -274,7 +292,6 @@ export default function Returns() {
       { method: "POST" }
     );
 
-    // Optimistically update the selected return status
     if (selectedReturn?.id === id) {
       setSelectedReturn({
         ...selectedReturn,
@@ -283,165 +300,120 @@ export default function Returns() {
     }
   };
 
+  const isSubmitting = fetcher.state !== "idle" && fetcher.formData?.get("actionType") === "CREATE_MANUAL_RETURN";
+
   return (
-    <s-page heading="Return Requests">
-      {/* Header Bar with Create Return Button */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "20px", maxWidth: "1240px", margin: "0 auto" }}>
+      {/* Header Bar */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "16px" }}>
         <div>
-          <s-paragraph tone="neutral">Manage customer returns and directly create manual returns for store orders.</s-paragraph>
+          <h1 style={{ fontSize: "22px", fontWeight: "700", color: "#0f172a", margin: 0, fontFamily: "Outfit, sans-serif" }}>
+            Return Requests
+          </h1>
+          <p style={{ margin: "4px 0 0 0", color: "#64748b", fontSize: "14px" }}>
+            Manage customer returns and create manual return requests with full order validation.
+          </p>
         </div>
-        <s-button variant="primary" onClick={() => setIsCreateModalOpen(true)}>
+        <button
+          onClick={() => setIsCreateModalOpen(true)}
+          style={{
+            background: "linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)",
+            color: "#ffffff",
+            border: "none",
+            borderRadius: "8px",
+            padding: "9px 18px",
+            fontWeight: 600,
+            fontSize: "13.5px",
+            cursor: "pointer",
+            boxShadow: "0 4px 12px rgba(99, 102, 241, 0.3)",
+          }}
+        >
           + Create Return
-        </s-button>
+        </button>
       </div>
 
       {/* Search & Filter Toolbar */}
-      <div style={{ marginBottom: "16px" }}>
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "center" }}>
-            {/* Search Box */}
-            <div style={{ flex: "1 1 200px" }}>
-              <input
-                type="text"
-                placeholder="Search by ID, Order, or Customer..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setCurrentPage(1);
-                }}
-                style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  border: "1px solid #c9cccf",
-                  borderRadius: "4px",
-                  fontSize: "14px",
-                }}
-              />
-            </div>
-
-            {/* Status Dropdown */}
-            <div style={{ flex: "0 1 180px" }}>
-              <select
-                value={statusFilter}
-                onChange={(e) => {
-                  setStatusFilter(e.target.value);
-                  setCurrentPage(1);
-                }}
-                style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  border: "1px solid #c9cccf",
-                  borderRadius: "4px",
-                  fontSize: "14px",
-                }}
-              >
-                <option value="All">All Statuses</option>
-                <option value="PENDING">Pending</option>
-                <option value="APPROVED">Approved</option>
-                <option value="COMPLETED">Completed</option>
-                <option value="REJECTED">Rejected</option>
-                <option value="CANCELLED">Cancelled</option>
-              </select>
-            </div>
-
-            {/* Date Picker */}
-            <div style={{ flex: "0 1 180px" }}>
-              <input
-                type="date"
-                value={dateFilter}
-                onChange={(e) => {
-                  setDateFilter(e.target.value);
-                  setCurrentPage(1);
-                }}
-                style={{
-                  width: "100%",
-                  padding: "8px 12px",
-                  border: "1px solid #c9cccf",
-                  borderRadius: "4px",
-                  fontSize: "14px",
-                }}
-              />
-            </div>
-
-            {/* Flagged Only Toggle */}
-            <div style={{ flex: "0 0 auto" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "14px", cursor: "pointer" }}>
-                <input
-                  type="checkbox"
-                  checked={flaggedOnly}
-                  onChange={(e) => {
-                    setFlaggedOnly(e.target.checked);
-                    setCurrentPage(1);
-                  }}
-                />
-                Flagged only
-              </label>
-            </div>
-
-            {/* Clear Filters Button */}
-            {(searchQuery || statusFilter !== "All" || dateFilter || flaggedOnly) && (
-              <s-button
-                onClick={() => {
-                  setSearchQuery("");
-                  setStatusFilter("All");
-                  setDateFilter("");
-                  setFlaggedOnly(false);
-                  setCurrentPage(1);
-                }}
-              >
-                Clear Filters
-              </s-button>
-            )}
-          </div>
-        </s-box>
-      </div>
-
-      {/* Main Returns Index Table */}
-      <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-        {paginatedReturns.length === 0 ? (
-          <s-stack direction="block" gap="base">
-            <div
+      <div style={{ background: "#ffffff", padding: "16px", borderRadius: "12px", border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,0.02)" }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "center" }}>
+          {/* Search Box */}
+          <div style={{ flex: "1 1 240px" }}>
+            <input
+              type="text"
+              placeholder="Search by Order #, Customer name or email..."
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setCurrentPage(1);
+              }}
               style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                padding: "40px 0",
                 width: "100%",
+                padding: "9px 14px",
+                border: "1px solid #cbd5e1",
+                borderRadius: "8px",
+                fontSize: "13.5px",
+              }}
+            />
+          </div>
+
+          {/* Status Filter */}
+          <div>
+            <select
+              value={statusFilter}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              style={{
+                padding: "9px 14px",
+                border: "1px solid #cbd5e1",
+                borderRadius: "8px",
+                fontSize: "13.5px",
               }}
             >
-              <s-heading>No Returns Match Search/Filters</s-heading>
-              <s-paragraph tone="neutral">Adjust your queries or filters and try again.</s-paragraph>
-            </div>
-          </s-stack>
+              <option value="All">All Statuses</option>
+              <option value="PENDING">Pending</option>
+              <option value="APPROVED">Approved</option>
+              <option value="REJECTED">Rejected</option>
+              <option value="COMPLETED">Completed</option>
+              <option value="CANCELLED">Cancelled</option>
+            </select>
+          </div>
+
+          {/* Flagged Checkbox */}
+          <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#475569", cursor: "pointer", userSelect: "none" }}>
+            <input
+              type="checkbox"
+              checked={flaggedOnly}
+              onChange={(e) => {
+                setFlaggedOnly(e.target.checked);
+                setCurrentPage(1);
+              }}
+              style={{ width: "16px", height: "16px" }}
+            />
+            <span>Flagged for Risk Only</span>
+          </label>
+        </div>
+      </div>
+
+      {/* Main Returns Table */}
+      <div style={{ background: "#ffffff", borderRadius: "16px", border: "1px solid #e2e8f0", overflow: "hidden" }}>
+        {filteredReturns.length === 0 ? (
+          <div style={{ padding: "48px 0", textAlign: "center" }}>
+            <h3 style={{ fontSize: "16px", fontWeight: 700, color: "#0f172a" }}>No Return Requests Found</h3>
+            <p style={{ color: "#64748b", fontSize: "13.5px", marginTop: "4px" }}>Refine your search or filters.</p>
+          </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
               <thead>
-                <tr style={{ borderBottom: "1px solid #e1e3e5" }}>
-                  <th style={{ padding: "12px 8px" }}>
-                    <s-text tone="neutral">Return ID</s-text>
-                  </th>
-                  <th style={{ padding: "12px 8px" }}>
-                    <s-text tone="neutral">Order</s-text>
-                  </th>
-                  <th style={{ padding: "12px 8px" }}>
-                    <s-text tone="neutral">Customer</s-text>
-                  </th>
-                  <th style={{ padding: "12px 8px" }}>
-                    <s-text tone="neutral">Items</s-text>
-                  </th>
-                  <th style={{ padding: "12px 8px" }}>
-                    <s-text tone="neutral">Reason</s-text>
-                  </th>
-                  <th style={{ padding: "12px 8px" }}>
-                    <s-text tone="neutral">Status</s-text>
-                  </th>
-                  <th style={{ padding: "12px 8px" }}>
-                    <s-text tone="neutral">Date</s-text>
-                  </th>
-                  <th style={{ padding: "12px 8px", textAlign: "right" }}>
-                    <s-text tone="neutral">Action</s-text>
-                  </th>
+                <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Return ID</th>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Order</th>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Customer</th>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Reason</th>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Status</th>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Date</th>
+                  <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase", textAlign: "right" }}>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -450,60 +422,47 @@ export default function Returns() {
                     key={ret.id}
                     onClick={() => setSelectedReturn(ret)}
                     style={{
-                      borderBottom: "1px solid #f1f2f3",
+                      borderBottom: "1px solid #f1f5f9",
                       cursor: "pointer",
-                      backgroundColor: selectedReturn?.id === ret.id ? "#f4f6f8" : "transparent",
+                      backgroundColor: selectedReturn?.id === ret.id ? "#f8fafc" : "transparent",
                     }}
-                    className="hover-row"
                   >
-                    <td style={{ padding: "12px 8px" }}>
-                      <strong>{ret.id.substring(0, 8)}</strong>
+                    <td style={{ padding: "12px 16px", fontWeight: 700, color: "#0f172a" }}>#{ret.id.substring(0, 8)}</td>
+                    <td style={{ padding: "12px 16px", fontWeight: 600 }}>{ret.orderNumber}</td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <div style={{ fontWeight: 600, color: "#1e293b" }}>{ret.customerName}</div>
+                      <div style={{ fontSize: "12px", color: "#64748b" }}>{ret.customerEmail}</div>
                     </td>
-                    <td style={{ padding: "12px 8px" }}>{ret.orderNumber}</td>
-                    <td style={{ padding: "12px 8px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        <div style={{ fontWeight: "bold" }}>{ret.customerName}</div>
-                        {ret.riskFlag.flagged && (
-                          <span
-                            title={ret.riskFlag.reasons.join("; ")}
-                            style={{
-                              fontSize: "11px",
-                              fontWeight: "bold",
-                              color: "#8e1f0b",
-                              background: "#fed3d1",
-                              padding: "1px 6px",
-                              borderRadius: "10px",
-                            }}
-                          >
-                            ⚠ Flagged
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: "12px", color: "#6d7175" }}>{ret.customerEmail}</div>
-                    </td>
-                    <td style={{ padding: "12px 8px" }}>
-                      {ret.items.length} item{ret.items.length !== 1 ? "s" : ""}
-                    </td>
-                    <td style={{ padding: "12px 8px" }}>{ret.reason}</td>
-                    <td style={{ padding: "12px 8px" }}>
-                      <s-text
-                        tone={
-                          ret.status === "COMPLETED" || ret.status === "APPROVED"
-                            ? "success"
-                            : ret.status === "PENDING"
-                            ? "warning"
-                            : "critical"
-                        }
+                    <td style={{ padding: "12px 16px", fontSize: "13px", color: "#475569" }}>{ret.reason}</td>
+                    <td style={{ padding: "12px 16px" }}>
+                      <span
+                        style={{
+                          fontSize: "11.5px",
+                          fontWeight: 700,
+                          padding: "3px 10px",
+                          borderRadius: "12px",
+                          backgroundColor:
+                            ret.status === "APPROVED" || ret.status === "COMPLETED"
+                              ? "#dcfce7"
+                              : ret.status === "PENDING"
+                              ? "#fef3c7"
+                              : "#fee2e2",
+                          color:
+                            ret.status === "APPROVED" || ret.status === "COMPLETED"
+                              ? "#15803d"
+                              : ret.status === "PENDING"
+                              ? "#d97706"
+                              : "#b91c1c",
+                        }}
                       >
                         {ret.status}
-                      </s-text>
+                      </span>
                     </td>
-                    <td style={{ padding: "12px 8px" }}>{ret.date}</td>
-                    <td
-                      style={{ padding: "12px 8px", textAlign: "right" }}
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <s-button onClick={() => setSelectedReturn(ret)}>View Details</s-button>
+                    <td style={{ padding: "12px 16px", fontSize: "13px", color: "#64748b" }}>{ret.date}</td>
+                    <td style={{ padding: "12px 16px", textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
+                      <button onClick={() => setSelectedReturn(ret)} style={{ fontSize: "12.5px" }}>
+                        View Details
+                      </button>
                     </td>
                   </tr>
                 ))}
@@ -512,489 +471,264 @@ export default function Returns() {
           </div>
         )}
 
-        {/* Pagination Toolbar */}
+        {/* Pagination Bar */}
         {totalPages > 1 && (
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginTop: "16px",
-              paddingTop: "12px",
-              borderTop: "1px solid #e1e3e5",
-            }}
-          >
-            <s-text tone="neutral">
-              Showing {startIndex + 1} to {Math.min(startIndex + itemsPerPage, filteredReturns.length)}{" "}
-              of {filteredReturns.length} returns
-            </s-text>
-            <s-stack direction="inline" gap="small">
-              <s-button
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 16px", borderTop: "1px solid #e2e8f0", background: "#f8fafc" }}>
+            <span style={{ fontSize: "13px", color: "#64748b" }}>
+              Showing {startIndex + 1} to {Math.min(startIndex + itemsPerPage, filteredReturns.length)} of {filteredReturns.length} returns
+            </span>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button
+                disabled={currentPage === 1}
                 onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                {...(currentPage === 1 ? { disabled: true } : {})}
+                style={{ opacity: currentPage === 1 ? 0.5 : 1, cursor: currentPage === 1 ? "not-allowed" : "pointer" }}
               >
                 Previous
-              </s-button>
-              <s-button
+              </button>
+              <button
+                disabled={currentPage === totalPages}
                 onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                {...(currentPage === totalPages ? { disabled: true } : {})}
+                style={{ opacity: currentPage === totalPages ? 0.5 : 1, cursor: currentPage === totalPages ? "not-allowed" : "pointer" }}
               >
                 Next
-              </s-button>
-            </s-stack>
+              </button>
+            </div>
           </div>
         )}
-      </s-box>
+      </div>
 
-      {/* Slide-out Return Details Drawer Overlay */}
-      {selectedReturn && (
+      {/* Advanced Search Autocomplete Manual Return Modal */}
+      {isCreateModalOpen && (
         <>
-          {/* Backdrop wrapper */}
           <div
-            onClick={() => setSelectedReturn(null)}
+            onClick={handleCloseModal}
             style={{
               position: "fixed",
               top: 0,
               left: 0,
               width: "100%",
               height: "100%",
-              backgroundColor: "rgba(0,0,0,0.3)",
-              zIndex: 999,
+              backgroundColor: "rgba(15, 23, 42, 0.5)",
+              backdropFilter: "blur(4px)",
+              zIndex: 1000,
             }}
           />
-
-          {/* Drawer container */}
           <div
             style={{
               position: "fixed",
-              top: 0,
-              right: 0,
-              width: "min(460px, 100%)",
-              height: "100%",
-              backgroundColor: "#ffffff",
-              boxShadow: "-4px 0 12px rgba(0,0,0,0.15)",
-              zIndex: 1000,
-              padding: "24px",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              width: "min(680px, 94vw)",
+              maxHeight: "88vh",
               overflowY: "auto",
+              backgroundColor: "#ffffff",
+              borderRadius: "16px",
+              boxShadow: "0 20px 40px rgba(0,0,0,0.2)",
+              zIndex: 1001,
+              padding: "28px",
               display: "flex",
               flexDirection: "column",
               gap: "20px",
-              borderLeft: "1px solid #c9cccf",
             }}
           >
-            {/* Header */}
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                borderBottom: "1px solid #f1f2f3",
-                paddingBottom: "12px",
-              }}
-            >
-              <div>
-                <s-text tone="neutral">Return Request</s-text>
-                <s-heading>{selectedReturn.id.substring(0, 12)}</s-heading>
-              </div>
-              <s-button variant="secondary" onClick={() => setSelectedReturn(null)}>
-                Close
-              </s-button>
-            </div>
-
-            {/* Fraud Risk Banner */}
-            {selectedReturn.riskFlag.flagged && (
-              <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-                <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                  <s-text tone="critical"><strong>⚠ Customer Flagged for Review</strong></s-text>
-                  {selectedReturn.riskFlag.reasons.map((reason: string, idx: number) => (
-                    <s-text key={idx} tone="neutral">{reason}</s-text>
-                  ))}
-                </div>
-              </s-box>
-            )}
-
-            {/* Status Summary */}
-            <s-box padding="base" background="subdued" borderRadius="base" borderWidth="base">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <s-text>Current Status:</s-text>
-                <strong>
-                  <s-text
-                    tone={
-                      selectedReturn.status === "COMPLETED" || selectedReturn.status === "APPROVED"
-                        ? "success"
-                        : selectedReturn.status === "PENDING"
-                        ? "warning"
-                        : "critical"
-                    }
-                  >
-                    {selectedReturn.status}
-                  </s-text>
-                </strong>
-              </div>
-            </s-box>
-
-            {/* Customer Info */}
-            <div>
-              <h3
-                style={{
-                  margin: "0 0 8px 0",
-                  fontSize: "14px",
-                  fontWeight: "bold",
-                  textTransform: "uppercase",
-                  color: "#6d7175",
-                }}
-              >
-                Customer Details
-              </h3>
-              <s-box padding="base" borderWidth="base" borderRadius="base">
-                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                  <strong>{selectedReturn.customerName}</strong>
-                  <s-text>{selectedReturn.customerEmail}</s-text>
-                </div>
-              </s-box>
-            </div>
-
-            {/* Order Info */}
-            <div>
-              <h3
-                style={{
-                  margin: "0 0 8px 0",
-                  fontSize: "14px",
-                  fontWeight: "bold",
-                  textTransform: "uppercase",
-                  color: "#6d7175",
-                }}
-              >
-                Order & Return Items
-              </h3>
-              <s-box padding="base" borderWidth="base" borderRadius="base">
-                <s-stack direction="block" gap="base">
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <s-text>Original Order:</s-text>
-                    <strong>{selectedReturn.orderNumber}</strong>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <s-text>Date Requested:</s-text>
-                    <s-text>{selectedReturn.date}</s-text>
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      borderBottom: "1px solid #f1f2f3",
-                      paddingBottom: "8px",
-                    }}
-                  >
-                    <s-text>Return Reason:</s-text>
-                    <s-text tone="critical">
-                      <strong>{selectedReturn.reason}</strong>
-                    </s-text>
-                  </div>
-
-                  {/* Items List */}
-                  {selectedReturn.items.map((item: any, idx: number) => (
-                    <div
-                      key={idx}
-                      style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}
-                    >
-                      <div>
-                        <div style={{ fontWeight: "bold" }}>{item.name}</div>
-                        <div style={{ fontSize: "12px", color: "#6d7175" }}>
-                          Reason: {item.reason}
-                        </div>
-                      </div>
-                      <div style={{ whiteSpace: "nowrap" }}>x{item.quantity}</div>
-                    </div>
-                  ))}
-                </s-stack>
-              </s-box>
-            </div>
-
-            {/* Notes */}
-            {selectedReturn.customerNote && (
-              <div>
-                <h3
-                  style={{
-                    margin: "0 0 8px 0",
-                    fontSize: "14px",
-                    fontWeight: "bold",
-                    textTransform: "uppercase",
-                    color: "#6d7175",
-                  }}
-                >
-                  Customer Note
-                </h3>
-                <s-box padding="base" background="subdued" borderRadius="base">
-                  <s-text>{selectedReturn.customerNote}</s-text>
-                </s-box>
-              </div>
-            )}
-
-            {/* Action Buttons Panel */}
-            <div>
-              <h3
-                style={{
-                  margin: "0 0 8px 0",
-                  fontSize: "14px",
-                  fontWeight: "bold",
-                  textTransform: "uppercase",
-                  color: "#6d7175",
-                }}
-              >
-                Administrative Action
-              </h3>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "4px" }}>
-                {selectedReturn.status === "PENDING" ? (
-                  <>
-                    <s-button
-                      variant="primary"
-                      onClick={() => handleUpdateStatus(selectedReturn.id, "APPROVED")}
-                    >
-                      Approve Return
-                    </s-button>
-                    <s-button
-                      variant="secondary"
-                      tone="critical"
-                      onClick={() => handleUpdateStatus(selectedReturn.id, "REJECTED")}
-                    >
-                      Reject Return
-                    </s-button>
-                  </>
-                ) : selectedReturn.status === "APPROVED" ? (
-                  <>
-                    <s-button
-                      variant="primary"
-                      onClick={() => handleUpdateStatus(selectedReturn.id, "COMPLETED")}
-                    >
-                      Mark Completed
-                    </s-button>
-                  </>
-                ) : selectedReturn.status === "COMPLETED" ? (
-                  <s-text tone="neutral">Return is closed.</s-text>
-                ) : (
-                  <s-text tone="neutral">No outstanding actions.</s-text>
-                )}
-              </div>
-            </div>
-
-            {/* Timeline */}
-            <div>
-              <h3
-                style={{
-                  margin: "0 0 8px 0",
-                  fontSize: "14px",
-                  fontWeight: "bold",
-                  textTransform: "uppercase",
-                  color: "#6d7175",
-                }}
-              >
-                Activity History
-              </h3>
-              <s-box padding="base" borderWidth="base" borderRadius="base">
-                <s-stack direction="block" gap="base">
-                  {selectedReturn.timeline.map((evt, idx) => (
-                    <div
-                      key={idx}
-                      style={{
-                        display: "flex",
-                        gap: "12px",
-                        borderLeft: "2px solid #e1e3e5",
-                        paddingLeft: "12px",
-                        position: "relative",
-                      }}
-                    >
-                      {/* Node Bullet */}
-                      <div
-                        style={{
-                          position: "absolute",
-                          left: "-6px",
-                          top: "2px",
-                          width: "10px",
-                          height: "10px",
-                          borderRadius: "50%",
-                          backgroundColor: idx === 0 ? "#5c6ac4" : "#c9cccf",
-                        }}
-                      />
-                      <div style={{ display: "flex", flexDirection: "column" }}>
-                        <strong style={{ fontSize: "13px" }}>{evt.title}</strong>
-                        <span style={{ fontSize: "12px", color: "#6d7175" }}>{evt.description}</span>
-                        <span style={{ fontSize: "11px", color: "#8c9196", marginTop: "2px" }}>
-                          {evt.date}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </s-stack>
-              </s-box>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* MANUAL RETURN CREATION MODAL */}
-      {isCreateModalOpen && (
-        <div
-          style={{
-            position: "fixed",
-            top: 0,
-            left: 0,
-            width: "100vw",
-            height: "100vh",
-            backgroundColor: "rgba(15, 23, 42, 0.6)",
-            backdropFilter: "blur(4px)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 9999,
-          }}
-        >
-          <div
-            style={{
-              background: "#ffffff",
-              borderRadius: "16px",
-              padding: "24px",
-              maxWidth: "600px",
-              width: "90%",
-              maxHeight: "85vh",
-              overflowY: "auto",
-              boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)",
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
-              <s-heading>Create Manual Return Request</s-heading>
-              <button
-                onClick={() => setIsCreateModalOpen(false)}
-                style={{ background: "none", border: "none", fontSize: "18px", cursor: "pointer", color: "#64748b" }}
-              >
-                ✕
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "14px" }}>
+              <h2 style={{ fontSize: "18px", fontWeight: 700, margin: 0, fontFamily: "Outfit, sans-serif" }}>
+                {showConfirmStep ? "Review & Confirm Return" : "Create Manual Return"}
+              </h2>
+              <button onClick={handleCloseModal} style={{ padding: "4px 10px", fontSize: "12px" }}>
+                ✕ Close
               </button>
             </div>
 
             {!showConfirmStep ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-                {/* 1. Select Store Order */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
+                {/* Search Autocomplete Order Picker */}
                 <div>
-                  <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "6px" }}>
-                    Select Order *
+                  <label style={{ display: "block", fontWeight: 700, fontSize: "13.5px", marginBottom: "6px", color: "#0f172a" }}>
+                    Search & Select Store Order *
                   </label>
-                  <select
-                    value={selectedOrderId}
-                    onChange={(e) => handleOrderChange(e.target.value)}
-                    style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1" }}
-                  >
-                    <option value="">-- Choose an order --</option>
-                    {dbOrders.map((o: any) => (
-                      <option key={o.shopifyOrderId} value={o.shopifyOrderId}>
-                        {o.orderNumber} ({o.customerName || o.customerEmail || "Guest"}) - ${Number(o.totalPrice).toFixed(2)}
-                      </option>
-                    ))}
-                  </select>
+                  <input
+                    type="text"
+                    placeholder="🔍 Type Order #, Customer Name, Email, or Product title..."
+                    value={orderSearchQuery}
+                    onChange={(e) => setOrderSearchQuery(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "10px 14px",
+                      border: "1px solid #cbd5e1",
+                      borderRadius: "8px",
+                      fontSize: "14px",
+                      marginBottom: "8px",
+                    }}
+                  />
+
+                  {/* Scrollable Order Autocomplete Results */}
+                  {!selectedOrder && (
+                    <div style={{ maxHeight: "220px", overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: "8px", background: "#f8fafc" }}>
+                      {filteredOrders.length === 0 ? (
+                        <div style={{ padding: "16px", textAlign: "center", color: "#64748b", fontSize: "13px" }}>
+                          No store orders match "{orderSearchQuery}"
+                        </div>
+                      ) : (
+                        filteredOrders.map((ord: any) => (
+                          <div
+                            key={ord.shopifyOrderId}
+                            onClick={() => handleOrderSelect(ord)}
+                            style={{
+                              padding: "12px 14px",
+                              borderBottom: "1px solid #e2e8f0",
+                              cursor: "pointer",
+                              backgroundColor: "#ffffff",
+                              transition: "background 0.15s",
+                            }}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                              <strong style={{ fontSize: "14px", color: "#0f172a" }}>{ord.orderNumber}</strong>
+                              <span style={{ fontSize: "13px", fontWeight: 700, color: "#10b981" }}>${Number(ord.totalPrice).toFixed(2)}</span>
+                            </div>
+                            <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>
+                              Customer: {ord.customerName || "N/A"} ({ord.customerEmail || "No Email"})
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+
+                  {/* Selected Order Summary Banner */}
+                  {selectedOrder && (
+                    <div style={{ backgroundColor: "#f0fdf4", border: "1px solid #bbf7d0", padding: "12px 14px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <div>
+                        <strong style={{ color: "#15803d", fontSize: "14px" }}>Selected Order: {selectedOrder.orderNumber}</strong>
+                        <div style={{ fontSize: "12px", color: "#166534" }}>{selectedOrder.customerName} ({selectedOrder.customerEmail})</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedOrderId("")}
+                        style={{ fontSize: "12px", background: "#ffffff", color: "#15803d", border: "1px solid #bbf7d0" }}
+                      >
+                        Change Order
+                      </button>
+                    </div>
+                  )}
                 </div>
 
+                {/* Line Item Picker */}
                 {selectedOrder && (
-                  <>
-                    {/* 2. Pick Items to Return */}
-                    <div>
-                      <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "6px" }}>
-                        Select Items to Return *
-                      </label>
-                      <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px", background: "#f8fafc" }}>
-                        {(selectedOrder.lineItems as any[]).map((item: any) => {
-                          const isSelected = !!selectedItems[item.lineItemId];
-                          return (
-                            <div
-                              key={item.lineItemId}
-                              style={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "12px",
-                                padding: "8px 0",
-                                borderBottom: "1px solid #e2e8f0",
-                              }}
-                            >
+                  <div>
+                    <label style={{ display: "block", fontWeight: 700, fontSize: "13.5px", marginBottom: "8px", color: "#0f172a" }}>
+                      Select Order Line Items to Return *
+                    </label>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                      {((selectedOrder as any).lineItems || []).map((li: any) => {
+                        const isSelected = Boolean(selectedItems[li.lineItemId]);
+                        const itemData = selectedItems[li.lineItemId] || {};
+
+                        return (
+                          <div
+                            key={li.lineItemId}
+                            style={{
+                              border: isSelected ? "2px solid #6366f1" : "1px solid #e2e8f0",
+                              borderRadius: "10px",
+                              padding: "14px",
+                              backgroundColor: isSelected ? "#f5f3ff" : "#ffffff",
+                            }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                               <input
                                 type="checkbox"
+                                id={`ret-item-${li.lineItemId}`}
                                 checked={isSelected}
-                                onChange={() => handleItemToggle(item)}
+                                onChange={() => handleItemToggle(li)}
+                                style={{ width: "18px", height: "18px", cursor: "pointer" }}
                               />
-                              <div style={{ flex: 1 }}>
-                                <div style={{ fontSize: "13.5px", fontWeight: 600 }}>{item.title}</div>
+                              <label htmlFor={`ret-item-${li.lineItemId}`} style={{ flex: 1, cursor: "pointer" }}>
+                                <div style={{ fontWeight: 600, fontSize: "14px", color: "#0f172a" }}>{li.title}</div>
                                 <div style={{ fontSize: "12px", color: "#64748b" }}>
-                                  Qty: {item.quantity} | Price: ${Number(item.price).toFixed(2)}
+                                  Unit Price: ${Number(li.price).toFixed(2)} | Max Qty: {li.quantity}
                                 </div>
-                              </div>
-                              {isSelected && (
-                                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                              </label>
+                            </div>
+
+                            {isSelected && (
+                              <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid #ddd6fe", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                                <div>
+                                  <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Return Quantity</label>
                                   <input
                                     type="number"
                                     min="1"
-                                    max={item.quantity}
-                                    value={selectedItems[item.lineItemId]?.quantity ?? 1}
-                                    onChange={(e) =>
-                                      handleItemQuantityChange(item.lineItemId, parseInt(e.target.value, 10) || 1)
-                                    }
-                                    style={{ width: "50px", padding: "4px 8px", fontSize: "12px" }}
+                                    max={li.quantity}
+                                    value={itemData.quantity}
+                                    onChange={(e) => handleItemQuantityChange(li.lineItemId, parseInt(e.target.value) || 1)}
+                                    style={{ width: "100%", padding: "6px 10px", marginTop: "4px" }}
                                   />
+                                </div>
+                                <div>
+                                  <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Item Reason</label>
                                   <select
-                                    value={selectedItems[item.lineItemId]?.reason ?? "DEFECTIVE"}
-                                    onChange={(e) => handleItemReasonChange(item.lineItemId, e.target.value)}
-                                    style={{ padding: "4px 8px", fontSize: "12px" }}
+                                    value={itemData.reason || returnReasonInput}
+                                    onChange={(e) => handleItemReasonChange(li.lineItemId, e.target.value)}
+                                    style={{ width: "100%", padding: "6px 10px", marginTop: "4px" }}
                                   >
-                                    <option value="DEFECTIVE">Defective</option>
+                                    <option value="DEFECTIVE">Defective / Damaged</option>
                                     <option value="SIZE_TOO_SMALL">Size Too Small</option>
                                     <option value="SIZE_TOO_LARGE">Size Too Large</option>
                                     <option value="WRONG_ITEM">Wrong Item Sent</option>
-                                    <option value="CHANGED_MIND">Buyer Remorse</option>
+                                    <option value="CUSTOMER_CHANGE">Changed Mind</option>
                                   </select>
                                 </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
+                  </div>
+                )}
 
-                    {/* 3. Refund Amount & Notes */}
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                      <div>
-                        <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "6px" }}>
-                          Refund Amount ($)
-                        </label>
-                        <input
-                          type="text"
-                          value={refundAmountInput}
-                          onChange={(e) => setRefundAmountInput(e.target.value)}
-                          style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1" }}
-                        />
-                      </div>
-                      <div>
-                        <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "6px" }}>
-                          Main Return Reason
-                        </label>
-                        <select
-                          value={returnReasonInput}
-                          onChange={(e) => setReturnReasonInput(e.target.value)}
-                          style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1" }}
-                        >
-                          <option value="DEFECTIVE">Defective Item</option>
-                          <option value="SIZE_TOO_SMALL">Size Too Small</option>
-                          <option value="SIZE_TOO_LARGE">Size Too Large</option>
-                          <option value="WRONG_ITEM">Wrong Item Sent</option>
-                          <option value="CHANGED_MIND">Buyer Remorse</option>
-                        </select>
-                      </div>
+                {/* Additional Return Options */}
+                {selectedOrder && Object.keys(selectedItems).length > 0 && (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+                    <div>
+                      <label style={{ display: "block", fontWeight: 700, fontSize: "12.5px", color: "#475569", marginBottom: "4px" }}>
+                        Global Return Reason
+                      </label>
+                      <select
+                        value={returnReasonInput}
+                        onChange={(e) => setReturnReasonInput(e.target.value)}
+                        style={{ width: "100%", padding: "8px 12px" }}
+                      >
+                        <option value="DEFECTIVE">Defective / Damaged</option>
+                        <option value="SIZE_TOO_SMALL">Size Too Small</option>
+                        <option value="SIZE_TOO_LARGE">Size Too Large</option>
+                        <option value="WRONG_ITEM">Wrong Item Sent</option>
+                        <option value="CUSTOMER_CHANGE">Changed Mind</option>
+                      </select>
                     </div>
 
                     <div>
-                      <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "6px" }}>
-                        Admin / Merchant Note
+                      <label style={{ display: "block", fontWeight: 700, fontSize: "12.5px", color: "#475569", marginBottom: "4px" }}>
+                        Refund Amount ($)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={refundAmountInput}
+                        onChange={(e) => setRefundAmountInput(e.target.value)}
+                        style={{ width: "100%", padding: "8px 12px" }}
+                      />
+                    </div>
+
+                    <div style={{ gridColumn: "span 2" }}>
+                      <label style={{ display: "block", fontWeight: 700, fontSize: "12.5px", color: "#475569", marginBottom: "4px" }}>
+                        Merchant Internal Note
                       </label>
                       <input
                         type="text"
-                        placeholder="Internal note for merchant record..."
+                        placeholder="Internal note for staff..."
                         value={adminNoteInput}
                         onChange={(e) => setAdminNoteInput(e.target.value)}
-                        style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1" }}
                       />
                     </div>
 
@@ -1021,7 +755,7 @@ export default function Returns() {
                         Review & Confirm →
                       </button>
                     </div>
-                  </>
+                  </div>
                 )}
               </div>
             ) : (
@@ -1061,7 +795,7 @@ export default function Returns() {
               </div>
             )}
           </div>
-        </div>
+        </>
       )}
 
       {/* Basic Hover Row Styling */}
@@ -1070,6 +804,6 @@ export default function Returns() {
           background-color: #f9fafb !important;
         }
       `}</style>
-    </s-page>
+    </div>
   );
 }
