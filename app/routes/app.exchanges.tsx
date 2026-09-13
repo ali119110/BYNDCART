@@ -2,27 +2,32 @@ import React, { useState } from "react";
 import { useLoaderData, useFetcher } from "react-router";
 import type { Route } from "./+types/app.exchanges";
 import { requireTenantContext } from "../utils/tenant.server";
-import { getExchangeRequests, updateExchangeStatus, approveExchangeWithDraftOrder } from "../services/exchanges.server";
+import { getExchangeRequests, updateExchangeStatus, approveExchangeWithDraftOrder, createExchangeRequest } from "../services/exchanges.server";
 import { getCustomerRiskFlagsForEmails } from "../services/fraud.server";
 import { assertRateLimit } from "../utils/rateLimit.server";
+import { getStoreOrders } from "../services/orders.server";
+import prisma from "../db.server";
 
-// ===== LOADER: Fetch exchanges from database =====
+// ===== LOADER: Fetch exchanges and orders from database =====
 export async function loader({ request }: Route.LoaderArgs) {
   const { shopifyStoreId } = await requireTenantContext(request);
 
   try {
-    const exchanges = await getExchangeRequests(shopifyStoreId);
+    const [exchanges, orders] = await Promise.all([
+      getExchangeRequests(shopifyStoreId),
+      getStoreOrders(shopifyStoreId, 100),
+    ]);
     const emails = exchanges.map((e: any) => e.customerEmail);
     const riskFlags = await getCustomerRiskFlagsForEmails(shopifyStoreId, emails);
 
-    return { exchanges, riskFlags: Object.fromEntries(riskFlags) };
+    return { exchanges, orders, riskFlags: Object.fromEntries(riskFlags) };
   } catch (error) {
     console.error("Failed to fetch exchanges:", error);
-    return { exchanges: [], riskFlags: {} as Record<string, { flagged: boolean; reasons: string[] }> };
+    return { exchanges: [], orders: [], riskFlags: {} as Record<string, { flagged: boolean; reasons: string[] }> };
   }
 }
 
-// ===== ACTION: Handle status updates =====
+// ===== ACTION: Handle status updates & manual exchange creation =====
 export async function action({ request }: Route.ActionArgs) {
   if (request.method !== "POST") {
     return { error: "Method not allowed" };
@@ -30,7 +35,49 @@ export async function action({ request }: Route.ActionArgs) {
 
   const { shopifyStoreId, admin } = await requireTenantContext(request);
   const formData = await request.formData();
+  const actionType = formData.get("actionType") as string;
 
+  // Handle Manual Exchange Creation
+  if (actionType === "CREATE_MANUAL_EXCHANGE") {
+    const shopifyOrderId = formData.get("shopifyOrderId") as string;
+    const itemsJson = formData.get("items") as string;
+
+    if (!shopifyOrderId || !itemsJson) {
+      return { error: "Missing required order or items for exchange creation" };
+    }
+
+    try {
+      // Validate order ownership
+      const order = await prisma.order.findFirst({
+        where: { shopifyOrderId, shopifyStoreId },
+      });
+
+      if (!order) {
+        return { error: "Order not found or does not belong to this merchant's store" };
+      }
+
+      const parsedItems = JSON.parse(itemsJson);
+      if (!Array.isArray(parsedItems) || parsedItems.length === 0) {
+        return { error: "At least one replacement item must be selected" };
+      }
+
+      const exchangeRequest = await createExchangeRequest({
+        shopifyStoreId,
+        shopifyOrderId: order.shopifyOrderId,
+        orderNumber: order.orderNumber,
+        customerEmail: order.customerEmail || "customer@example.com",
+        customerName: order.customerName || undefined,
+        items: parsedItems,
+      });
+
+      return { success: true, exchange: exchangeRequest };
+    } catch (error) {
+      console.error("Failed to create manual exchange:", error);
+      return { error: String(error) };
+    }
+  }
+
+  // Handle Status Updates
   const exchangeId = formData.get("exchangeId") as string;
   const newStatus = formData.get("status") as string;
   const newOrderNumber = formData.get("newOrderNumber") as string | null;
@@ -40,14 +87,10 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   try {
-    // Draft order creation hits Shopify's Admin API — cap at 20/min per
-    // store so a fast double-click or script can't hammer it.
     if (newStatus === "APPROVED") {
       assertRateLimit(`exchange-approve:${shopifyStoreId}`, { limit: 20, windowMs: 60_000 });
     }
 
-    // Approving triggers real draft order creation in Shopify. Every other
-    // transition is a plain status update.
     const updated =
       newStatus === "APPROVED"
         ? await approveExchangeWithDraftOrder(admin, exchangeId, shopifyStoreId)
@@ -69,14 +112,35 @@ export async function action({ request }: Route.ActionArgs) {
 // ===== COMPONENT =====
 export default function Exchanges() {
   // Load real data from database
-  const { exchanges: dbExchanges, riskFlags } = useLoaderData<typeof loader>();
+  const { exchanges: dbExchanges, orders = [], riskFlags } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
+
+  // Create Exchange Modal State
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [selectedOrderId, setSelectedOrderId] = useState("");
+  const [exchangeItems, setExchangeItems] = useState<
+    Record<
+      string,
+      {
+        originalQuantity: number;
+        replacementTitle: string;
+        replacementVariantId: string;
+        replacementQuantity: number;
+        priceDifference: number;
+      }
+    >
+  >({});
+  const [isConfirmStep, setIsConfirmStep] = useState(false);
+
+  // Selected Order details for modal
+  const selectedOrder = orders.find((o: any) => o.shopifyOrderId === selectedOrderId);
+  const isSubmitting = fetcher.state !== "idle" && fetcher.formData?.get("actionType") === "CREATE_MANUAL_EXCHANGE";
 
   // Convert DB data to UI format
   const exchangesList = dbExchanges.map((exc: any) => ({
     id: exc.id,
     originalOrder: exc.orderNumber,
-    customerName: "Customer", // Optional field in DB
+    customerName: exc.customerName || "Customer",
     customerEmail: exc.customerEmail,
     riskFlag: riskFlags[exc.customerEmail] ?? { flagged: false, reasons: [] },
     originalItem: {
@@ -87,14 +151,14 @@ export default function Exchanges() {
       name: exc.items?.[0]?.replacementTitle || "Replacement Item",
       sku: exc.items?.[0]?.replacementVariantId || "",
     },
-    status: exc.status, // PENDING, APPROVED, FULFILLED, COMPLETED, REJECTED, CANCELLED
+    status: exc.status,
     priceDifference: exc.items?.[0]?.priceDifference || 0,
-    trackingNumber: null, // Future field
-    courier: null, // Future field
+    trackingNumber: null,
+    courier: null,
     newOrderId: exc.newOrderId || null,
     newOrderNumber: exc.newOrderNumber || null,
     date: new Date(exc.createdAt).toLocaleDateString(),
-    items: exc.items.map((item: any) => ({
+    items: (exc.items || []).map((item: any) => ({
       id: item.id,
       originalLineItemId: item.originalLineItemId,
       originalQuantity: item.originalQuantity,
@@ -140,7 +204,6 @@ export default function Exchanges() {
       { method: "POST" }
     );
 
-    // Optimistically update the selected exchange status
     if (selectedExchange?.id === id) {
       setSelectedExchange({
         ...selectedExchange,
@@ -149,10 +212,85 @@ export default function Exchanges() {
     }
   };
 
+  const handleOrderChange = (orderId: string) => {
+    setSelectedOrderId(orderId);
+    setExchangeItems({});
+    setIsConfirmStep(false);
+  };
+
+  const handleToggleItem = (lineItemId: string, defaultTitle: string) => {
+    setExchangeItems((prev) => {
+      const next = { ...prev };
+      if (next[lineItemId]) {
+        delete next[lineItemId];
+      } else {
+        next[lineItemId] = {
+          originalQuantity: 1,
+          replacementTitle: `${defaultTitle} (Replacement)`,
+          replacementVariantId: `gid://shopify/ProductVariant/manual`,
+          replacementQuantity: 1,
+          priceDifference: 0,
+        };
+      }
+      return next;
+    });
+  };
+
+  const handleItemChange = (lineItemId: string, field: string, value: any) => {
+    setExchangeItems((prev) => ({
+      ...prev,
+      [lineItemId]: {
+        ...prev[lineItemId],
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleCloseModal = () => {
+    setIsCreateModalOpen(false);
+    setSelectedOrderId("");
+    setExchangeItems({});
+    setIsConfirmStep(false);
+  };
+
+  const handleCreateSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedOrder) return;
+
+    const items = Object.entries(exchangeItems).map(([lineItemId, data]) => ({
+      originalLineItemId: lineItemId,
+      originalQuantity: Number(data.originalQuantity) || 1,
+      replacementVariantId: data.replacementVariantId || "gid://shopify/ProductVariant/manual",
+      replacementQuantity: Number(data.replacementQuantity) || 1,
+      replacementTitle: data.replacementTitle || "Replacement Item",
+      priceDifference: Number(data.priceDifference) || 0,
+    }));
+
+    fetcher.submit(
+      {
+        actionType: "CREATE_MANUAL_EXCHANGE",
+        shopifyOrderId: selectedOrder.shopifyOrderId,
+        items: JSON.stringify(items),
+      },
+      { method: "POST" }
+    );
+
+    handleCloseModal();
+  };
+
   const isApproving = fetcher.state !== "idle" && fetcher.formData?.get("status") === "APPROVED";
 
   return (
     <s-page heading="Exchange Requests">
+      {/* Header Bar with Create Exchange Button */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+        <div>
+          <s-paragraph tone="neutral">Manage and create exchanges directly for customer orders.</s-paragraph>
+        </div>
+        <s-button variant="primary" onClick={() => setIsCreateModalOpen(true)}>
+          + Create Exchange
+        </s-button>
+      </div>
 
       <div style={{ marginBottom: "16px" }}>
         <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
@@ -279,6 +417,248 @@ export default function Exchanges() {
           </div>
         )}
       </s-box>
+
+      {/* Manual Create Exchange Modal */}
+      {isCreateModalOpen && (
+        <>
+          <div
+            onClick={handleCloseModal}
+            style={{
+              position: "fixed",
+              top: 0,
+              left: 0,
+              width: "100%",
+              height: "100%",
+              backgroundColor: "rgba(0,0,0,0.4)",
+              zIndex: 1000,
+            }}
+          />
+          <div
+            style={{
+              position: "fixed",
+              top: "50%",
+              left: "50%",
+              transform: "translate(-50%, -50%)",
+              width: "min(600px, 92vw)",
+              maxHeight: "85vh",
+              overflowY: "auto",
+              backgroundColor: "#ffffff",
+              borderRadius: "8px",
+              boxShadow: "0 10px 25px rgba(0,0,0,0.2)",
+              zIndex: 1001,
+              padding: "24px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "16px",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e1e3e5", paddingBottom: "12px" }}>
+              <s-heading style={{ margin: 0 }}>
+                {isConfirmStep ? "Confirm Exchange Creation" : "Create Manual Exchange"}
+              </s-heading>
+              <s-button variant="secondary" onClick={handleCloseModal}>Close</s-button>
+            </div>
+
+            <form onSubmit={handleCreateSubmit}>
+              {!isConfirmStep ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                  {/* Step 1: Select Order */}
+                  <div>
+                    <label style={{ display: "block", fontWeight: "bold", fontSize: "14px", marginBottom: "6px" }}>
+                      Select Order *
+                    </label>
+                    <select
+                      value={selectedOrderId}
+                      onChange={(e) => handleOrderChange(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "10px",
+                        borderRadius: "4px",
+                        border: "1px solid #c9cccf",
+                        fontSize: "14px",
+                      }}
+                      required
+                    >
+                      <option value="">-- Choose an order from store --</option>
+                      {orders.map((ord: any) => (
+                        <option key={ord.shopifyOrderId} value={ord.shopifyOrderId}>
+                          {ord.orderNumber} - {ord.customerEmail || "No Email"} (${Number(ord.totalPrice).toFixed(2)})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Step 2 & 3: Select Items and Replacements */}
+                  {selectedOrder && (
+                    <div>
+                      <label style={{ display: "block", fontWeight: "bold", fontSize: "14px", marginBottom: "8px" }}>
+                        Select Items to Exchange & Specify Replacements *
+                      </label>
+
+                      {((selectedOrder as any).lineItems || []).length === 0 ? (
+                        <s-text tone="neutral">No items recorded in this order.</s-text>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                          {((selectedOrder as any).lineItems || []).map((li: any) => {
+                            const isSelected = Boolean(exchangeItems[li.lineItemId]);
+                            const itemData = exchangeItems[li.lineItemId] || {};
+
+                            return (
+                              <div
+                                key={li.lineItemId}
+                                style={{
+                                  border: isSelected ? "2px solid #008060" : "1px solid #e1e3e5",
+                                  borderRadius: "6px",
+                                  padding: "12px",
+                                  backgroundColor: isSelected ? "#f4f6f8" : "#ffffff",
+                                }}
+                              >
+                                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                                  <input
+                                    type="checkbox"
+                                    id={`item-${li.lineItemId}`}
+                                    checked={isSelected}
+                                    onChange={() => handleToggleItem(li.lineItemId, li.title)}
+                                    style={{ width: "18px", height: "18px", cursor: "pointer" }}
+                                  />
+                                  <label htmlFor={`item-${li.lineItemId}`} style={{ cursor: "pointer", flex: 1, fontWeight: 500 }}>
+                                    {li.title} (${Number(li.price).toFixed(2)} ea) - Max Qty: {li.quantity}
+                                  </label>
+                                </div>
+
+                                {isSelected && (
+                                  <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid #e1e3e5", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                                    <div>
+                                      <label style={{ fontSize: "12px", fontWeight: "bold", color: "#6d7175" }}>Qty to Return</label>
+                                      <input
+                                        type="number"
+                                        min="1"
+                                        max={li.quantity}
+                                        value={itemData.originalQuantity}
+                                        onChange={(e) => handleItemChange(li.lineItemId, "originalQuantity", Math.max(1, parseInt(e.target.value) || 1))}
+                                        style={{ width: "100%", padding: "6px 8px", border: "1px solid #c9cccf", borderRadius: "4px" }}
+                                      />
+                                    </div>
+                                    <div>
+                                      <label style={{ fontSize: "12px", fontWeight: "bold", color: "#6d7175" }}>Replacement Title</label>
+                                      <input
+                                        type="text"
+                                        value={itemData.replacementTitle}
+                                        onChange={(e) => handleItemChange(li.lineItemId, "replacementTitle", e.target.value)}
+                                        style={{ width: "100%", padding: "6px 8px", border: "1px solid #c9cccf", borderRadius: "4px" }}
+                                      />
+                                    </div>
+                                    <div>
+                                      <label style={{ fontSize: "12px", fontWeight: "bold", color: "#6d7175" }}>Replacement Qty</label>
+                                      <input
+                                        type="number"
+                                        min="1"
+                                        value={itemData.replacementQuantity}
+                                        onChange={(e) => handleItemChange(li.lineItemId, "replacementQuantity", Math.max(1, parseInt(e.target.value) || 1))}
+                                        style={{ width: "100%", padding: "6px 8px", border: "1px solid #c9cccf", borderRadius: "4px" }}
+                                      />
+                                    </div>
+                                    <div>
+                                      <label style={{ fontSize: "12px", fontWeight: "bold", color: "#6d7175" }}>Price Difference ($)</label>
+                                      <input
+                                        type="number"
+                                        step="0.01"
+                                        placeholder="0.00 (+ owed / - refund)"
+                                        value={itemData.priceDifference}
+                                        onChange={(e) => handleItemChange(li.lineItemId, "priceDifference", parseFloat(e.target.value) || 0)}
+                                        style={{ width: "100%", padding: "6px 8px", border: "1px solid #c9cccf", borderRadius: "4px" }}
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "12px" }}>
+                    <s-button variant="secondary" onClick={handleCloseModal}>Cancel</s-button>
+                    <button
+                      type="button"
+                      disabled={!selectedOrder || Object.keys(exchangeItems).length === 0}
+                      onClick={() => setIsConfirmStep(true)}
+                      style={{
+                        backgroundColor: !selectedOrder || Object.keys(exchangeItems).length === 0 ? "#8c9196" : "#008060",
+                        color: "#ffffff",
+                        border: "none",
+                        padding: "8px 16px",
+                        borderRadius: "4px",
+                        cursor: !selectedOrder || Object.keys(exchangeItems).length === 0 ? "not-allowed" : "pointer",
+                        fontWeight: "bold"
+                      }}
+                    >
+                      Next: Review Confirmation
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Step 4: Confirmation */
+                <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                  <s-box padding="base" background="subdued" borderRadius="base">
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                      <div><strong>Order Number:</strong> {selectedOrder?.orderNumber}</div>
+                      <div><strong>Customer Email:</strong> {selectedOrder?.customerEmail || "N/A"}</div>
+                      <div><strong>Status:</strong> Manual (Merchant-Created)</div>
+                      <hr style={{ border: "none", borderTop: "1px solid #e1e3e5", margin: "8px 0" }} />
+                      <div><strong>Exchange Items:</strong></div>
+                      {Object.entries(exchangeItems).map(([lineItemId, data]) => {
+                        const originalLine = (selectedOrder?.lineItems || []).find((l: any) => l.lineItemId === lineItemId);
+                        return (
+                          <div key={lineItemId} style={{ fontSize: "13px", paddingLeft: "10px", borderLeft: "2px solid #008060", marginBottom: "6px" }}>
+                            <div>Returning: <strong>{data.originalQuantity}x {originalLine?.title || lineItemId}</strong></div>
+                            <div>Replacement: <strong>{data.replacementQuantity}x {data.replacementTitle}</strong></div>
+                            <div>Price Diff: <strong>{data.priceDifference >= 0 ? `+$${data.priceDifference}` : `-$${Math.abs(data.priceDifference)}`}</strong></div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </s-box>
+
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px" }}>
+                    <button
+                      type="button"
+                      onClick={() => setIsConfirmStep(false)}
+                      style={{
+                        backgroundColor: "#f1f2f3",
+                        color: "#202223",
+                        border: "1px solid #c9cccf",
+                        padding: "8px 16px",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Back to Edit
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmitting}
+                      style={{
+                        backgroundColor: "#008060",
+                        color: "#ffffff",
+                        border: "none",
+                        padding: "8px 16px",
+                        borderRadius: "4px",
+                        cursor: isSubmitting ? "not-allowed" : "pointer",
+                        fontWeight: "bold",
+                      }}
+                    >
+                      {isSubmitting ? "Saving Exchange..." : "Confirm & Save Exchange"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </form>
+          </div>
+        </>
+      )}
 
       {/* Slide-out Exchange Workflow Drawer */}
       {selectedExchange && (
@@ -461,7 +841,7 @@ export default function Exchanges() {
               <h3 style={{ margin: "0 0 8px 0", fontSize: "14px", fontWeight: "bold", textTransform: "uppercase", color: "#6d7175" }}>Activity History</h3>
               <s-box padding="base" borderWidth="base" borderRadius="base">
                 <s-stack direction="block" gap="base">
-                  {selectedExchange.timeline.map((evt, idx) => (
+                  {selectedExchange.timeline.map((evt: any, idx: number) => (
                     <div key={idx} style={{ display: "flex", gap: "12px", borderLeft: "2px solid #e1e3e5", paddingLeft: "12px", position: "relative" }}>
                       <div style={{
                         position: "absolute",

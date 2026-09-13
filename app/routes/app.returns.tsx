@@ -2,30 +2,36 @@ import React, { useState } from "react";
 import { useLoaderData, useFetcher } from "react-router";
 import type { Route } from "./+types/app.returns";
 import { requireTenantContext } from "../utils/tenant.server";
-import { getReturnRequests, updateReturnRequestStatus } from "../services/returns.server";
+import prisma from "../db.server";
+import { getReturnRequests, updateReturnRequestStatus, createReturnRequest } from "../services/returns.server";
 import { getCustomerRiskFlagsForEmails } from "../services/fraud.server";
+import { getStoreOrders } from "../services/orders.server";
 
-// ===== LOADER: Fetch returns from database =====
+// ===== LOADER: Fetch returns and store orders from database =====
 export async function loader({ request }: Route.LoaderArgs) {
   const { shopifyStoreId } = await requireTenantContext(request);
 
   try {
-    const returns = await getReturnRequests(shopifyStoreId);
+    const [returns, orders] = await Promise.all([
+      getReturnRequests(shopifyStoreId),
+      getStoreOrders(shopifyStoreId, 100),
+    ]);
     const emails = returns.map((r) => r.customerEmail);
     const riskFlags = await getCustomerRiskFlagsForEmails(shopifyStoreId, emails);
 
     return {
       returns,
+      orders,
       // Map isn't serializable across the loader boundary, convert to plain object
       riskFlags: Object.fromEntries(riskFlags),
     };
   } catch (error) {
-    console.error("Failed to fetch returns:", error);
-    return { returns: [], riskFlags: {} as Record<string, { flagged: boolean; reasons: string[] }> };
+    console.error("Failed to fetch returns or orders:", error);
+    return { returns: [], orders: [], riskFlags: {} as Record<string, { flagged: boolean; reasons: string[] }> };
   }
 }
 
-// ===== ACTION: Handle status updates =====
+// ===== ACTION: Handle status updates & manual return creation =====
 export async function action({ request }: Route.ActionArgs) {
   if (request.method !== "POST") {
     return { error: "Method not allowed" };
@@ -33,6 +39,67 @@ export async function action({ request }: Route.ActionArgs) {
 
   const { shopifyStoreId } = await requireTenantContext(request);
   const formData = await request.formData();
+  const actionType = formData.get("actionType") as string;
+
+  if (actionType === "CREATE_MANUAL_RETURN") {
+    const shopifyOrderId = formData.get("shopifyOrderId") as string;
+    const orderNumber = formData.get("orderNumber") as string;
+    const customerEmail = formData.get("customerEmail") as string;
+    const customerName = formData.get("customerName") as string;
+    const reason = formData.get("reason") as string;
+    const adminNote = formData.get("adminNote") as string;
+    const refundAmountRaw = formData.get("refundAmount") as string;
+    const itemsJson = formData.get("items") as string;
+
+    if (!shopifyOrderId || !orderNumber || !itemsJson) {
+      return { error: "Order and items selection are required for manual return." };
+    }
+
+    // Validate Order Ownership against current merchant store
+    const existingOrder = await prisma.order.findFirst({
+      where: { shopifyOrderId, shopifyStoreId },
+    });
+
+    if (!existingOrder) {
+      return { error: "Invalid order selection. Order does not belong to this merchant store." };
+    }
+
+    let parsedItems = [];
+    try {
+      parsedItems = JSON.parse(itemsJson);
+    } catch {
+      return { error: "Invalid line items payload." };
+    }
+
+    if (!Array.isArray(parsedItems) || parsedItems.length === 0) {
+      return { error: "Please select at least one item to return." };
+    }
+
+    try {
+      const createdReturn = await createReturnRequest({
+        shopifyStoreId,
+        shopifyOrderId,
+        orderNumber,
+        customerEmail: customerEmail || existingOrder.customerEmail || "merchant-created@store.com",
+        customerName: customerName || existingOrder.customerName || "Customer",
+        reason: reason || "Merchant Created Return",
+        customerNote: "Created manually by store merchant admin",
+        adminNote: adminNote || "Created manually via merchant dashboard",
+        refundAmount: refundAmountRaw ? parseFloat(refundAmountRaw) : 0,
+        items: parsedItems.map((i: any) => ({
+          shopifyLineItemId: i.lineItemId,
+          quantity: parseInt(i.quantity, 10) || 1,
+          reason: i.reason || reason || "MERCHANT_CREATED",
+          reasonNote: i.reasonNote || "Manual return item",
+        })),
+      });
+
+      return { success: true, message: `Manual return for ${orderNumber} created successfully!`, return: createdReturn };
+    } catch (err: any) {
+      console.error("Failed to create manual return:", err);
+      return { error: err.message || "Failed to create manual return." };
+    }
+  }
 
   const returnId = formData.get("returnId") as string;
   const newStatus = formData.get("status") as string;
@@ -59,9 +126,84 @@ export async function action({ request }: Route.ActionArgs) {
 
 // ===== COMPONENT =====
 export default function Returns() {
-  // Load real data from database
-  const { returns: dbReturns, riskFlags } = useLoaderData<typeof loader>();
+  const { returns: dbReturns, orders: dbOrders = [], riskFlags } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
+
+  // Manual Return Creation Modal State
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [selectedOrderId, setSelectedOrderId] = useState<string>("");
+  const [selectedItems, setSelectedItems] = useState<Record<string, { quantity: number; reason: string }>>({});
+  const [refundAmountInput, setRefundAmountInput] = useState<string>("0.00");
+  const [returnReasonInput, setReturnReasonInput] = useState<string>("DEFECTIVE");
+  const [adminNoteInput, setAdminNoteInput] = useState<string>("");
+  const [showConfirmStep, setShowConfirmStep] = useState<boolean>(false);
+
+  const selectedOrder = dbOrders.find((o: any) => o.shopifyOrderId === selectedOrderId);
+
+  const handleOrderChange = (orderId: string) => {
+    setSelectedOrderId(orderId);
+    setSelectedItems({});
+    setShowConfirmStep(false);
+    const ord = dbOrders.find((o: any) => o.shopifyOrderId === orderId);
+    if (ord) {
+      setRefundAmountInput(ord.totalPrice.toString());
+    }
+  };
+
+  const handleItemToggle = (item: any) => {
+    setSelectedItems((prev) => {
+      const next = { ...prev };
+      if (next[item.lineItemId]) {
+        delete next[item.lineItemId];
+      } else {
+        next[item.lineItemId] = { quantity: item.quantity, reason: returnReasonInput };
+      }
+      return next;
+    });
+  };
+
+  const handleItemQuantityChange = (lineItemId: string, qty: number) => {
+    setSelectedItems((prev) => ({
+      ...prev,
+      [lineItemId]: { ...prev[lineItemId], quantity: qty },
+    }));
+  };
+
+  const handleItemReasonChange = (lineItemId: string, reason: string) => {
+    setSelectedItems((prev) => ({
+      ...prev,
+      [lineItemId]: { ...prev[lineItemId], reason },
+    }));
+  };
+
+  const handleCreateManualReturnSubmit = () => {
+    if (!selectedOrder) return;
+    const itemsArray = Object.entries(selectedItems).map(([lineItemId, data]) => ({
+      lineItemId,
+      quantity: data.quantity,
+      reason: data.reason,
+    }));
+
+    fetcher.submit(
+      {
+        actionType: "CREATE_MANUAL_RETURN",
+        shopifyOrderId: selectedOrder.shopifyOrderId,
+        orderNumber: selectedOrder.orderNumber,
+        customerEmail: selectedOrder.customerEmail || "",
+        customerName: selectedOrder.customerName || "",
+        reason: returnReasonInput,
+        refundAmount: refundAmountInput,
+        adminNote: adminNoteInput,
+        items: JSON.stringify(itemsArray),
+      },
+      { method: "POST" }
+    );
+
+    setIsCreateModalOpen(false);
+    setSelectedOrderId("");
+    setSelectedItems({});
+    setShowConfirmStep(false);
+  };
 
   // Convert DB data to UI format
   const returnsList = dbReturns.map((ret: any) => ({
@@ -143,6 +285,16 @@ export default function Returns() {
 
   return (
     <s-page heading="Return Requests">
+      {/* Header Bar with Create Return Button */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+        <div>
+          <s-paragraph tone="neutral">Manage customer returns and directly create manual returns for store orders.</s-paragraph>
+        </div>
+        <s-button variant="primary" onClick={() => setIsCreateModalOpen(true)}>
+          + Create Return
+        </s-button>
+      </div>
+
       {/* Search & Filter Toolbar */}
       <div style={{ marginBottom: "16px" }}>
         <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
@@ -677,6 +829,239 @@ export default function Returns() {
             </div>
           </div>
         </>
+      )}
+
+      {/* MANUAL RETURN CREATION MODAL */}
+      {isCreateModalOpen && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            width: "100vw",
+            height: "100vh",
+            backgroundColor: "rgba(15, 23, 42, 0.6)",
+            backdropFilter: "blur(4px)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+          }}
+        >
+          <div
+            style={{
+              background: "#ffffff",
+              borderRadius: "16px",
+              padding: "24px",
+              maxWidth: "600px",
+              width: "90%",
+              maxHeight: "85vh",
+              overflowY: "auto",
+              boxShadow: "0 20px 25px -5px rgba(0,0,0,0.1)",
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+              <s-heading>Create Manual Return Request</s-heading>
+              <button
+                onClick={() => setIsCreateModalOpen(false)}
+                style={{ background: "none", border: "none", fontSize: "18px", cursor: "pointer", color: "#64748b" }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {!showConfirmStep ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                {/* 1. Select Store Order */}
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "6px" }}>
+                    Select Order *
+                  </label>
+                  <select
+                    value={selectedOrderId}
+                    onChange={(e) => handleOrderChange(e.target.value)}
+                    style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1" }}
+                  >
+                    <option value="">-- Choose an order --</option>
+                    {dbOrders.map((o: any) => (
+                      <option key={o.shopifyOrderId} value={o.shopifyOrderId}>
+                        {o.orderNumber} ({o.customerName || o.customerEmail || "Guest"}) - ${Number(o.totalPrice).toFixed(2)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {selectedOrder && (
+                  <>
+                    {/* 2. Pick Items to Return */}
+                    <div>
+                      <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "6px" }}>
+                        Select Items to Return *
+                      </label>
+                      <div style={{ border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px", background: "#f8fafc" }}>
+                        {(selectedOrder.lineItems as any[]).map((item: any) => {
+                          const isSelected = !!selectedItems[item.lineItemId];
+                          return (
+                            <div
+                              key={item.lineItemId}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "12px",
+                                padding: "8px 0",
+                                borderBottom: "1px solid #e2e8f0",
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => handleItemToggle(item)}
+                              />
+                              <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: "13.5px", fontWeight: 600 }}>{item.title}</div>
+                                <div style={{ fontSize: "12px", color: "#64748b" }}>
+                                  Qty: {item.quantity} | Price: ${Number(item.price).toFixed(2)}
+                                </div>
+                              </div>
+                              {isSelected && (
+                                <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    max={item.quantity}
+                                    value={selectedItems[item.lineItemId]?.quantity ?? 1}
+                                    onChange={(e) =>
+                                      handleItemQuantityChange(item.lineItemId, parseInt(e.target.value, 10) || 1)
+                                    }
+                                    style={{ width: "50px", padding: "4px 8px", fontSize: "12px" }}
+                                  />
+                                  <select
+                                    value={selectedItems[item.lineItemId]?.reason ?? "DEFECTIVE"}
+                                    onChange={(e) => handleItemReasonChange(item.lineItemId, e.target.value)}
+                                    style={{ padding: "4px 8px", fontSize: "12px" }}
+                                  >
+                                    <option value="DEFECTIVE">Defective</option>
+                                    <option value="SIZE_TOO_SMALL">Size Too Small</option>
+                                    <option value="SIZE_TOO_LARGE">Size Too Large</option>
+                                    <option value="WRONG_ITEM">Wrong Item Sent</option>
+                                    <option value="CHANGED_MIND">Buyer Remorse</option>
+                                  </select>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* 3. Refund Amount & Notes */}
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "6px" }}>
+                          Refund Amount ($)
+                        </label>
+                        <input
+                          type="text"
+                          value={refundAmountInput}
+                          onChange={(e) => setRefundAmountInput(e.target.value)}
+                          style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1" }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "6px" }}>
+                          Main Return Reason
+                        </label>
+                        <select
+                          value={returnReasonInput}
+                          onChange={(e) => setReturnReasonInput(e.target.value)}
+                          style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1" }}
+                        >
+                          <option value="DEFECTIVE">Defective Item</option>
+                          <option value="SIZE_TOO_SMALL">Size Too Small</option>
+                          <option value="SIZE_TOO_LARGE">Size Too Large</option>
+                          <option value="WRONG_ITEM">Wrong Item Sent</option>
+                          <option value="CHANGED_MIND">Buyer Remorse</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={{ display: "block", fontSize: "13px", fontWeight: 600, marginBottom: "6px" }}>
+                        Admin / Merchant Note
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Internal note for merchant record..."
+                        value={adminNoteInput}
+                        onChange={(e) => setAdminNoteInput(e.target.value)}
+                        style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid #cbd5e1" }}
+                      />
+                    </div>
+
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px", marginTop: "12px" }}>
+                      <button
+                        onClick={() => setIsCreateModalOpen(false)}
+                        style={{ padding: "8px 16px", borderRadius: "8px", border: "1px solid #cbd5e1", background: "#fff", cursor: "pointer" }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => setShowConfirmStep(true)}
+                        disabled={Object.keys(selectedItems).length === 0}
+                        style={{
+                          padding: "8px 16px",
+                          borderRadius: "8px",
+                          border: "none",
+                          background: Object.keys(selectedItems).length === 0 ? "#cbd5e1" : "#4f46e5",
+                          color: "#fff",
+                          fontWeight: 600,
+                          cursor: Object.keys(selectedItems).length === 0 ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        Review & Confirm →
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : (
+              /* Confirmation Prompt Step */
+              <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                <s-box padding="base" background="subdued">
+                  <h4 style={{ margin: "0 0 8px 0" }}>Confirm Manual Return Creation</h4>
+                  <p style={{ margin: 0, fontSize: "13.5px", color: "#475569" }}>
+                    Please confirm creating return request for <strong>{selectedOrder?.orderNumber}</strong> with{" "}
+                    <strong>{Object.keys(selectedItems).length} item(s)</strong> and a refund amount of{" "}
+                    <strong>${refundAmountInput}</strong>.
+                  </p>
+                </s-box>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px" }}>
+                  <button
+                    onClick={() => setShowConfirmStep(false)}
+                    style={{ padding: "8px 16px", borderRadius: "8px", border: "1px solid #cbd5e1", background: "#fff", cursor: "pointer" }}
+                  >
+                    ← Back to Edit
+                  </button>
+                  <button
+                    onClick={handleCreateManualReturnSubmit}
+                    style={{
+                      padding: "8px 16px",
+                      borderRadius: "8px",
+                      border: "none",
+                      background: "#10b981",
+                      color: "#fff",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Confirm & Save Return
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Basic Hover Row Styling */}

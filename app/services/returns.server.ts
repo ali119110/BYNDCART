@@ -9,6 +9,8 @@ export interface CreateReturnRequestInput {
   customerName?: string;
   reason?: string;
   customerNote?: string;
+  adminNote?: string;
+  refundAmount?: number;
   items: Array<{
     shopifyLineItemId: string;
     quantity: number;
@@ -29,6 +31,8 @@ export async function createReturnRequest(input: CreateReturnRequestInput) {
         customerName: input.customerName,
         reason: input.reason,
         customerNote: input.customerNote,
+        adminNote: input.adminNote,
+        refundAmount: input.refundAmount !== undefined ? input.refundAmount : null,
         status: "PENDING",
       },
     });
