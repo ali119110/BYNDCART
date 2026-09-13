@@ -44,7 +44,18 @@ export async function requireTenantContext(request: Request): Promise<TenantCont
   }
 
   // Resolve matching tenant store and merchant configuration
-  const store = await getStoreByShop(session.shop);
+  let store = await getStoreByShop(session.shop);
+  if (!store) {
+    // On-the-fly Auto-Provisioning: create tenant record for newly installed/authenticated stores
+    try {
+      const { registerStore } = await import("./store.server");
+      await registerStore({ shop: session.shop, accessToken: session.accessToken || "" });
+      store = await getStoreByShop(session.shop);
+    } catch (err) {
+      console.error(`[requireTenantContext] Error during store auto-provisioning for ${session.shop}:`, err);
+    }
+  }
+
   if (!store) {
     throw new Response(
       JSON.stringify({

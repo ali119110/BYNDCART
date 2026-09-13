@@ -9,34 +9,40 @@ export interface RegisterStoreInput {
 
 export async function registerStore({ shop, accessToken }: RegisterStoreInput) {
   try {
-    // 1. Fetch store info from Shopify GraphQL Admin API
-    const response = await fetch(`https://${shop}/admin/api/${apiVersion}/graphql.json`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": accessToken,
-      },
-      body: JSON.stringify({
-        query: `
-          query {
-            shop {
-              name
-              email
-              contactEmail
-            }
-          }
-        `,
-      }),
-    });
+    let name = shop.split(".")[0];
+    let email = "";
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch shop details: ${response.statusText}`);
+    try {
+      if (accessToken) {
+        const response = await fetch(`https://${shop}/admin/api/${apiVersion}/graphql.json`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Shopify-Access-Token": accessToken,
+          },
+          body: JSON.stringify({
+            query: `
+              query {
+                shop {
+                  name
+                  email
+                  contactEmail
+                }
+              }
+            `,
+          }),
+        });
+
+        if (response.ok) {
+          const { data } = await response.json();
+          const shopData = data?.shop;
+          if (shopData?.name) name = shopData.name;
+          if (shopData?.contactEmail || shopData?.email) email = shopData.contactEmail || shopData.email;
+        }
+      }
+    } catch (err) {
+      console.warn(`[registerStore] Could not fetch GraphQL details for ${shop}, using default shop name fallback:`, err);
     }
-
-    const { data } = await response.json();
-    const shopData = data?.shop;
-    const name = shopData?.name || shop.split(".")[0];
-    const email = shopData?.contactEmail || shopData?.email || "";
 
     // 2. Perform logical multi-tenant database registration
     const store = await prisma.$transaction(async (tx) => {

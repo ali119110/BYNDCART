@@ -14,16 +14,21 @@ const shopify = shopifyApp({
   scopes: process.env.SCOPES?.split(","),
   appUrl: process.env.SHOPIFY_APP_URL || "",
   authPathPrefix: "/auth",
-  sessionStorage: (process.env.NODE_ENV === "test" || process.env.SKIP_AUTH === "true")
-    ? {
-        storeSession: async () => true,
-        loadSession: async () => undefined,
-        deleteSession: async () => true,
-        deleteSessions: async () => true,
-        findSessionsByShop: async () => [],
-      } as any
-    : new PrismaSessionStorage(prisma),
-  distribution: AppDistribution.AppStore,
+  sessionStorage:
+    process.env.NODE_ENV === "test" || process.env.SKIP_AUTH === "true"
+      ? ({
+          storeSession: async () => true,
+          loadSession: async () => undefined,
+          deleteSession: async () => true,
+          deleteSessions: async () => true,
+          findSessionsByShop: async () => [],
+        } as any)
+      : new PrismaSessionStorage(prisma),
+  distribution:
+    process.env.SHOPIFY_APP_DISTRIBUTION === "SingleMerchant" ||
+    process.env.SHOPIFY_APP_DISTRIBUTION === "Custom"
+      ? AppDistribution.SingleMerchant
+      : AppDistribution.AppStore,
   future: {
     expiringOfflineAccessTokens: true,
   },
