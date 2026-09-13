@@ -1,7 +1,8 @@
 import prisma from "../db.server";
 import { enqueueJob } from "./jobs.server";
-import { upsertOrderFromWebhook } from "./orders.server";
-import { upsertVariantsFromWebhook } from "./products.server";
+import { upsertOrderFromWebhook, cancelOrderFromWebhook } from "./orders.server";
+import { upsertVariantsFromWebhook, deleteProductFromWebhook } from "./products.server";
+import { upsertCustomerFromWebhook, deleteCustomerFromWebhook } from "./customers.server";
 import { handleCustomerDataRequest, handleCustomerRedact, handleShopRedact } from "./compliance.server";
 import { handleSubscriptionWebhook } from "./billing.server";
 
@@ -112,9 +113,26 @@ async function routeAndProcessWebhook(
       await upsertOrderFromWebhook(shopifyStoreId, payload);
       return true;
 
+    case "orders/cancelled":
+      await cancelOrderFromWebhook(shopifyStoreId, payload);
+      return true;
+
     case "products/create":
     case "products/update":
       await upsertVariantsFromWebhook(shopifyStoreId, payload);
+      return true;
+
+    case "products/delete":
+      await deleteProductFromWebhook(shopifyStoreId, payload);
+      return true;
+
+    case "customers/create":
+    case "customers/update":
+      await upsertCustomerFromWebhook(shopifyStoreId, payload);
+      return true;
+
+    case "customers/delete":
+      await deleteCustomerFromWebhook(shopifyStoreId, payload);
       return true;
 
     case "customers/data_request":

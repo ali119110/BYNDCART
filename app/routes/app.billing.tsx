@@ -1,19 +1,13 @@
 import React from "react";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { useLoaderData, useFetcher } from "react-router";
-import { authenticate } from "../shopify.server";
-import { getStoreByShop } from "../services/store.server";
+import { requireTenantContext } from "../services/tenant.server";
 import { getStorePlan, createAppSubscription, cancelAppSubscription } from "../services/billing.server";
 import { PLAN_CONFIGS } from "../services/planGate.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
-  const store = await getStoreByShop(session.shop);
-  if (!store) {
-    throw new Response("Store not found", { status: 404 });
-  }
-
-  const storePlan = await getStorePlan(store.id);
+  const { shopifyStoreId } = await requireTenantContext(request);
+  const storePlan = await getStorePlan(shopifyStoreId);
 
   return {
     storePlan,
@@ -22,11 +16,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session, admin } = await authenticate.admin(request);
-  const store = await getStoreByShop(session.shop);
-  if (!store) {
-    return { success: false, error: "Store not found" };
-  }
+  const { shopifyStoreId, admin } = await requireTenantContext(request);
 
   const formData = await request.formData();
   const actionType = formData.get("actionType") as string;
@@ -36,7 +26,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const origin = new URL(request.url).origin;
     const returnUrl = `${origin}/app/billing`;
     try {
-      const result = await createAppSubscription(store.id, planCode, returnUrl, admin);
+      const result = await createAppSubscription(shopifyStoreId, planCode, returnUrl, admin);
       if (result.confirmationUrl && result.status === "PENDING") {
         return { success: true, redirectUrl: result.confirmationUrl };
       }
@@ -48,7 +38,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (actionType === "cancel") {
     try {
-      const result = await cancelAppSubscription(store.id, admin);
+      const result = await cancelAppSubscription(shopifyStoreId, admin);
       return { success: true, message: result.message };
     } catch (err: any) {
       return { success: false, error: err.message };
@@ -59,8 +49,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Billing() {
-  const { storePlan, plans } = useLoaderData<typeof loader>();
+  const { storePlan: rawStorePlan, plans } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
+
+  const storePlan = rawStorePlan ?? {
+    shopifyStoreId: "",
+    name: "Free Plan",
+    planCode: "FREE",
+    price: 0,
+    currency: "USD",
+    status: "ACTIVE",
+    usageCount: 0,
+    returnsLimit: 15,
+    isUnlimited: false,
+  };
 
   const isSubmitting = fetcher.state !== "idle";
   const actionData = fetcher.data as { success?: boolean; error?: string; message?: string; redirectUrl?: string } | undefined;
@@ -73,7 +75,7 @@ export default function Billing() {
 
   const usagePercent = storePlan.isUnlimited
     ? 0
-    : Math.min(100, Math.round((storePlan.usageCount / Math.max(1, storePlan.returnsLimit)) * 100));
+    : Math.min(100, Math.round(((storePlan.usageCount ?? 0) / Math.max(1, storePlan.returnsLimit ?? 15)) * 100));
 
   return (
     <s-page heading="BYNDCART Billing & Subscription Plans">
@@ -96,9 +98,9 @@ export default function Billing() {
           <s-stack direction="block" gap="base">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div>
-                <s-heading>Current Subscription: {storePlan.name}</s-heading>
+                <s-heading>Current Subscription: {storePlan.name ?? "Free Plan"}</s-heading>
                 <p style={{ margin: "4px 0 0 0", color: "#475569" }}>
-                  Status: <strong style={{ color: storePlan.status === "ACTIVE" ? "#008000" : "#d97706" }}>{storePlan.status}</strong> — ${storePlan.price.toFixed(2)} / month
+                  Status: <strong style={{ color: storePlan.status === "ACTIVE" ? "#008000" : "#d97706" }}>{storePlan.status ?? "ACTIVE"}</strong> — ${(storePlan.price ?? 0).toFixed(2)} / month
                 </p>
               </div>
 

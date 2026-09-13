@@ -82,7 +82,16 @@ function mapGraphqlOrder(node: any): MappedOrder {
   };
 }
 
-async function upsertOrder(shopifyStoreId: string, mapped: MappedOrder) {
+async function upsertOrder(shopifyStoreId: string, mapped: MappedOrder, payloadUpdatedAt?: Date) {
+  const existing = await prisma.order.findUnique({
+    where: { shopifyOrderId: mapped.shopifyOrderId },
+  });
+
+  if (existing && payloadUpdatedAt && existing.updatedAt > payloadUpdatedAt) {
+    console.log(`[Orders Service] Out-of-order webhook detected for ${mapped.shopifyOrderId}. Skipping stale update.`);
+    return existing;
+  }
+
   return await prisma.order.upsert({
     where: { shopifyOrderId: mapped.shopifyOrderId },
     update: {
@@ -117,7 +126,16 @@ async function upsertOrder(shopifyStoreId: string, mapped: MappedOrder) {
  */
 export async function upsertOrderFromWebhook(shopifyStoreId: string, payload: any) {
   const mapped = mapWebhookOrder(payload);
-  return await upsertOrder(shopifyStoreId, mapped);
+  const updatedAt = payload.updated_at ? new Date(payload.updated_at) : undefined;
+  return await upsertOrder(shopifyStoreId, mapped, updatedAt);
+}
+
+export async function cancelOrderFromWebhook(shopifyStoreId: string, payload: any) {
+  const mapped = mapWebhookOrder(payload);
+  mapped.fulfillmentStatus = "CANCELLED";
+  mapped.financialStatus = payload.financial_status ?? "voided";
+  const updatedAt = payload.updated_at ? new Date(payload.updated_at) : undefined;
+  return await upsertOrder(shopifyStoreId, mapped, updatedAt);
 }
 
 /**

@@ -478,3 +478,174 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
     idempotent: false,
   };
 }
+
+/**
+ * 5. Executes initial full synchronization for a shop (Orders, Products, Customers).
+ */
+export async function executeInitialShopifySync({ shopifyStoreId, admin: providedAdmin }: { shopifyStoreId: string; admin?: any }) {
+  await prisma.shopifyStore.update({
+    where: { id: shopifyStoreId },
+    data: { syncStatus: "SYNCING", lastSyncError: null },
+  });
+
+  try {
+    const admin = await getShopifyAdminClient(shopifyStoreId, providedAdmin);
+
+    const { syncShopifyOrders } = await import("./orders.server");
+    const { syncShopifyProducts } = await import("./products.server");
+    const { syncShopifyCustomers } = await import("./customers.server");
+
+    const ordersResult = await syncShopifyOrders({ shopifyStoreId, admin });
+    const productsResult = await syncShopifyProducts(shopifyStoreId, admin);
+    const customersResult = await syncShopifyCustomers(shopifyStoreId, admin);
+
+    const totalSynced = (ordersResult.synchronizedCount || 0) + (productsResult.synchronizedCount || 0) + (customersResult.count || 0);
+
+    const now = new Date();
+    await prisma.shopifyStore.update({
+      where: { id: shopifyStoreId },
+      data: {
+        syncStatus: "COMPLETED",
+        lastSyncAt: now,
+        lastSyncError: null,
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        shopifyStoreId,
+        action: "SHOPIFY_INITIAL_SYNC_COMPLETED",
+        entityType: "ShopifyStore",
+        entityId: shopifyStoreId,
+        metadata: { totalSynced, orders: ordersResult.synchronizedCount, products: productsResult.synchronizedCount, customers: customersResult.count },
+      },
+    });
+
+    return { success: true, totalSynced };
+  } catch (error: any) {
+    const errorMsg = error?.message || String(error);
+    console.error(`[ShopifySync] Initial sync failed for store ${shopifyStoreId}:`, error);
+
+    await prisma.shopifyStore.update({
+      where: { id: shopifyStoreId },
+      data: {
+        syncStatus: "FAILED",
+        lastSyncError: errorMsg,
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        shopifyStoreId,
+        action: "SHOPIFY_INITIAL_SYNC_FAILED",
+        entityType: "ShopifyStore",
+        entityId: shopifyStoreId,
+        metadata: { error: errorMsg },
+      },
+    });
+
+    throw error;
+  }
+}
+
+/**
+ * 6. Automatically registers shop-specific webhooks.
+ */
+export async function executeWebhookRegistration({ shopifyStoreId, admin: providedAdmin }: { shopifyStoreId: string; admin?: any }) {
+  try {
+    const store = await prisma.shopifyStore.findUnique({ where: { id: shopifyStoreId } });
+    if (!store) throw new Error(`Store ${shopifyStoreId} not found`);
+
+    const admin = await getShopifyAdminClient(shopifyStoreId, providedAdmin);
+
+    if (admin) {
+      const webhookTopics = [
+        "ORDERS_CREATE",
+        "ORDERS_UPDATED",
+        "ORDERS_CANCELLED",
+        "PRODUCTS_CREATE",
+        "PRODUCTS_UPDATE",
+        "PRODUCTS_DELETE",
+        "CUSTOMERS_CREATE",
+        "CUSTOMERS_UPDATE",
+        "CUSTOMERS_DELETE",
+        "INVENTORY_LEVELS_UPDATE",
+        "REFUNDS_CREATE",
+      ];
+
+      const callbackUrl = `${process.env.SHOPIFY_APP_URL || "https://byndcart-mock.app"}/webhooks`;
+
+      for (const topic of webhookTopics) {
+        try {
+          await admin.graphql(
+            `#graphql
+            mutation webhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) {
+              webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) {
+                userErrors { field message }
+                webhookSubscription { id }
+              }
+            }`,
+            {
+              variables: {
+                topic,
+                webhookSubscription: {
+                  callbackUrl,
+                  format: "JSON",
+                },
+              },
+            }
+          );
+        } catch (e) {
+          // Ignore individual topic registration warnings
+        }
+      }
+    }
+
+    await prisma.shopifyStore.update({
+      where: { id: shopifyStoreId },
+      data: { webhookStatus: "REGISTERED" },
+    });
+
+    return { success: true };
+  } catch (error: any) {
+    const errorMsg = error?.message || String(error);
+    console.error(`[WebhookRegistration] Webhook registration failed for store ${shopifyStoreId}:`, error);
+
+    await prisma.shopifyStore.update({
+      where: { id: shopifyStoreId },
+      data: { webhookStatus: "FAILED", lastSyncError: `Webhook reg failed: ${errorMsg}` },
+    });
+
+    throw error;
+  }
+}
+
+/**
+ * 7. Executes periodic reconciliation pass.
+ */
+export async function executeShopifyReconciliation({ shopifyStoreId, admin: providedAdmin }: { shopifyStoreId: string; admin?: any }) {
+  try {
+    const admin = await getShopifyAdminClient(shopifyStoreId, providedAdmin);
+
+    const { syncShopifyOrders } = await import("./orders.server");
+    const { syncShopifyProducts } = await import("./products.server");
+    const { syncShopifyCustomers } = await import("./customers.server");
+
+    await syncShopifyOrders({ shopifyStoreId, admin });
+    await syncShopifyProducts(shopifyStoreId, admin);
+    await syncShopifyCustomers(shopifyStoreId, admin);
+
+    const now = new Date();
+    await prisma.shopifyStore.update({
+      where: { id: shopifyStoreId },
+      data: {
+        lastReconciledAt: now,
+      },
+    });
+
+    return { success: true, reconciledAt: now };
+  } catch (error: any) {
+    console.error(`[Reconciliation] Failed for store ${shopifyStoreId}:`, error);
+    throw error;
+  }
+}

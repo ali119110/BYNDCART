@@ -97,7 +97,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Couriers() {
-  const { availableAdapters, configuredStoreCouriers } = useLoaderData<typeof loader>();
+  const loaderData = useLoaderData<typeof loader>();
+  const availableAdapters = loaderData?.availableAdapters ?? [];
+  const configuredStoreCouriers = loaderData?.configuredStoreCouriers ?? [];
   const fetcher = useFetcher<any>();
 
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
@@ -108,7 +110,7 @@ export default function Couriers() {
   const actionData = fetcher.data;
 
   // Build config lookup map
-  const configMap = new Map(configuredStoreCouriers.map((c) => [c.providerName, c]));
+  const configMap = new Map((configuredStoreCouriers || []).map((c) => [c.providerName, c]));
 
   const handleEditClick = (adapter: any) => {
     setSelectedProvider(adapter.providerName);

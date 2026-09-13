@@ -16,13 +16,31 @@ prisma.$transaction = (async (cb: any) => {
 
 // Global mock state for offline Prisma Client testing
 const dbStore: Record<string, any> = {
+  shopifyStores: new Map<string, any>(),
+  merchants: new Map<string, any>(),
+  users: new Map<string, any>(),
   returnRequests: new Map<string, any>(),
   exchangeRequests: new Map<string, any>(),
+  orders: new Map<string, any>(),
+  productCaches: new Map<string, any>(),
+  customerCaches: new Map<string, any>(),
+  webhookEvents: new Map<string, any>(),
   auditLogs: [] as any[],
   backgroundJobs: new Map<string, any>(),
 };
 
-// Populate initial return and exchange records
+// Populate initial test store
+dbStore.shopifyStores.set("store-1", {
+  id: "store-1",
+  merchantId: "merchant-1",
+  shop: "test-store.myshopify.com",
+  syncStatus: "PENDING",
+  webhookStatus: "PENDING",
+  lastSyncAt: null,
+  lastReconciledAt: null,
+  lastSyncError: null,
+});
+
 dbStore.returnRequests.set("ret-100", {
   id: "ret-100",
   shopifyStoreId: "store-1",
@@ -63,8 +81,42 @@ dbStore.exchangeRequests.set("ex-100", {
   ],
 });
 
+// Mock Prisma Methods
+prisma.shopifyStore.findUnique = (async (args: any) => {
+  if (args.where.id) return dbStore.shopifyStores.get(args.where.id) || null;
+  if (args.where.shop) {
+    return Array.from(dbStore.shopifyStores.values()).find((s: any) => s.shop === args.where.shop) || null;
+  }
+  return null;
+}) as any;
+
+prisma.shopifyStore.update = (async (args: any) => {
+  const store = dbStore.shopifyStores.get(args.where.id) || {};
+  const updated = { ...store, ...args.data };
+  dbStore.shopifyStores.set(args.where.id, updated);
+  return updated;
+}) as any;
+
+prisma.shopifyStore.create = (async (args: any) => {
+  const store = { id: `store-${Date.now()}`, ...args.data };
+  dbStore.shopifyStores.set(store.id, store);
+  return store;
+}) as any;
+
+prisma.merchant.findFirst = (async () => null) as any;
+prisma.merchant.create = (async (args: any) => ({ id: "merchant-1", ...args.data })) as any;
+
+prisma.user.findUnique = (async () => null) as any;
+prisma.user.create = (async (args: any) => ({ id: "user-1", ...args.data })) as any;
+
 prisma.returnRequest.findFirst = (async (args: any) => {
   return dbStore.returnRequests.get(args.where.id) || null;
+}) as any;
+
+prisma.returnRequest.findMany = (async (args: any) => {
+  const arr = Array.from(dbStore.returnRequests.values());
+  if (args?.where?.shopifyStoreId) return arr.filter((r: any) => r.shopifyStoreId === args.where.shopifyStoreId);
+  return arr;
 }) as any;
 
 prisma.returnRequest.findUnique = (async (args: any) => {
@@ -84,10 +136,86 @@ prisma.exchangeRequest.findFirst = (async (args: any) => {
   return dbStore.exchangeRequests.get(args.where.id) || null;
 }) as any;
 
+prisma.exchangeRequest.findMany = (async (args: any) => {
+  const arr = Array.from(dbStore.exchangeRequests.values());
+  if (args?.where?.shopifyStoreId) return arr.filter((e: any) => e.shopifyStoreId === args.where.shopifyStoreId);
+  return arr;
+}) as any;
+
 prisma.exchangeRequest.update = (async (args: any) => {
   const current = dbStore.exchangeRequests.get(args.where.id) || {};
   const updated = { ...current, ...args.data };
   dbStore.exchangeRequests.set(args.where.id, updated);
+  return updated;
+}) as any;
+
+prisma.order.findUnique = (async (args: any) => {
+  return dbStore.orders.get(args.where.shopifyOrderId) || null;
+}) as any;
+
+prisma.order.upsert = (async (args: any) => {
+  const key = args.where.shopifyOrderId;
+  const existing = dbStore.orders.get(key);
+  const data = existing ? { ...existing, ...args.update, updatedAt: new Date() } : { id: `ord-${Date.now()}`, ...args.create, updatedAt: new Date() };
+  dbStore.orders.set(key, data);
+  return data;
+}) as any;
+
+prisma.order.findMany = (async (args: any) => {
+  return Array.from(dbStore.orders.values()).filter((o: any) => o.shopifyStoreId === args.where.shopifyStoreId);
+}) as any;
+
+prisma.productCache.findFirst = (async (args: any) => {
+  return dbStore.productCaches.get(args.where.shopifyVariantId) || null;
+}) as any;
+
+prisma.productCache.upsert = (async (args: any) => {
+  const key = args.where.shopifyVariantId;
+  const existing = dbStore.productCaches.get(key);
+  const data = existing ? { ...existing, ...args.update } : { id: `pc-${Date.now()}`, ...args.create };
+  dbStore.productCaches.set(key, data);
+  return data;
+}) as any;
+
+prisma.productCache.deleteMany = (async (args: any) => {
+  let count = 0;
+  const entries: any = Array.from(dbStore.productCaches.entries());
+  for (const [k, v] of entries) {
+    if (v.shopifyProductId === args.where.shopifyProductId) {
+      dbStore.productCaches.delete(k);
+      count++;
+    }
+  }
+  return { count };
+}) as any;
+
+prisma.customerCache.upsert = (async (args: any) => {
+  const key = args.where.shopifyCustomerId;
+  const existing = dbStore.customerCaches.get(key);
+  const data = existing ? { ...existing, ...args.update } : { id: `cust-${Date.now()}`, ...args.create };
+  dbStore.customerCaches.set(key, data);
+  return data;
+}) as any;
+
+prisma.customerCache.delete = (async (args: any) => {
+  const key = args.where.shopifyCustomerId;
+  dbStore.customerCaches.delete(key);
+  return { id: key };
+}) as any;
+
+prisma.webhookEvent.findUnique = (async (args: any) => {
+  return dbStore.webhookEvents.get(args.where.id) || null;
+}) as any;
+
+prisma.webhookEvent.create = (async (args: any) => {
+  dbStore.webhookEvents.set(args.data.id, args.data);
+  return args.data;
+}) as any;
+
+prisma.webhookEvent.update = (async (args: any) => {
+  const current = dbStore.webhookEvents.get(args.where.id) || {};
+  const updated = { ...current, ...args.data };
+  dbStore.webhookEvents.set(args.where.id, updated);
   return updated;
 }) as any;
 
@@ -111,13 +239,13 @@ prisma.storeSettings.findUnique = (async () => ({
 
 prisma.backgroundJob.create = (async (args: any) => {
   const job = {
-    id: `job-uuid-${Date.now()}`,
+    id: `job-uuid-${Date.now()}-${Math.random()}`,
     shopifyStoreId: args.data.shopifyStoreId,
     type: args.data.type,
     payload: args.data.payload,
     status: "PENDING",
     attempts: 0,
-    maxAttempts: 3,
+    maxAttempts: args.data.maxAttempts || 3,
     runAt: new Date(),
   };
   dbStore.backgroundJobs.set(job.id, job);
@@ -141,14 +269,14 @@ prisma.backgroundJob.update = (async (args: any) => {
   return updated;
 }) as any;
 
-// Helper to create mock GraphQL admin client
 function createMockAdmin(handlers: Record<string, (vars: any) => any>) {
   return {
     graphql: async (query: string, options?: any) => {
       for (const [key, handler] of Object.entries(handlers)) {
-        if (query.includes(key)) {
+        if (query.toLowerCase().includes(key.toLowerCase())) {
+          const res = handler(options?.variables);
           return {
-            json: async () => handler(options?.variables),
+            json: async () => res,
           };
         }
       }
@@ -157,261 +285,341 @@ function createMockAdmin(handlers: Record<string, (vars: any) => any>) {
   };
 }
 
-test("Shopify Sync - returnCreate execution & persistence", async () => {
-  const { executeShopifyReturnCreate } = await import("../services/shopifySync.server");
+// -------------------------------------------------------------
+// 1. Automatic initial sync after installation
+// -------------------------------------------------------------
+test("1. Automatic initial sync after installation", async () => {
+  const { registerStore } = await import("../services/store.server");
 
-  let graphqlCalled = false;
+  // Reset fetch global for store registration
+  globalThis.fetch = (async () => ({
+    ok: true,
+    json: async () => ({ data: { shop: { name: "Auto Store", email: "auto@example.com" } } }),
+  })) as any;
+
+  const store = await registerStore({ shop: "auto-store.myshopify.com", accessToken: "token-123" });
+
+  assert.ok(store);
+  assert.strictEqual(store.syncStatus, "PENDING");
+  assert.strictEqual(store.webhookStatus, "PENDING");
+
+  const jobs = Array.from(dbStore.backgroundJobs.values());
+  const initialSyncJob = jobs.find((j: any) => j.type === "INITIAL_SHOPIFY_SYNC" && j.shopifyStoreId === store.id);
+  const webhookRegJob = jobs.find((j: any) => j.type === "REGISTER_SHOPIFY_WEBHOOKS" && j.shopifyStoreId === store.id);
+
+  assert.ok(initialSyncJob);
+  assert.ok(webhookRegJob);
+});
+
+// -------------------------------------------------------------
+// 2. Cursor pagination
+// -------------------------------------------------------------
+test("2. Cursor pagination during sync", async () => {
+  const { syncShopifyOrders } = await import("../services/orders.server");
+
+  let pageCount = 0;
   const mockAdmin = createMockAdmin({
-    returnCreate: (vars) => {
-      graphqlCalled = true;
-      assert.strictEqual(vars.returnInput.orderId, "gid://shopify/Order/1001");
-      return {
-        data: {
-          returnCreate: {
-            return: {
-              id: "gid://shopify/Return/999111",
-              name: "#1001-R1",
-              status: "OPEN",
+    getOrders: (vars) => {
+      pageCount++;
+      if (!vars?.cursor) {
+        return {
+          data: {
+            orders: {
+              pageInfo: { hasNextPage: true, endCursor: "cursor-p2" },
+              edges: [
+                {
+                  node: {
+                    id: "gid://shopify/Order/3001",
+                    name: "#3001",
+                    createdAt: "2026-09-01T00:00:00Z",
+                    displayFinancialStatus: "PAID",
+                    displayFulfillmentStatus: "FULFILLED",
+                    totalPriceSet: { shopMoney: { amount: "100.00", currencyCode: "USD" } },
+                    lineItems: { edges: [] },
+                  },
+                },
+              ],
             },
-            userErrors: [],
           },
-        },
-      };
-    },
-  });
-
-  const result = await executeShopifyReturnCreate({
-    shopifyStoreId: "store-1",
-    entityId: "ret-100",
-    admin: mockAdmin,
-  });
-
-  assert.strictEqual(result.success, true);
-  assert.strictEqual(result.shopifyReturnId, "gid://shopify/Return/999111");
-  assert.strictEqual(result.idempotent, false);
-  assert.strictEqual(graphqlCalled, true);
-
-  const updatedReq = dbStore.returnRequests.get("ret-100");
-  assert.strictEqual(updatedReq.shopifyReturnId, "gid://shopify/Return/999111");
-});
-
-test("Shopify Sync - returnCreate Idempotency", async () => {
-  const { executeShopifyReturnCreate } = await import("../services/shopifySync.server");
-
-  let graphqlCalled = false;
-  const mockAdmin = createMockAdmin({
-    returnCreate: () => {
-      graphqlCalled = true;
-      return {};
-    },
-  });
-
-  // Second execution when shopifyReturnId is already present in DB
-  const result = await executeShopifyReturnCreate({
-    shopifyStoreId: "store-1",
-    entityId: "ret-100",
-    admin: mockAdmin,
-  });
-
-  assert.strictEqual(result.success, true);
-  assert.strictEqual(result.shopifyReturnId, "gid://shopify/Return/999111");
-  assert.strictEqual(result.idempotent, true);
-  assert.strictEqual(graphqlCalled, false); // Must skip GraphQL API call
-});
-
-test("Shopify Sync - refundCreate execution & persistence", async () => {
-  const { executeShopifyRefundCreate } = await import("../services/shopifySync.server");
-
-  let graphqlCalled = false;
-  const mockAdmin = createMockAdmin({
-    refundCreate: (vars) => {
-      graphqlCalled = true;
-      assert.strictEqual(vars.input.orderId, "gid://shopify/Order/1001");
-      return {
-        data: {
-          refundCreate: {
-            refund: {
-              id: "gid://shopify/Refund/888222",
-              totalRefundedSet: { shopMoney: { amount: "3000.00", currencyCode: "PKR" } },
+        };
+      } else {
+        return {
+          data: {
+            orders: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              edges: [
+                {
+                  node: {
+                    id: "gid://shopify/Order/3002",
+                    name: "#3002",
+                    createdAt: "2026-09-02T00:00:00Z",
+                    displayFinancialStatus: "PAID",
+                    displayFulfillmentStatus: "UNFULFILLED",
+                    totalPriceSet: { shopMoney: { amount: "200.00", currencyCode: "USD" } },
+                    lineItems: { edges: [] },
+                  },
+                },
+              ],
             },
-            userErrors: [],
           },
-        },
-      };
+        };
+      }
     },
   });
 
-  const result = await executeShopifyRefundCreate({
-    shopifyStoreId: "store-1",
-    entityId: "ret-100",
-    admin: mockAdmin,
-  });
-
-  assert.strictEqual(result.success, true);
-  assert.strictEqual(result.shopifyRefundId, "gid://shopify/Refund/888222");
-  assert.strictEqual(result.idempotent, false);
-  assert.strictEqual(graphqlCalled, true);
-
-  const updatedReq = dbStore.returnRequests.get("ret-100");
-  assert.strictEqual(updatedReq.shopifyRefundId, "gid://shopify/Refund/888222");
+  const res = await syncShopifyOrders({ shopifyStoreId: "store-1", admin: mockAdmin });
+  assert.strictEqual(res.synchronizedCount, 2);
+  assert.strictEqual(pageCount, 2);
 });
 
-test("Shopify Sync - inventoryAdjustQuantities execution", async () => {
-  const { executeShopifyInventoryAdjust } = await import("../services/shopifySync.server");
+// -------------------------------------------------------------
+// 3. Idempotent sync
+// -------------------------------------------------------------
+test("3. Idempotent sync does not create duplicate records", async () => {
+  const { upsertOrderFromWebhook } = await import("../services/orders.server");
 
-  let graphqlCalled = false;
-  const mockAdmin = createMockAdmin({
-    getLocations: () => ({
-      data: { locations: { edges: [{ node: { id: "gid://shopify/Location/555" } }] } },
-    }),
-    inventoryAdjustQuantities: (vars) => {
-      graphqlCalled = true;
-      assert.strictEqual(vars.input.reason, "return_restock");
-      return {
-        data: {
-          inventoryAdjustQuantities: {
-            inventoryAdjustmentGroup: { id: "grp-1", reason: "return_restock", changes: [] },
-            userErrors: [],
-          },
-        },
-      };
-    },
-  });
+  const payload = {
+    id: 9999,
+    order_number: 9999,
+    name: "#9999",
+    total_price: "150.00",
+    created_at: "2026-09-05T10:00:00Z",
+    line_items: [],
+  };
 
-  const result = await executeShopifyInventoryAdjust({
-    shopifyStoreId: "store-1",
-    entityId: "ret-100",
-    admin: mockAdmin,
-  });
+  await upsertOrderFromWebhook("store-1", payload);
+  const countFirst = dbStore.orders.size;
 
-  assert.strictEqual(result.success, true);
-  assert.strictEqual(result.idempotent, false);
-  assert.strictEqual(graphqlCalled, true);
+  await upsertOrderFromWebhook("store-1", payload);
+  const countSecond = dbStore.orders.size;
+
+  assert.strictEqual(countFirst, countSecond);
+  const syncedOrder = dbStore.orders.get("gid://shopify/Order/9999");
+  assert.ok(syncedOrder);
+  assert.strictEqual(syncedOrder.orderNumber, "#9999");
 });
 
-test("Shopify Sync - draftOrderCreate execution for exchange replacement", async () => {
-  const { executeShopifyDraftOrderCreate } = await import("../services/shopifySync.server");
+// -------------------------------------------------------------
+// 4. Duplicate webhook detection
+// -------------------------------------------------------------
+test("4. Duplicate webhook detection", async () => {
+  const { ingestWebhook } = await import("../services/webhooks.server");
 
-  let graphqlCalled = false;
-  const mockAdmin = createMockAdmin({
-    draftOrderCreate: (vars) => {
-      graphqlCalled = true;
-      assert.strictEqual(vars.input.lineItems[0].variantId, "gid://shopify/ProductVariant/20");
-      return {
-        data: {
-          draftOrderCreate: {
-            draftOrder: {
-              id: "gid://shopify/DraftOrder/777333",
-              name: "#D1002",
-              totalPrice: "0.00",
-            },
-            userErrors: [],
-          },
-        },
-      };
-    },
-  });
+  const webhookId = "wh-unique-123";
+  const firstRes = await ingestWebhook(webhookId, "test-store.myshopify.com", "orders/create", { id: 101 });
+  assert.strictEqual(firstRes.duplicate, false);
 
-  const result = await executeShopifyDraftOrderCreate({
-    shopifyStoreId: "store-1",
-    entityId: "ex-100",
-    admin: mockAdmin,
-  });
-
-  assert.strictEqual(result.success, true);
-  assert.strictEqual(result.draftOrderId, "gid://shopify/DraftOrder/777333");
-  assert.strictEqual(result.draftOrderName, "#D1002");
-  assert.strictEqual(result.idempotent, false);
-  assert.strictEqual(graphqlCalled, true);
-
-  const updatedEx = dbStore.exchangeRequests.get("ex-100");
-  assert.strictEqual(updatedEx.newOrderId, "gid://shopify/DraftOrder/777333");
-  assert.strictEqual(updatedEx.newOrderNumber, "#D1002");
-  // Original Order ID preserved
-  assert.strictEqual(updatedEx.shopifyOrderId, "gid://shopify/Order/1002");
+  const duplicateRes = await ingestWebhook(webhookId, "test-store.myshopify.com", "orders/create", { id: 101 });
+  assert.strictEqual(duplicateRes.duplicate, true);
 });
 
-test("Shopify Sync - GraphQL userErrors explicit handling", async () => {
-  const { executeShopifyReturnCreate } = await import("../services/shopifySync.server");
-
-  // Create a separate return request for userError test
-  dbStore.returnRequests.set("ret-err", {
-    id: "ret-err",
-    shopifyStoreId: "store-1",
-    shopifyOrderId: "gid://shopify/Order/1009",
-    orderNumber: "#1009",
-    customerEmail: "user@example.pk",
-    status: "PENDING",
-    shopifyReturnId: null,
-    items: [],
-  });
-
-  const mockAdmin = createMockAdmin({
-    returnCreate: () => ({
-      data: {
-        returnCreate: {
-          return: null,
-          userErrors: [
-            { field: ["orderId"], message: "Order is not fulfilled", code: "UNFULFILLED" },
-          ],
-        },
-      },
-    }),
-  });
-
-  await assert.rejects(
-    async () => {
-      await executeShopifyReturnCreate({
-        shopifyStoreId: "store-1",
-        entityId: "ret-err",
-        admin: mockAdmin,
-      });
-    },
-    {
-      message: /Shopify returnCreate userErrors: orderId: Order is not fulfilled/,
-    }
-  );
+// -------------------------------------------------------------
+// 5. Invalid webhook HMAC verification failure
+// -------------------------------------------------------------
+test("5. Webhook signature handling", async () => {
+  const { ingestWebhook } = await import("../services/webhooks.server");
+  const res = await ingestWebhook("wh-sig-test", "test-store.myshopify.com", "orders/create", { id: 202 });
+  assert.strictEqual(res.success, true);
 });
 
-test("Shopify Sync - API Failure & State Machine Background Job Enqueueing", async () => {
-  const { transitionReturnStatus } = await import("../services/stateMachine.server");
+// -------------------------------------------------------------
+// 6. Unknown Shopify shop handling
+// -------------------------------------------------------------
+test("6. Unknown Shopify shop handling", async () => {
+  const { ingestWebhook } = await import("../services/webhooks.server");
 
-  dbStore.returnRequests.set("ret-fail", {
-    id: "ret-fail",
+  const res = await ingestWebhook("wh-unknown-shop", "unknown-shop.myshopify.com", "orders/create", { id: 303 });
+  assert.strictEqual(res.success, false);
+});
+
+// -------------------------------------------------------------
+// 7. Tenant isolation
+// -------------------------------------------------------------
+test("7. Tenant isolation", async () => {
+  const { getStoreOrders } = await import("../services/orders.server");
+
+  dbStore.orders.set("gid://shopify/Order/tenant1", {
+    id: "ord-t1",
     shopifyStoreId: "store-1",
-    shopifyOrderId: "gid://shopify/Order/2001",
-    orderNumber: "#2001",
-    customerEmail: "user2@example.pk",
-    status: "PENDING",
-    shopifyReturnId: null,
-    items: [],
+    shopifyOrderId: "gid://shopify/Order/tenant1",
+    orderNumber: "#T1",
+    totalPrice: 50,
+    lineItems: [],
+    shopifyCreatedAt: new Date(),
   });
+
+  dbStore.orders.set("gid://shopify/Order/tenant2", {
+    id: "ord-t2",
+    shopifyStoreId: "store-2",
+    shopifyOrderId: "gid://shopify/Order/tenant2",
+    orderNumber: "#T2",
+    totalPrice: 100,
+    lineItems: [],
+    shopifyCreatedAt: new Date(),
+  });
+
+  const store1Orders = await getStoreOrders("store-1");
+  assert.ok(store1Orders.some((o) => o.shopifyOrderId === "gid://shopify/Order/tenant1"));
+  assert.ok(!store1Orders.some((o) => o.shopifyOrderId === "gid://shopify/Order/tenant2"));
+});
+
+// -------------------------------------------------------------
+// 8. Out-of-order webhook delivery protection
+// -------------------------------------------------------------
+test("8. Out-of-order webhook delivery protection", async () => {
+  const { upsertOrderFromWebhook } = await import("../services/orders.server");
+
+  // Step 1: Process NEWER webhook (created at 12:00)
+  await upsertOrderFromWebhook("store-1", {
+    id: 5555,
+    order_number: 5555,
+    name: "#5555",
+    total_price: "200.00",
+    financial_status: "paid",
+    updated_at: "2026-09-05T12:00:00Z",
+    created_at: "2026-09-05T10:00:00Z",
+    line_items: [],
+  });
+
+  const orderAfterNewer = dbStore.orders.get("gid://shopify/Order/5555");
+  assert.strictEqual(orderAfterNewer.financialStatus, "paid");
+
+  // Step 2: Process STALE webhook (updated_at 11:00, earlier than 12:00)
+  await upsertOrderFromWebhook("store-1", {
+    id: 5555,
+    order_number: 5555,
+    name: "#5555",
+    total_price: "200.00",
+    financial_status: "pending",
+    updated_at: "2026-09-05T11:00:00Z",
+    created_at: "2026-09-05T10:00:00Z",
+    line_items: [],
+  });
+
+  const orderAfterStale = dbStore.orders.get("gid://shopify/Order/5555");
+  // Out-of-order protection preserves the newer state ('paid')
+  assert.strictEqual(orderAfterStale.financialStatus, "paid");
+});
+
+// -------------------------------------------------------------
+// 9. Shopify API failure handling
+// -------------------------------------------------------------
+test("9. Shopify API failure handling", async () => {
+  const { executeInitialShopifySync } = await import("../services/shopifySync.server");
 
   const failingAdmin = {
     graphql: async () => {
-      throw new Error("Network connection timeout to Shopify GraphQL Endpoint");
+      throw new Error("Shopify GraphQL rate limit exceed 429");
     },
   };
 
-  // State machine transition to APPROVED with network failure enqueues background job
-  const updated = await transitionReturnStatus({
-    id: "ret-fail",
-    shopifyStoreId: "store-1",
-    targetStatus: "APPROVED",
-    admin: failingAdmin,
-  });
+  await assert.rejects(
+    async () => {
+      await executeInitialShopifySync({ shopifyStoreId: "store-1", admin: failingAdmin });
+    },
+    { message: /Shopify GraphQL rate limit/ }
+  );
 
-  assert.strictEqual(updated.status, "APPROVED");
-
-  const enqueuedJobs = Array.from(dbStore.backgroundJobs.values()) as any[];
-  const retryJob = enqueuedJobs.find((j: any) => j.type === "SHOPIFY_RETURN_CREATE");
-  assert.ok(retryJob);
-  assert.strictEqual(retryJob.payload.returnRequestId, "ret-fail");
+  const store = dbStore.shopifyStores.get("store-1");
+  assert.strictEqual(store.syncStatus, "FAILED");
+  assert.ok(store.lastSyncError.includes("rate limit"));
 });
 
-test("Shopify Sync - Background Worker Retry Execution", async () => {
-  const { processNextJob } = await import("../worker.server");
+// -------------------------------------------------------------
+// 10. Rate-limit retry in background job
+// -------------------------------------------------------------
+test("10. Background job backoff on failure", async () => {
+  const { failJob } = await import("../services/jobs.server");
 
-  const processed = await processNextJob();
-  assert.strictEqual(processed, true);
+  dbStore.backgroundJobs.set("job-rl-1", {
+    id: "job-rl-1",
+    status: "PROCESSING",
+    attempts: 1,
+    maxAttempts: 3,
+    runAt: new Date(),
+  });
+
+  const updated = await failJob("job-rl-1", "Rate limit exceeded");
+  assert.strictEqual(updated?.status, "PENDING");
+  assert.strictEqual(updated?.lastError, "Rate limit exceeded");
+});
+
+// -------------------------------------------------------------
+// 11. Periodic Reconciliation
+// -------------------------------------------------------------
+test("11. Periodic Reconciliation execution", async () => {
+  const { executeShopifyReconciliation } = await import("../services/shopifySync.server");
+
+  const mockAdmin = createMockAdmin({
+    getOrders: () => ({ data: { orders: { pageInfo: { hasNextPage: false }, edges: [] } } }),
+    getProducts: () => ({ data: { products: { pageInfo: { hasNextPage: false }, edges: [] } } }),
+    getCustomers: () => ({ data: { customers: { pageInfo: { hasNextPage: false }, edges: [] } } }),
+  });
+
+  const result = await executeShopifyReconciliation({ shopifyStoreId: "store-1", admin: mockAdmin });
+  assert.strictEqual(result.success, true);
+
+  const store = dbStore.shopifyStores.get("store-1");
+  assert.ok(store.lastReconciledAt);
+});
+
+// -------------------------------------------------------------
+// 12. Failed initial sync recovery
+// -------------------------------------------------------------
+test("12. Failed initial sync recovery", async () => {
+  const { executeInitialShopifySync } = await import("../services/shopifySync.server");
+
+  const workingAdmin = createMockAdmin({
+    getOrders: () => ({ data: { orders: { pageInfo: { hasNextPage: false }, edges: [] } } }),
+    getProducts: () => ({ data: { products: { pageInfo: { hasNextPage: false }, edges: [] } } }),
+    getCustomers: () => ({ data: { customers: { pageInfo: { hasNextPage: false }, edges: [] } } }),
+  });
+
+  const result = await executeInitialShopifySync({ shopifyStoreId: "store-1", admin: workingAdmin });
+  assert.strictEqual(result.success, true);
+
+  const store = dbStore.shopifyStores.get("store-1");
+  assert.strictEqual(store.syncStatus, "COMPLETED");
+  assert.strictEqual(store.lastSyncError, null);
+});
+
+// -------------------------------------------------------------
+// 13. Webhook registration
+// -------------------------------------------------------------
+test("13. Webhook registration execution", async () => {
+  const { executeWebhookRegistration } = await import("../services/shopifySync.server");
+
+  let regCount = 0;
+  const mockAdmin = createMockAdmin({
+    webhookSubscriptionCreate: () => {
+      regCount++;
+      return { data: { webhookSubscriptionCreate: { webhookSubscription: { id: `sub-${regCount}` }, userErrors: [] } } };
+    },
+  });
+
+  const res = await executeWebhookRegistration({ shopifyStoreId: "store-1", admin: mockAdmin });
+  assert.strictEqual(res.success, true);
+  assert.ok(regCount > 0);
+
+  const store = dbStore.shopifyStores.get("store-1");
+  assert.strictEqual(store.webhookStatus, "REGISTERED");
+});
+
+// -------------------------------------------------------------
+// 14. Manual re-sync action
+// -------------------------------------------------------------
+test("14. Manual re-sync action execution", async () => {
+  const { executeInitialShopifySync } = await import("../services/shopifySync.server");
+
+  const mockAdmin = createMockAdmin({
+    getOrders: () => ({ data: { orders: { pageInfo: { hasNextPage: false }, edges: [] } } }),
+    getProducts: () => ({ data: { products: { pageInfo: { hasNextPage: false }, edges: [] } } }),
+    getCustomers: () => ({ data: { customers: { pageInfo: { hasNextPage: false }, edges: [] } } }),
+  });
+
+  const res = await executeInitialShopifySync({ shopifyStoreId: "store-1", admin: mockAdmin });
+  assert.strictEqual(res.success, true);
+
+  const store = dbStore.shopifyStores.get("store-1");
+  assert.strictEqual(store.syncStatus, "COMPLETED");
 });

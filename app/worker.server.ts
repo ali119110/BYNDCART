@@ -1,4 +1,5 @@
-import { claimNextJob, completeJob, failJob } from "./services/jobs.server";
+import prisma from "./db.server";
+import { claimNextJob, completeJob, failJob, enqueueJob } from "./services/jobs.server";
 import { upsertOrderFromWebhook } from "./services/orders.server";
 import { upsertVariantsFromWebhook } from "./services/products.server";
 import { handleCustomerDataRequest, handleCustomerRedact, handleShopRedact } from "./services/compliance.server";
@@ -16,8 +17,44 @@ import {
   executeShopifyRefundCreate,
   executeShopifyInventoryAdjust,
   executeShopifyDraftOrderCreate,
+  executeInitialShopifySync,
+  executeWebhookRegistration,
+  executeShopifyReconciliation,
 } from "./services/shopifySync.server";
 import { processNotificationJob } from "./services/notifications.server";
+
+export const RECONCILIATION_INTERVAL_MS = 60 * 60 * 1000; // 1 hour recurring schedule
+
+export async function ensureReconciliationScheduled(shopifyStoreId: string) {
+  const existingJob = await prisma.backgroundJob.findFirst({
+    where: {
+      shopifyStoreId,
+      type: "SHOPIFY_RECONCILIATION",
+      status: { in: ["PENDING", "PROCESSING"] },
+    },
+  });
+
+  if (!existingJob) {
+    const runAt = new Date(Date.now() + RECONCILIATION_INTERVAL_MS);
+    await enqueueJob({
+      shopifyStoreId,
+      type: "SHOPIFY_RECONCILIATION",
+      payload: { scheduledAt: runAt.toISOString() },
+      runAt,
+    });
+  }
+}
+
+export async function ensureReconciliationScheduledForAllStores() {
+  try {
+    const stores = await prisma.shopifyStore.findMany({ select: { id: true } });
+    for (const store of stores) {
+      await ensureReconciliationScheduled(store.id);
+    }
+  } catch (err) {
+    console.error("[Worker Daemon] Error checking store reconciliation schedules:", err);
+  }
+}
 
 // Register built-in background job handlers
 registerJobHandler("WEBHOOK_PROCESS", async (payload: any, shopifyStoreId?: string) => {
@@ -61,6 +98,23 @@ registerJobHandler("WEBHOOK_PROCESS", async (payload: any, shopifyStoreId?: stri
       console.log(`[Worker] Unhandled job topic: ${topic}`);
       break;
   }
+});
+
+registerJobHandler("INITIAL_SHOPIFY_SYNC", async (payload: any, shopifyStoreId?: string) => {
+  if (!shopifyStoreId) throw new Error("Missing shopifyStoreId for INITIAL_SHOPIFY_SYNC");
+  await executeInitialShopifySync({ shopifyStoreId });
+  await ensureReconciliationScheduled(shopifyStoreId);
+});
+
+registerJobHandler("REGISTER_SHOPIFY_WEBHOOKS", async (payload: any, shopifyStoreId?: string) => {
+  if (!shopifyStoreId) throw new Error("Missing shopifyStoreId for REGISTER_SHOPIFY_WEBHOOKS");
+  await executeWebhookRegistration({ shopifyStoreId });
+});
+
+registerJobHandler("SHOPIFY_RECONCILIATION", async (payload: any, shopifyStoreId?: string) => {
+  if (!shopifyStoreId) throw new Error("Missing shopifyStoreId for SHOPIFY_RECONCILIATION");
+  await executeShopifyReconciliation({ shopifyStoreId });
+  await ensureReconciliationScheduled(shopifyStoreId);
 });
 
 registerJobHandler("SHOPIFY_RETURN_CREATE", async (payload: any, shopifyStoreId?: string) => {
@@ -135,6 +189,10 @@ export function startWorkerDaemon(pollIntervalMs = 2000): () => void {
   console.log(`[Worker Daemon] Starting worker daemon with polling interval ${pollIntervalMs}ms`);
   let isRunning = true;
 
+  ensureReconciliationScheduledForAllStores().catch((err) =>
+    console.error("[Worker Daemon] Initial reconciliation check failed:", err)
+  );
+
   const loop = async () => {
     while (isRunning) {
       try {
@@ -161,3 +219,4 @@ export function startWorkerDaemon(pollIntervalMs = 2000): () => void {
 if (process.argv[1]?.includes("worker.server.ts")) {
   startWorkerDaemon();
 }
+

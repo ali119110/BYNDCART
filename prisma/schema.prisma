@@ -46,6 +46,11 @@ model ShopifyStore {
   shop             String            @unique
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
+  syncStatus       String            @default("PENDING") // PENDING, SYNCING, COMPLETED, FAILED
+  lastSyncAt       DateTime?
+  lastReconciledAt DateTime?
+  webhookStatus    String            @default("PENDING") // PENDING, REGISTERED, FAILED
+  lastSyncError    String?
   merchant         Merchant          @relation(fields: [merchantId], references: [id], onDelete: Cascade)
   returnRequests   ReturnRequest[]
   exchangeRequests ExchangeRequest[]
@@ -54,6 +59,7 @@ model ShopifyStore {
   storeSettings    StoreSettings?
   orders        Order[]
   productCaches ProductCache[]
+  customerCaches CustomerCache[]
   backgroundJobs BackgroundJob[]
   shipments     ShipmentTrack[]
   warehouseIntakes WarehouseIntake[]
@@ -236,6 +242,24 @@ model ProductCache {
   shopifyStore     ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
 
   @@index([shopifyStoreId])
+}
+
+model CustomerCache {
+  id                String       @id @default(uuid())
+  shopifyStoreId    String
+  shopifyCustomerId String       @unique   // gid://shopify/Customer/...
+  firstName         String?
+  lastName          String?
+  email             String?
+  phone             String?
+  ordersCount       Int          @default(0)
+  totalSpent        Decimal      @default(0.00) @db.Decimal(10, 2)
+  fetchedAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  shopifyStore      ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@index([shopifyStoreId])
+  @@index([shopifyCustomerId])
 }
 
 model BackgroundJob {

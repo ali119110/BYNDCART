@@ -71,7 +71,7 @@ export default function Customers() {
               </tr>
             </thead>
             <tbody>
-              {customers.map((c) => (
+              {customers.map((c: CustomerMetrics) => (
                 <tr
                   key={c.id}
                   onClick={() => setSelectedCustomer(c)}
@@ -89,7 +89,7 @@ export default function Customers() {
                   <td style={{ padding: "12px 8px" }}>{c.returnsCount}</td>
                   <td style={{ padding: "12px 8px" }}>{c.exchangesCount}</td>
                   <td style={{ padding: "12px 8px" }}>
-                    <strong>Rs. {c.totalRefundedPKR.toLocaleString()}</strong>
+                    <strong>Rs. {(c.totalRefundedPKR ?? 0).toLocaleString()}</strong>
                   </td>
                   <td style={{ padding: "12px 8px" }}>
                     <s-text tone={parseFloat(c.returnRate) > 30 ? "critical" : "neutral"}>
@@ -156,7 +156,7 @@ export default function Customers() {
                 <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
                   <strong>Risk Flag Reasons:</strong>
                   <ul style={{ margin: "8px 0 0 16px", padding: 0 }}>
-                    {selectedCustomer.riskFlag.reasons.map((r, i) => (
+                    {selectedCustomer.riskFlag.reasons.map((r: string, i: number) => (
                       <li key={i} style={{ fontSize: "13px", color: "#d72c0d" }}>
                         {r}
                       </li>
@@ -183,16 +183,16 @@ export default function Customers() {
               </s-box>
               <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
                 <div style={{ fontSize: "12px", color: "#6d7175" }}>Total Refunded</div>
-                <div style={{ fontSize: "18px", fontWeight: "bold" }}>Rs. {selectedCustomer.totalRefundedPKR.toLocaleString()}</div>
+                <div style={{ fontSize: "18px", fontWeight: "bold" }}>Rs. {(selectedCustomer.totalRefundedPKR ?? 0).toLocaleString()}</div>
               </s-box>
             </div>
 
             <s-heading>Recent Returns History</s-heading>
             <div style={{ marginTop: "8px" }}>
-              {selectedCustomer.recentReturns.length === 0 ? (
+              {(!selectedCustomer.recentReturns || selectedCustomer.recentReturns.length === 0) ? (
                 <s-paragraph tone="neutral">No return requests on file.</s-paragraph>
               ) : (
-                selectedCustomer.recentReturns.map((r) => (
+                selectedCustomer.recentReturns.map((r: any) => (
                   <div key={r.id} style={{ padding: "8px 0", borderBottom: "1px solid #f1f2f3" }}>
                     <div style={{ display: "flex", justifyContent: "space-between" }}>
                       <strong>{r.orderNumber}</strong>

@@ -670,18 +670,28 @@ export async function getStoreCourierConfigs(shopifyStoreId: string) {
     where: { shopifyStoreId },
   });
 
-  return configs.map((c) => ({
-    id: c.id,
-    providerName: c.providerName,
-    accountNumber: c.accountNumber,
-    maskedToken: c.encryptedApiToken ? maskCredential(c.encryptedApiToken) : "",
-    hasToken: !!c.encryptedApiToken,
-    enabled: c.enabled,
-    isDefaultReverse: c.isDefaultReverse,
-    isDefaultForward: c.isDefaultForward,
-    isLive: c.isLive,
-    updatedAt: c.updatedAt,
-  }));
+  return configs.map((c) => {
+    let maskedToken = "";
+    if (c.encryptedApiToken) {
+      try {
+        maskedToken = maskCredential(c.encryptedApiToken);
+      } catch {
+        maskedToken = "";
+      }
+    }
+    return {
+      id: c.id,
+      providerName: c.providerName,
+      accountNumber: c.accountNumber,
+      maskedToken,
+      hasToken: !!c.encryptedApiToken,
+      enabled: c.enabled,
+      isDefaultReverse: c.isDefaultReverse,
+      isDefaultForward: c.isDefaultForward,
+      isLive: c.isLive,
+      updatedAt: c.updatedAt,
+    };
+  });
 }
 
 /**

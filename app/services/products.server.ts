@@ -122,3 +122,83 @@ export async function upsertVariantsFromWebhook(shopifyStoreId: string, productP
     });
   }
 }
+
+export async function deleteProductFromWebhook(shopifyStoreId: string, productPayload: any) {
+  const productId = productPayload.id ? `gid://shopify/Product/${productPayload.id}` : null;
+  if (!productId) return;
+
+  try {
+    await prisma.productCache.deleteMany({
+      where: { shopifyStoreId, shopifyProductId: productId },
+    });
+  } catch (e) {
+    // Ignore error if not cached
+  }
+}
+
+export async function syncShopifyProducts(shopifyStoreId: string, admin: any) {
+  if (!admin) return { success: true, synchronizedCount: 0 };
+
+  let synchronizedCount = 0;
+  let cursor: string | null = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const response: any = await admin.graphql(
+      `#graphql
+      query getProducts($cursor: String) {
+        products(first: 50, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          edges {
+            node {
+              id
+              title
+              featuredImage { url }
+              variants(first: 50) {
+                edges {
+                  node {
+                    id
+                    title
+                    sku
+                    price
+                    image { url }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }`,
+      { variables: { cursor } }
+    );
+
+    const { data }: any = await response.json();
+    const edges = data?.products?.edges ?? [];
+
+    for (const edge of edges) {
+      const pNode = edge.node;
+      const vEdges = pNode.variants?.edges ?? [];
+
+      for (const vEdge of vEdges) {
+        const vNode = vEdge.node;
+        await upsertProductCache(shopifyStoreId, {
+          shopifyVariantId: vNode.id,
+          shopifyProductId: pNode.id,
+          title: pNode.title,
+          variantTitle: vNode.title !== "Default Title" ? vNode.title : null,
+          sku: vNode.sku ?? null,
+          imageUrl: vNode.image?.url ?? pNode.featuredImage?.url ?? null,
+          price: parseFloat(vNode.price ?? "0"),
+        });
+        synchronizedCount++;
+      }
+    }
+
+    hasNextPage = data?.products?.pageInfo?.hasNextPage ?? false;
+    cursor = data?.products?.pageInfo?.endCursor ?? null;
+
+    if (synchronizedCount >= 500) break;
+  }
+
+  return { success: true, synchronizedCount };
+}

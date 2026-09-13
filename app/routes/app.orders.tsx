@@ -34,9 +34,8 @@ export default function Orders() {
 
   return (
     <s-page heading="Shopify Orders">
-      <div style={{ marginBottom: "16px", display: "flex", gap: "8px", alignItems: "center" }}>
-        <div style={{ flex: 1 }}>
-          <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+      <div style={{ marginBottom: "16px" }}>
+        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
           <input
             type="text"
             placeholder="Search by order number or customer name..."
@@ -51,12 +50,6 @@ export default function Orders() {
             }}
           />
         </s-box>
-        </div>
-        <fetcher.Form method="post">
-          <s-button type="submit" disabled={isSyncing}>
-            {isSyncing ? "Syncing..." : "Sync Orders"}
-          </s-button>
-        </fetcher.Form>
       </div>
 
       <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
@@ -66,7 +59,7 @@ export default function Orders() {
               <s-heading>No Orders Found</s-heading>
               <s-paragraph tone="neutral">
                 {orders.length === 0
-                  ? "No orders synced yet. Click \"Sync Orders\" to pull orders from Shopify."
+                  ? "No orders found. Orders sync automatically from Shopify upon app installation."
                   : "We couldn't find any orders matching your search query."}
               </s-paragraph>
             </div>

@@ -2,6 +2,8 @@
 process.env.SHOPIFY_API_KEY = "mock_api_key";
 process.env.SHOPIFY_API_SECRET = "mock_api_secret";
 process.env.SHOPIFY_APP_URL = "https://byndcart-mock.app";
+process.env.APP_URL = "https://byndcart-mock.app";
+process.env.HOST = "https://byndcart-mock.app";
 process.env.SCOPES = "read_orders,write_returns";
 process.env.DATABASE_URL = "postgresql://mock:mock@localhost:5432/mock";
 process.env.NODE_ENV = "test";
@@ -22,6 +24,8 @@ prisma.session.deleteMany = (async () => null) as any;
 prisma.shopifyStore.findUnique = (async () => null) as any;
 prisma.shopifyStore.findFirst = (async () => null) as any;
 
+prisma.user.findUnique = (async () => null) as any;
+prisma.user.create = (async () => null) as any;
 prisma.auditLog.create = (async () => null) as any;
 
 // Import validation utilities
@@ -35,12 +39,6 @@ import {
   authError,
   notFoundError,
 } from "../services/api.server";
-
-// Import multi-tenant helper
-import { requireTenantContext } from "../services/tenant.server";
-
-// Import Shopify server mock to override admin authentication during tests
-import shopify from "../shopify.server";
 
 test("Validation Helpers - String validator", () => {
   const emailValidator = validation.string({ email: true });
@@ -118,6 +116,10 @@ test("API Response Utilities - Error responses", () => {
 });
 
 test("Tenant Resolution - Valid request context", async () => {
+  const shopifyModule = await import("../shopify.server");
+  const shopify = shopifyModule.default;
+  const { requireTenantContext } = await import("../services/tenant.server");
+
   // Mock shopify.authenticate.admin
   const originalAdminAuth = shopify.authenticate.admin;
   shopify.authenticate.admin = async () => {
@@ -157,6 +159,10 @@ test("Tenant Resolution - Valid request context", async () => {
 });
 
 test("Tenant Resolution - Unauthenticated session rejection", async () => {
+  const shopifyModule = await import("../shopify.server");
+  const shopify = shopifyModule.default;
+  const { requireTenantContext } = await import("../services/tenant.server");
+
   const originalAdminAuth = shopify.authenticate.admin;
   shopify.authenticate.admin = async () => {
     return {

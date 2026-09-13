@@ -1,5 +1,6 @@
 import prisma from "../db.server";
 import { apiVersion } from "../shopify.server";
+import { enqueueJob } from "./jobs.server";
 
 export interface RegisterStoreInput {
   shop: string;
@@ -38,7 +39,7 @@ export async function registerStore({ shop, accessToken }: RegisterStoreInput) {
     const email = shopData?.contactEmail || shopData?.email || "";
 
     // 2. Perform logical multi-tenant database registration
-    return await prisma.$transaction(async (tx) => {
+    const store = await prisma.$transaction(async (tx) => {
       // Find if we already have a store registered
       let store = await tx.shopifyStore.findUnique({
         where: { shop },
@@ -49,7 +50,7 @@ export async function registerStore({ shop, accessToken }: RegisterStoreInput) {
         // Update access token or other details if needed
         store = await tx.shopifyStore.update({
           where: { id: store.id },
-          data: { updatedAt: new Date() },
+          data: { updatedAt: new Date(), syncStatus: "PENDING", webhookStatus: "PENDING" },
           include: { merchant: true },
         });
       } else {
@@ -72,6 +73,8 @@ export async function registerStore({ shop, accessToken }: RegisterStoreInput) {
           data: {
             merchantId: merchant.id,
             shop,
+            syncStatus: "PENDING",
+            webhookStatus: "PENDING",
           },
           include: { merchant: true },
         });
@@ -108,6 +111,21 @@ export async function registerStore({ shop, accessToken }: RegisterStoreInput) {
 
       return store;
     });
+
+    // 3. Automatically enqueue initial sync and webhook registration jobs
+    await enqueueJob({
+      shopifyStoreId: store.id,
+      type: "INITIAL_SHOPIFY_SYNC",
+      payload: { shop },
+    });
+
+    await enqueueJob({
+      shopifyStoreId: store.id,
+      type: "REGISTER_SHOPIFY_WEBHOOKS",
+      payload: { shop },
+    });
+
+    return store;
   } catch (error) {
     console.error(`[registerStore] Error registering shop ${shop}:`, error);
     throw error;
