@@ -32,7 +32,7 @@ jobs:
       - name: Create temporary tsconfig file for transpilation
         run: |
           echo '{
-            "include": ["./app/**/*", "*.ts", "*.tsx", "env.d.ts", ".graphqlrc.ts"],
+            "include": ["./app/**/*", "*.ts", "*.tsx", "env.d.ts", ".graphqlrc.ts", ".react-router/types/**/*"],
             "compilerOptions": {
               "lib": ["DOM", "DOM.Iterable", "ES2022"],
               "strict": true,
@@ -49,12 +49,13 @@ jobs:
               "moduleResolution": "bundler",
               "target": "ES2022",
               "baseUrl": ".",
+              "rootDirs": [".", "./.react-router/types"],
               "types": ["@react-router/node", "vite/client", "@shopify/polaris-types"]
             }
           }' > tsconfig.js.json
 
       - name: Transpile to Javascript
-        run: pnpm tsc -p tsconfig.js.json
+        run: pnpm exec react-router typegen && pnpm tsc -p tsconfig.js.json
 
       - name: Remove Typescript files
         run: |

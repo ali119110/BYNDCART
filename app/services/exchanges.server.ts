@@ -92,10 +92,16 @@ export async function createExchangeRequest(input: CreateExchangeRequestInput) {
       },
     });
 
-    return await tx.exchangeRequest.findUnique({
+    const createdExchange = await tx.exchangeRequest.findUnique({
       where: { id: exchangeRequest.id },
       include: { items: true },
     });
+
+    if (!createdExchange) {
+      throw new Error(`Exchange request ${exchangeRequest.id} could not be reloaded after creation`);
+    }
+
+    return createdExchange;
   });
 }
 

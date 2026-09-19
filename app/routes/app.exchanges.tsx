@@ -89,7 +89,7 @@ export async function action({ request }: Route.ActionArgs) {
       try {
         const approvedResult = await approveExchangeWithDraftOrder(admin, exchangeRequest.id, shopifyStoreId);
         if (approvedResult) {
-          finalExchange = approvedResult;
+          finalExchange = { ...approvedResult, items: exchangeRequest.items };
         }
       } catch (draftErr) {
         console.warn("[Exchange Action] Auto Shopify draft order creation skipped/warned:", draftErr);
