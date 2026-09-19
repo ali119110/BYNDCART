@@ -5,16 +5,16 @@ import { requireTenantContext } from "../utils/tenant.server";
 import prisma from "../db.server";
 import { getReturnRequests, updateReturnRequestStatus, createReturnRequest } from "../services/returns.server";
 import { getCustomerRiskFlagsForEmails } from "../services/fraud.server";
-import { getStoreOrders } from "../services/orders.server";
+import { getStoreOrders, searchOrSyncOrders } from "../services/orders.server";
 
 // ===== LOADER: Fetch returns and store orders from database =====
 export async function loader({ request }: Route.LoaderArgs) {
-  const { shopifyStoreId } = await requireTenantContext(request);
+  const { shopifyStoreId, admin } = await requireTenantContext(request);
 
   try {
     const [returns, orders] = await Promise.all([
       getReturnRequests(shopifyStoreId),
-      getStoreOrders(shopifyStoreId, 100),
+      getStoreOrders(shopifyStoreId, 100, admin),
     ]);
     const emails = returns.map((r) => r.customerEmail);
     const riskFlags = await getCustomerRiskFlagsForEmails(shopifyStoreId, emails);
@@ -37,9 +37,13 @@ export async function action({ request }: Route.ActionArgs) {
     return { error: "Method not allowed" };
   }
 
-  const { shopifyStoreId } = await requireTenantContext(request);
+  const { shopifyStoreId, admin } = await requireTenantContext(request);
   const formData = await request.formData();
   const actionType = formData.get("actionType") as string;
+
+  if (actionType === "SEARCH_ORDERS") {
+    return { orders: await searchOrSyncOrders({ shopifyStoreId, admin, query: String(formData.get("query") || "") }) };
+  }
 
   if (actionType === "CREATE_MANUAL_RETURN") {
     const shopifyOrderId = formData.get("shopifyOrderId") as string;
@@ -128,6 +132,8 @@ export async function action({ request }: Route.ActionArgs) {
 export default function Returns() {
   const { returns: dbReturns, orders: dbOrders = [], riskFlags } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
+  const orderSearchFetcher = useFetcher<typeof action>();
+  const availableOrders = (orderSearchFetcher.data as any)?.orders ?? dbOrders;
 
   // Manual Return Creation Modal State
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -140,10 +146,10 @@ export default function Returns() {
   const [showConfirmStep, setShowConfirmStep] = useState<boolean>(false);
 
   // Selected Order for Modal
-  const selectedOrder = dbOrders.find((o: any) => o.shopifyOrderId === selectedOrderId);
+  const selectedOrder = availableOrders.find((o: any) => o.shopifyOrderId === selectedOrderId);
 
   // Autocomplete Filtered Orders
-  const filteredOrders = dbOrders.filter((ord: any) => {
+  const filteredOrders = availableOrders.filter((ord: any) => {
     const q = orderSearchQuery.toLowerCase().trim();
     if (!q) return true;
     const matchOrderNumber = (ord.orderNumber || "").toLowerCase().includes(q);
@@ -566,9 +572,9 @@ export default function Returns() {
                   {/* Scrollable Order Autocomplete Results */}
                   {!selectedOrder && (
                     <div style={{ maxHeight: "220px", overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: "8px", background: "#f8fafc" }}>
-                      {filteredOrders.length === 0 ? (
-                        <div style={{ padding: "16px", textAlign: "center", color: "#64748b", fontSize: "13px" }}>
-                          No store orders match "{orderSearchQuery}"
+                        {filteredOrders.length === 0 ? (
+                          <div style={{ padding: "16px", textAlign: "center", color: "#64748b", fontSize: "13px" }}>
+                            No store orders match "{orderSearchQuery}". <button type="button" onClick={() => orderSearchFetcher.submit({ actionType: "SEARCH_ORDERS", query: orderSearchQuery }, { method: "post" })}>Search Shopify</button>
                         </div>
                       ) : (
                         filteredOrders.map((ord: any) => (
@@ -585,7 +591,7 @@ export default function Returns() {
                           >
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                               <strong style={{ fontSize: "14px", color: "#0f172a" }}>{ord.orderNumber}</strong>
-                              <span style={{ fontSize: "13px", fontWeight: 700, color: "#10b981" }}>${Number(ord.totalPrice).toFixed(2)}</span>
+                              <span style={{ fontSize: "13px", fontWeight: 700, color: "#10b981" }}>PKR {Number(ord.totalPrice).toFixed(2)}</span>
                             </div>
                             <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>
                               Customer: {ord.customerName || "N/A"} ({ord.customerEmail || "No Email"})
@@ -646,7 +652,7 @@ export default function Returns() {
                               <label htmlFor={`ret-item-${li.lineItemId}`} style={{ flex: 1, cursor: "pointer" }}>
                                 <div style={{ fontWeight: 600, fontSize: "14px", color: "#0f172a" }}>{li.title}</div>
                                 <div style={{ fontSize: "12px", color: "#64748b" }}>
-                                  Unit Price: ${Number(li.price).toFixed(2)} | Max Qty: {li.quantity}
+                                  Unit Price: PKR {Number(li.price).toFixed(2)} | Max Qty: {li.quantity}
                                 </div>
                               </label>
                             </div>
@@ -709,7 +715,7 @@ export default function Returns() {
 
                     <div>
                       <label style={{ display: "block", fontWeight: 700, fontSize: "12.5px", color: "#475569", marginBottom: "4px" }}>
-                        Refund Amount ($)
+                        Refund Amount (PKR)
                       </label>
                       <input
                         type="number"
@@ -766,7 +772,7 @@ export default function Returns() {
                   <p style={{ margin: 0, fontSize: "13.5px", color: "#475569" }}>
                     Please confirm creating return request for <strong>{selectedOrder?.orderNumber}</strong> with{" "}
                     <strong>{Object.keys(selectedItems).length} item(s)</strong> and a refund amount of{" "}
-                    <strong>${refundAmountInput}</strong>.
+                    <strong>PKR {refundAmountInput}</strong>.
                   </p>
                 </s-box>
 

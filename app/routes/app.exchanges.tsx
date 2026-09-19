@@ -5,25 +5,27 @@ import { requireTenantContext } from "../utils/tenant.server";
 import { getExchangeRequests, updateExchangeStatus, approveExchangeWithDraftOrder, createExchangeRequest } from "../services/exchanges.server";
 import { getCustomerRiskFlagsForEmails } from "../services/fraud.server";
 import { assertRateLimit } from "../utils/rateLimit.server";
-import { getStoreOrders } from "../services/orders.server";
+import { getStoreOrders, searchOrSyncOrders } from "../services/orders.server";
+import { getShopifyStoreProducts } from "../services/products.server";
 import prisma from "../db.server";
 
 // ===== LOADER: Fetch exchanges and orders from database =====
 export async function loader({ request }: Route.LoaderArgs) {
-  const { shopifyStoreId } = await requireTenantContext(request);
+  const { shopifyStoreId, admin } = await requireTenantContext(request);
 
   try {
-    const [exchanges, orders] = await Promise.all([
+    const [exchanges, orders, products] = await Promise.all([
       getExchangeRequests(shopifyStoreId),
-      getStoreOrders(shopifyStoreId, 100),
+      getStoreOrders(shopifyStoreId, 100, admin),
+      getShopifyStoreProducts({ shopifyStoreId, admin }),
     ]);
     const emails = exchanges.map((e: any) => e.customerEmail);
     const riskFlags = await getCustomerRiskFlagsForEmails(shopifyStoreId, emails);
 
-    return { exchanges, orders, riskFlags: Object.fromEntries(riskFlags) };
+    return { exchanges, orders, products, riskFlags: Object.fromEntries(riskFlags) };
   } catch (error) {
     console.error("Failed to fetch exchanges:", error);
-    return { exchanges: [], orders: [], riskFlags: {} as Record<string, { flagged: boolean; reasons: string[] }> };
+    return { exchanges: [], orders: [], products: [], riskFlags: {} as Record<string, { flagged: boolean; reasons: string[] }> };
   }
 }
 
@@ -36,6 +38,14 @@ export async function action({ request }: Route.ActionArgs) {
   const { shopifyStoreId, admin } = await requireTenantContext(request);
   const formData = await request.formData();
   const actionType = formData.get("actionType") as string;
+
+  if (actionType === "SEARCH_ORDERS") {
+    return { orders: await searchOrSyncOrders({ shopifyStoreId, admin, query: String(formData.get("query") || "") }) };
+  }
+
+  if (actionType === "SEARCH_PRODUCTS") {
+    return { products: await getShopifyStoreProducts({ shopifyStoreId, admin, query: String(formData.get("query") || "") }) };
+  }
 
   // Handle Manual Exchange Creation & Seamless Auto Shopify Order Creation
   if (actionType === "CREATE_MANUAL_EXCHANGE") {
@@ -59,6 +69,9 @@ export async function action({ request }: Route.ActionArgs) {
       const parsedItems = JSON.parse(itemsJson);
       if (!Array.isArray(parsedItems) || parsedItems.length === 0) {
         return { error: "At least one replacement item must be selected" };
+      }
+      if (parsedItems.some((item: any) => !String(item.replacementVariantId || "").startsWith("gid://shopify/ProductVariant/"))) {
+        return { error: "Select a valid Shopify product variant for every replacement item" };
       }
 
       // 1. Create exchange request record in database
@@ -123,8 +136,12 @@ export async function action({ request }: Route.ActionArgs) {
 
 // ===== COMPONENT =====
 export default function Exchanges() {
-  const { exchanges: dbExchanges, orders = [], riskFlags } = useLoaderData<typeof loader>();
+  const { exchanges: dbExchanges, orders = [], products: initialProducts = [], riskFlags } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
+  const orderSearchFetcher = useFetcher<typeof action>();
+  const productSearchFetcher = useFetcher<typeof action>();
+  const availableOrders = (orderSearchFetcher.data as any)?.orders ?? orders;
+  const availableProducts = (productSearchFetcher.data as any)?.products ?? initialProducts;
 
   // Create Exchange Modal State
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -138,18 +155,20 @@ export default function Exchanges() {
         replacementTitle: string;
         replacementVariantId: string;
         replacementQuantity: number;
+        replacementPrice: number;
         priceDifference: number;
       }
     >
   >({});
   const [isConfirmStep, setIsConfirmStep] = useState(false);
+  const formatBalance = (balance: number) => balance > 0 ? `+PKR ${balance.toFixed(2)} (Customer Balance Owed)` : balance < 0 ? `-PKR ${Math.abs(balance).toFixed(2)} (Store Credit / Partial Refund)` : "PKR 0.00 (Even Exchange)";
 
   // Selected Order for Modal
-  const selectedOrder = orders.find((o: any) => o.shopifyOrderId === selectedOrderId);
+  const selectedOrder = availableOrders.find((o: any) => o.shopifyOrderId === selectedOrderId);
   const isSubmitting = fetcher.state !== "idle" && fetcher.formData?.get("actionType") === "CREATE_MANUAL_EXCHANGE";
 
   // Autocomplete Filtered Orders
-  const filteredOrders = orders.filter((ord: any) => {
+  const filteredOrders = availableOrders.filter((ord: any) => {
     const q = orderSearchQuery.toLowerCase().trim();
     if (!q) return true;
     const matchOrderNumber = (ord.orderNumber || "").toLowerCase().includes(q);
@@ -248,8 +267,9 @@ export default function Exchanges() {
         next[lineItemId] = {
           originalQuantity: 1,
           replacementTitle: `${defaultTitle} (Replacement Variant)`,
-          replacementVariantId: `gid://shopify/ProductVariant/manual`,
+          replacementVariantId: "",
           replacementQuantity: 1,
+          replacementPrice: 0,
           priceDifference: 0,
         };
       }
@@ -282,10 +302,12 @@ export default function Exchanges() {
     const items = Object.entries(exchangeItems).map(([lineItemId, data]) => ({
       originalLineItemId: lineItemId,
       originalQuantity: Number(data.originalQuantity) || 1,
-      replacementVariantId: data.replacementVariantId || "gid://shopify/ProductVariant/manual",
+      replacementVariantId: data.replacementVariantId,
       replacementQuantity: Number(data.replacementQuantity) || 1,
       replacementTitle: data.replacementTitle || "Replacement Item",
-      priceDifference: Number(data.priceDifference) || 0,
+      replacementPrice: Number(data.replacementPrice) || 0,
+      originalPrice: Number(selectedOrder.lineItems.find((item: any) => item.lineItemId === lineItemId)?.price) || 0,
+      priceDifference: (Number(data.replacementPrice) || 0) * (Number(data.replacementQuantity) || 1) - (Number(selectedOrder.lineItems.find((item: any) => item.lineItemId === lineItemId)?.price) || 0) * (Number(data.originalQuantity) || 1),
     }));
 
     fetcher.submit(
@@ -517,7 +539,7 @@ export default function Exchanges() {
                       <div style={{ maxHeight: "220px", overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: "8px", background: "#f8fafc" }}>
                         {filteredOrders.length === 0 ? (
                           <div style={{ padding: "16px", textAlign: "center", color: "#64748b", fontSize: "13px" }}>
-                            No orders match "{orderSearchQuery}"
+                            No orders match "{orderSearchQuery}". <button type="button" onClick={() => orderSearchFetcher.submit({ actionType: "SEARCH_ORDERS", query: orderSearchQuery }, { method: "post" })}>Search Shopify</button>
                           </div>
                         ) : (
                           filteredOrders.map((ord: any) => (
@@ -534,7 +556,7 @@ export default function Exchanges() {
                             >
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                                 <strong style={{ fontSize: "14px", color: "#0f172a" }}>{ord.orderNumber}</strong>
-                                <span style={{ fontSize: "13px", fontWeight: 700, color: "#10b981" }}>${Number(ord.totalPrice).toFixed(2)}</span>
+                                <span style={{ fontSize: "13px", fontWeight: 700, color: "#10b981" }}>PKR {Number(ord.totalPrice).toFixed(2)}</span>
                               </div>
                               <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>
                                 Customer: {ord.customerName || "N/A"} ({ord.customerEmail || "No Email"})
@@ -573,6 +595,7 @@ export default function Exchanges() {
                         {((selectedOrder as any).lineItems || []).map((li: any) => {
                           const isSelected = Boolean(exchangeItems[li.lineItemId]);
                           const itemData = exchangeItems[li.lineItemId] || {};
+                          const selectedProduct = availableProducts.find((product: any) => product.shopifyVariantId === itemData.replacementVariantId);
 
                           return (
                             <div
@@ -594,7 +617,7 @@ export default function Exchanges() {
                                 />
                                 <label htmlFor={`exc-item-${li.lineItemId}`} style={{ flex: 1, cursor: "pointer" }}>
                                   <div style={{ fontWeight: 600, fontSize: "14px", color: "#0f172a" }}>
-                                    Product A: {li.title} (${Number(li.price).toFixed(2)})
+                                    Product A: {li.title} (PKR {Number(li.price).toFixed(2)})
                                   </div>
                                 </label>
                               </div>
@@ -617,13 +640,13 @@ export default function Exchanges() {
                                       />
                                     </div>
                                     <div>
-                                      <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Replacement Product Title</label>
-                                      <input
-                                        type="text"
-                                        value={itemData.replacementTitle}
-                                        onChange={(e) => handleItemChange(li.lineItemId, "replacementTitle", e.target.value)}
-                                        style={{ width: "100%", padding: "6px 10px" }}
-                                      />
+                                      <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Search Replacement Product</label>
+                                      <input type="search" placeholder="Product title, SKU..." onChange={(e) => productSearchFetcher.submit({ actionType: "SEARCH_PRODUCTS", query: e.target.value }, { method: "post" })} style={{ width: "100%", padding: "6px 10px" }} />
+                                      <select value={itemData.replacementVariantId || ""} onChange={(e) => { const product = availableProducts.find((p: any) => p.shopifyVariantId === e.target.value); if (product) { handleItemChange(li.lineItemId, "replacementVariantId", product.shopifyVariantId); handleItemChange(li.lineItemId, "replacementTitle", product.productTitle || product.title); handleItemChange(li.lineItemId, "replacementPrice", Number(product.price)); } }} style={{ width: "100%", padding: "6px 10px", marginTop: "6px" }}>
+                                        <option value="">Select Shopify variant</option>
+                                        {availableProducts.map((product: any) => <option key={product.shopifyVariantId} value={product.shopifyVariantId}>{product.productTitle || product.title} {product.variantTitle ? `- ${product.variantTitle}` : ""} {product.options?.length ? `- ${product.options.map((option: any) => `${option.name}: ${option.value}`).join(", ")}` : ""} {product.sku ? `(${product.sku})` : ""} - PKR {Number(product.price).toFixed(2)}</option>)}
+                                      </select>
+                                      {selectedProduct?.imageUrl && <img src={selectedProduct.imageUrl} alt={selectedProduct.productTitle || selectedProduct.title} style={{ width: "56px", height: "56px", objectFit: "cover", borderRadius: "6px", marginTop: "8px" }} />}
                                     </div>
                                     <div>
                                       <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Replacement Quantity</label>
@@ -636,15 +659,8 @@ export default function Exchanges() {
                                       />
                                     </div>
                                     <div>
-                                      <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Price Diff ($ / PKR)</label>
-                                      <input
-                                        type="number"
-                                        step="0.01"
-                                        placeholder="0.00 (+ owed / - refund)"
-                                        value={itemData.priceDifference}
-                                        onChange={(e) => handleItemChange(li.lineItemId, "priceDifference", parseFloat(e.target.value) || 0)}
-                                        style={{ width: "100%", padding: "6px 10px" }}
-                                      />
+                                      <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Exchange Balance (PKR)</label>
+                                      <div style={{ padding: "8px 10px", fontWeight: 700 }}>{formatBalance(Number(itemData.replacementPrice || 0) * Number(itemData.replacementQuantity || 1) - Number(li.price || 0) * Number(itemData.originalQuantity || 1))}</div>
                                     </div>
                                   </div>
                                 </div>
@@ -690,7 +706,7 @@ export default function Exchanges() {
                         <div key={lineItemId} style={{ fontSize: "13px", paddingLeft: "12px", borderLeft: "3px solid #10b981", marginBottom: "8px" }}>
                           <div>Product A (Original): <strong>{data.originalQuantity}x {orig?.title || lineItemId}</strong></div>
                           <div>Product B (Replacement): <strong>{data.replacementQuantity}x {data.replacementTitle}</strong></div>
-                          <div>Price Diff: <strong>{data.priceDifference >= 0 ? `+$${data.priceDifference}` : `-$${Math.abs(data.priceDifference)}`}</strong></div>
+                          <div>Exchange Balance: <strong>{formatBalance(Number(data.replacementPrice || 0) * Number(data.replacementQuantity || 1) - Number(orig?.price || 0) * Number(data.originalQuantity || 1))}</strong></div>
                         </div>
                       );
                     })}

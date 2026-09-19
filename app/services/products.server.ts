@@ -8,6 +8,11 @@ export interface CachedVariant {
   sku?: string | null;
   imageUrl?: string | null;
   price: number;
+  options?: Array<{ name: string; value: string }>;
+}
+
+export interface StoreProductVariant extends CachedVariant {
+  productTitle: string;
 }
 
 /**
@@ -98,6 +103,86 @@ export async function getOrCacheVariant(admin: any, shopifyStoreId: string, shop
   if (!fetched) return null;
 
   return await upsertProductCache(shopifyStoreId, fetched);
+}
+
+/** Fetch searchable products from Shopify and keep the returned variants warm in ProductCache. */
+export async function getShopifyStoreProducts({
+  shopifyStoreId,
+  admin,
+  query = "",
+}: {
+  shopifyStoreId: string;
+  admin: any;
+  query?: string;
+}): Promise<StoreProductVariant[]> {
+  if (!admin) {
+    const cached = await prisma.productCache.findMany({
+      where: {
+        shopifyStoreId,
+        ...(query.trim()
+          ? { OR: [{ title: { contains: query.trim(), mode: "insensitive" } }, { variantTitle: { contains: query.trim(), mode: "insensitive" } }, { sku: { contains: query.trim(), mode: "insensitive" } }] }
+          : {}),
+      },
+      orderBy: { title: "asc" },
+      take: 50,
+    });
+    return cached.map((variant: any) => ({ ...variant, price: Number(variant.price), productTitle: variant.title, options: [] }));
+  }
+
+  const response = await admin.graphql(
+    `#graphql
+    query getStoreProducts($query: String) {
+      products(first: 50, query: $query, sortKey: TITLE) {
+        edges {
+          node {
+            id
+            title
+            featuredImage { url }
+            options { name values }
+            variants(first: 50) {
+              edges {
+                node { id title sku price image { url } selectedOptions { name value } }
+              }
+            }
+          }
+        }
+      }
+    }`,
+    { variables: { query: query.trim() || null } }
+  );
+  const { data } = await response.json();
+  const variants: StoreProductVariant[] = [];
+
+  for (const edge of data?.products?.edges ?? []) {
+    const product = edge.node;
+    for (const variantEdge of product.variants?.edges ?? []) {
+      const variant = variantEdge.node;
+      const options = variant.selectedOptions ?? [];
+      await upsertProductCache(shopifyStoreId, {
+        shopifyVariantId: variant.id,
+        shopifyProductId: product.id,
+        title: product.title,
+        variantTitle: variant.title !== "Default Title" ? variant.title : null,
+        sku: variant.sku ?? null,
+        imageUrl: variant.image?.url ?? product.featuredImage?.url ?? null,
+        price: parseFloat(variant.price ?? "0"),
+        options,
+      });
+      variants.push({
+        shopifyVariantId: variant.id,
+        shopifyProductId: product.id,
+        title: product.title,
+        productTitle: product.title,
+        variantTitle: variant.title !== "Default Title" ? variant.title : null,
+        sku: variant.sku ?? null,
+        imageUrl: variant.image?.url ?? product.featuredImage?.url ?? null,
+        price: parseFloat(variant.price ?? "0"),
+        options,
+      });
+    }
+  }
+
+  return variants;
 }
 
 /**

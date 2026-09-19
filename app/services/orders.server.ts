@@ -204,17 +204,45 @@ export async function syncShopifyOrders({ shopifyStoreId, admin }: SyncOrdersInp
   return { success: true, synchronizedCount };
 }
 
+/** Search Shopify directly when the local order snapshot does not contain a match. */
+export async function searchOrSyncOrders({ shopifyStoreId, admin, query }: SyncOrdersInput & { query: string }) {
+  const normalizedQuery = query.trim();
+  if (!admin || !normalizedQuery) return getStoreOrders(shopifyStoreId, 100);
+
+  const response: any = await admin.graphql(
+    `#graphql
+    query searchOrders($query: String!) {
+      orders(first: 50, query: $query, sortKey: CREATED_AT, reverse: true) {
+        edges { node {
+          id name email createdAt displayFinancialStatus displayFulfillmentStatus
+          totalPriceSet { shopMoney { amount currencyCode } }
+          customer { firstName lastName email }
+          lineItems(first: 50) { edges { node { id title quantity originalUnitPriceSet { shopMoney { amount } } variant { id product { id } } } } }
+        } }
+      }
+    }`,
+    { variables: { query: normalizedQuery } }
+  );
+  const { data } = await response.json();
+  for (const edge of data?.orders?.edges ?? []) await upsertOrder(shopifyStoreId, mapGraphqlOrder(edge.node));
+  return getStoreOrders(shopifyStoreId, 100);
+}
+
 /**
  * Retrieves orders for a store, annotated with return/exchange status
  * pulled from ReturnRequest / ExchangeRequest (matched by shopifyOrderId).
  */
-export async function getStoreOrders(shopifyStoreId: string, limit = 50) {
+export async function getStoreOrders(shopifyStoreId: string, limit = 50, admin?: any) {
   const orders = await prisma.order.findMany({
     where: { shopifyStoreId },
     orderBy: { shopifyCreatedAt: "desc" },
     take: limit,
   });
 
+  if (orders.length === 0 && admin) {
+    await syncShopifyOrders({ shopifyStoreId, admin });
+    return getStoreOrders(shopifyStoreId, limit);
+  }
   if (orders.length === 0) return [];
 
   const orderIds = orders.map((o) => o.shopifyOrderId);
