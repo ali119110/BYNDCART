@@ -7,6 +7,10 @@ on:
 
   workflow_dispatch:
 
+permissions:
+  contents: write
+  pull-requests: write
+
 jobs:
   convert-ts-files:
     runs-on: ubuntu-latest

@@ -34,6 +34,8 @@ jobs:
         run: npm run lint
 
       - name: Validate Prisma
+        env:
+          DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
         run: npx prisma generate && npx prisma validate
 
       - name: Build application
