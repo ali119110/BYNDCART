@@ -105,6 +105,7 @@ jobs:
           git push -f origin temp_javascript_updates:javascript_updates
 
       - name: Create Javascript PR
+        continue-on-error: true
         run: |
           gh pr view --json mergedAt -q ".mergedAt" javascript_updates | grep -E "^$" || \
           gh pr create -B javascript -H javascript_updates --title 'Convert template to Javascript' --body 'This is an automated PR that converts the latest changes from Typescript to Javascript'
