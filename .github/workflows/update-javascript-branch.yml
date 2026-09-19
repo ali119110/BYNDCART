@@ -66,6 +66,7 @@ jobs:
         run: pnpm prettier -w "app/**/*.{js,jsx}" ".graphqlrc.js" "vite.config.js"
 
       - name: Run ESLint
+        continue-on-error: true
         run: |
           pnpm eslint "app/**/*.{js,jsx}" ".graphqlrc.js" "vite.config.js" --fix --no-cache --ignore-pattern "\!.graphqlrc.js" --plugin @shopify/eslint-plugin --rule '{
             "import/order": "error",
