@@ -133,70 +133,59 @@ export default function Dashboard() {
   const recentExchanges = loaderData?.recentExchanges ?? [];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "24px", maxWidth: "1240px", margin: "0 auto", padding: "8px 0" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "24px", maxWidth: "1240px", margin: "0 auto", padding: "8px 0", boxSizing: "border-box", overflow: "hidden", width: "100%" }}>
       {/* Header Banner */}
       <div style={{ borderBottom: "1px solid #e2e8f0", paddingBottom: "16px" }}>
         <h1 style={{ fontSize: "24px", fontWeight: "700", color: "#0f172a", margin: 0, fontFamily: "Outfit, sans-serif" }}>
-          BYNDCART Dashboard
+          Dashboard
         </h1>
-        <p style={{ margin: "4px 0 0 0", color: "#64748b", fontSize: "14px" }}>
-          Real-time metrics for {shop}
-        </p>
       </div>
 
       {/* Business KPI Metric Cards */}
       <div>
-        <h2 style={{ fontSize: "16px", fontWeight: 700, color: "#0f172a", marginBottom: "14px", fontFamily: "Outfit, sans-serif" }}>
-          Store Performance Metrics
-        </h2>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: "16px" }}>
-          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "16px" }}>
+          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)", minWidth: 0, boxSizing: "border-box" }}>
             <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Total Store Orders</div>
             <div style={{ fontSize: "28px", fontWeight: 800, color: "#0f172a", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
               {metrics.ordersCount}
             </div>
-            <div style={{ fontSize: "12px", color: "#10b981", fontWeight: 600 }}>Synced from Shopify</div>
           </div>
 
-          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)" }}>
+          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)", minWidth: 0, boxSizing: "border-box" }}>
             <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Return Requests</div>
             <div style={{ fontSize: "28px", fontWeight: 800, color: "#6366f1", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
               {metrics.returnsCount}
             </div>
-            <div style={{ fontSize: "12px", color: "#6366f1", fontWeight: 600 }}>Total returns created</div>
           </div>
 
-          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)" }}>
+          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)", minWidth: 0, boxSizing: "border-box" }}>
             <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Exchange Requests</div>
             <div style={{ fontSize: "28px", fontWeight: 800, color: "#10b981", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
               {metrics.exchangesCount}
             </div>
-            <div style={{ fontSize: "12px", color: "#10b981", fontWeight: 600 }}>Product replacements</div>
           </div>
 
-          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)" }}>
+          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)", minWidth: 0, boxSizing: "border-box" }}>
             <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Registered Customers</div>
             <div style={{ fontSize: "28px", fontWeight: 800, color: "#0f172a", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
               {metrics.customersCount}
             </div>
-            <div style={{ fontSize: "12px", color: "#64748b", fontWeight: 600 }}>Active store profiles</div>
           </div>
 
-          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)" }}>
+          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)", minWidth: 0, boxSizing: "border-box" }}>
             <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Revenue Retained</div>
             <div style={{ fontSize: "28px", fontWeight: 800, color: "#059669", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
               ${metrics.revenueRetained.toFixed(2)}
             </div>
-            <div style={{ fontSize: "12px", color: "#059669", fontWeight: 600 }}>Saved via exchanges</div>
           </div>
         </div>
       </div>
 
       {/* Recent Activity Tables */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(450px, 1fr))", gap: "20px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "20px" }}>
         
         {/* Recent Returns Table */}
-        <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0" }}>
+        <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", minWidth: 0, boxSizing: "border-box", overflow: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
             <h3 style={{ fontSize: "16px", fontWeight: 700, margin: 0, fontFamily: "Outfit, sans-serif" }}>Recent Returns</h3>
             <a href="/app/returns" style={{ color: "#6366f1", fontSize: "13px", fontWeight: 600, textDecoration: "none" }}>View All →</a>
@@ -204,7 +193,7 @@ export default function Dashboard() {
           {recentReturns.length === 0 ? (
             <p style={{ color: "#64748b", fontSize: "13px", margin: "20px 0", textAlign: "center" }}>No returns recorded yet.</p>
           ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #e2e8f0", textAlign: "left" }}>
                   <th style={{ padding: "8px 0", fontSize: "11px", color: "#64748b", textTransform: "uppercase" }}>Order</th>
@@ -239,7 +228,7 @@ export default function Dashboard() {
         </div>
 
         {/* Recent Exchanges Table */}
-        <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0" }}>
+        <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", minWidth: 0, boxSizing: "border-box", overflow: "hidden" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
             <h3 style={{ fontSize: "16px", fontWeight: 700, margin: 0, fontFamily: "Outfit, sans-serif" }}>Recent Exchanges</h3>
             <a href="/app/exchanges" style={{ color: "#6366f1", fontSize: "13px", fontWeight: 600, textDecoration: "none" }}>View All →</a>
@@ -247,7 +236,7 @@ export default function Dashboard() {
           {recentExchanges.length === 0 ? (
             <p style={{ color: "#64748b", fontSize: "13px", margin: "20px 0", textAlign: "center" }}>No exchanges recorded yet.</p>
           ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #e2e8f0", textAlign: "left" }}>
                   <th style={{ padding: "8px 0", fontSize: "11px", color: "#64748b", textTransform: "uppercase" }}>Order</th>
