@@ -33,7 +33,7 @@ export async function requireTenantContext(request: Request): Promise<TenantCont
   try {
     adminContext = await authenticate.admin(request);
   } catch (error) {
-    if (isLoginRedirect(error)) {
+    if (configuredShopDomain() && error instanceof Response) {
       try {
         const configured = await configuredShopContext();
         if (configured) return configured;
@@ -92,12 +92,6 @@ export async function requireTenantContext(request: Request): Promise<TenantCont
     accessToken: session.accessToken,
     admin,
   };
-}
-
-function isLoginRedirect(error: unknown): boolean {
-  if (!(error instanceof Response)) return false;
-  const location = error.headers.get("Location") || "";
-  return error.status >= 300 && error.status < 400 && /auth|login/i.test(location);
 }
 
 async function configuredShopContext(): Promise<TenantContext | null> {
