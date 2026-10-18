@@ -6,7 +6,7 @@ import { login } from "../../shopify.server";
 import styles from "./styles.module.css";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  if (process.env.SKIP_AUTH === "true") {
+  if (process.env.SKIP_AUTH === "true" || process.env.SHOPIFY_SHOP) {
     throw redirect("/app");
   }
   const url = new URL(request.url);

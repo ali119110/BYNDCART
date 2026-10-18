@@ -1,5 +1,6 @@
 import { authenticate } from "../shopify.server";
 import { getStoreByShop } from "./store.server";
+import { configuredShopDomain, createClientCredentialsAdmin, getClientCredentialsToken } from "./shopifyAdmin.server";
 
 export interface TenantContext {
   shop: string;
@@ -26,8 +27,22 @@ export async function requireTenantContext(request: Request): Promise<TenantCont
     };
   }
 
-  // Derive shop name and session from authenticated Shopify request
-  const adminContext = await authenticate.admin(request);
+  // Derive shop name and session from authenticated Shopify request.
+  // A configured private-app shop can load without the standalone login screen.
+  let adminContext: { session: any; admin: any };
+  try {
+    adminContext = await authenticate.admin(request);
+  } catch (error) {
+    if (isLoginRedirect(error)) {
+      try {
+        const configured = await configuredShopContext();
+        if (configured) return configured;
+      } catch (tokenError) {
+        console.warn("[Tenant] Configured shop fallback failed:", tokenError);
+      }
+    }
+    throw error;
+  }
   const { session, admin } = adminContext;
 
   if (!session || !session.shop) {
@@ -76,6 +91,35 @@ export async function requireTenantContext(request: Request): Promise<TenantCont
     session,
     accessToken: session.accessToken,
     admin,
+  };
+}
+
+function isLoginRedirect(error: unknown): boolean {
+  if (!(error instanceof Response)) return false;
+  const location = error.headers.get("Location") || "";
+  return error.status >= 300 && error.status < 400 && /auth|login/i.test(location);
+}
+
+async function configuredShopContext(): Promise<TenantContext | null> {
+  const shop = configuredShopDomain();
+  if (!shop) return null;
+
+  let store = await getStoreByShop(shop);
+  const accessToken = await getClientCredentialsToken(shop);
+  if (!store) {
+    const { registerStore } = await import("./store.server");
+    await registerStore({ shop, accessToken });
+    store = await getStoreByShop(shop);
+  }
+  if (!store) return null;
+
+  return {
+    shop,
+    shopifyStoreId: store.id,
+    merchantId: store.merchantId,
+    session: { shop, accessToken },
+    accessToken,
+    admin: await createClientCredentialsAdmin(shop),
   };
 }
 

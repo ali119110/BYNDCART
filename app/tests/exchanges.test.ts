@@ -61,7 +61,7 @@ let mockLogs: any[] = [];
       name: "Free Plan",
       planCode: "FREE",
       status: "ACTIVE",
-      monthlyReturnLimit: 15,
+      monthlyReturnLimit: 50,
     };
   },
   create: async (args: any) => ({ ...args.data }),
@@ -104,6 +104,7 @@ let mockLogs: any[] = [];
 };
 
 (prisma as any).exchangeRequest = {
+  count: async () => 0,
   create: async (args: any) => {
     const req = {
       id: `ex-${Date.now()}-${Math.random()}`,

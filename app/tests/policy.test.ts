@@ -89,6 +89,8 @@ prisma.order.findFirst = (async (args: any) => {
   );
 }) as any;
 
+prisma.exchangeRequest.count = (async () => 0) as any;
+
 prisma.returnRequest.count = (async (args: any) => {
   const storeId = args?.where?.shopifyStoreId;
   return mockReturnRequests.filter((r) => !storeId || r.shopifyStoreId === storeId).length;

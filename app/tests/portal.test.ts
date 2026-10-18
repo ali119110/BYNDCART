@@ -24,7 +24,7 @@ prisma.$transaction = (async (cb: any) => {
     planCode: "FREE",
     status: "ACTIVE",
     price: 0,
-    monthlyReturnLimit: 15,
+    monthlyReturnLimit: 50,
   }),
   create: async (args: any) => ({ ...args.data }),
   update: async (args: any) => ({ ...args.data }),
@@ -71,6 +71,7 @@ prisma.order.findFirst = (async (args: any) => {
   return null;
 }) as any;
 
+prisma.exchangeRequest.count = (async () => 0) as any;
 prisma.returnRequest.count = (async () => 0) as any;
 
 prisma.returnRequest.create = (async (args: any) => ({

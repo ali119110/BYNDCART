@@ -124,11 +124,11 @@ export default function Settings() {
 
   return (
     <s-page heading="Store Settings & Return Policy Engine">
-      <fetcher.Form method="POST" ref={formRef}>
+      <fetcher.Form method="POST" ref={formRef} style={{ width: "100%", maxWidth: "720px", boxSizing: "border-box" }}>
         <s-section heading="Return Policy Rules">
-          <div style={{ display: "flex", flexDirection: "column", gap: "16px", maxWidth: "540px" }}>
-            <div style={{ display: "flex", gap: "16px" }}>
-              <div style={{ flex: 1 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px", width: "100%", maxWidth: "640px", boxSizing: "border-box" }}>
+            <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
+              <div style={{ flex: "1 1 200px", minWidth: 0 }}>
                 <label style={{ display: "block", fontSize: "13px", marginBottom: "4px" }}>
                   Return Window (days)
                 </label>
@@ -137,11 +137,11 @@ export default function Settings() {
                   name="returnWindowDays"
                   defaultValue={Number(policyRule.returnWindowDays ?? settings.returnWindowDays ?? 30)}
                   min={0}
-                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #c9cccf", borderRadius: "4px" }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #c9cccf", borderRadius: "4px", boxSizing: "border-box" }}
                 />
               </div>
 
-              <div style={{ flex: 1 }}>
+              <div style={{ flex: "1 1 200px", minWidth: 0 }}>
                 <label style={{ display: "block", fontSize: "13px", marginBottom: "4px" }}>
                   Restocking Fee (%)
                 </label>
@@ -151,7 +151,7 @@ export default function Settings() {
                   defaultValue={Number(settings.restockingFeePercent ?? 0)}
                   min={0}
                   step="0.01"
-                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #c9cccf", borderRadius: "4px" }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #c9cccf", borderRadius: "4px", boxSizing: "border-box" }}
                 />
               </div>
             </div>
@@ -237,7 +237,7 @@ export default function Settings() {
         </s-section>
 
         <s-section heading="Exchange Policy Rules">
-          <div style={{ display: "flex", flexDirection: "column", gap: "16px", maxWidth: "540px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px", width: "100%", maxWidth: "640px", boxSizing: "border-box" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <input
                 type="checkbox"
@@ -251,8 +251,8 @@ export default function Settings() {
               </label>
             </div>
 
-            <div style={{ display: "flex", gap: "16px" }}>
-              <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", gap: "16px", flexWrap: "wrap" }}>
+              <div style={{ flex: "1 1 200px", minWidth: 0 }}>
                 <label style={{ display: "block", fontSize: "13px", marginBottom: "4px" }}>
                   Exchange Window (days)
                 </label>
@@ -261,13 +261,13 @@ export default function Settings() {
                   name="exchangeWindowDays"
                   defaultValue={Number(policyRule.exchangeWindowDays ?? settings.exchangeWindowDays ?? 30)}
                   min={0}
-                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #c9cccf", borderRadius: "4px" }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #c9cccf", borderRadius: "4px", boxSizing: "border-box" }}
                 />
               </div>
 
-              <div style={{ flex: 1 }}>
+              <div style={{ flex: "1 1 200px", minWidth: 0 }}>
                 <label style={{ display: "block", fontSize: "13px", marginBottom: "4px" }}>
-                  Exchange Shipping Fee (PKR Rs.)
+                  Exchange Shipping Fee (PKR)
                 </label>
                 <input
                   type="number"
@@ -275,7 +275,7 @@ export default function Settings() {
                   defaultValue={Number(settings.exchangeShippingCost ?? 0)}
                   min={0}
                   step="1"
-                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #c9cccf", borderRadius: "4px" }}
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #c9cccf", borderRadius: "4px", boxSizing: "border-box" }}
                 />
               </div>
             </div>
@@ -283,7 +283,7 @@ export default function Settings() {
         </s-section>
 
         <s-section heading="Fraud & Abuse Risk Policy">
-          <div style={{ display: "flex", flexDirection: "column", gap: "16px", maxWidth: "540px" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "16px", width: "100%", maxWidth: "640px", boxSizing: "border-box" }}>
             <div>
               <label style={{ display: "block", fontSize: "13px", marginBottom: "4px" }}>
                 Lifetime Return Threshold (Count)
@@ -299,7 +299,7 @@ export default function Settings() {
           </div>
         </s-section>
 
-        <div style={{ marginTop: "20px", display: "flex", alignItems: "center", gap: "12px" }}>
+        <div style={{ marginTop: "20px", display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
           <s-button variant="primary" onClick={handleSave} disabled={isSaving}>
             {isSaving ? "Saving..." : "Save Settings & Policy Rules"}
           </s-button>

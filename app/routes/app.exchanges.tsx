@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useLoaderData, useFetcher } from "react-router";
 import type { Route } from "./+types/app.exchanges";
 import { requireTenantContext } from "../utils/tenant.server";
@@ -146,6 +146,15 @@ export default function Exchanges() {
   // Create Exchange Modal State
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [orderSearchQuery, setOrderSearchQuery] = useState("");
+
+  useEffect(() => {
+    const query = orderSearchQuery.trim();
+    if (query.length < 2) return;
+    const timer = setTimeout(() => {
+      orderSearchFetcher.submit({ actionType: "SEARCH_ORDERS", query }, { method: "post" });
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [orderSearchQuery]);
   const [selectedOrderId, setSelectedOrderId] = useState("");
   const [exchangeItems, setExchangeItems] = useState<
     Record<
@@ -641,12 +650,35 @@ export default function Exchanges() {
                                     </div>
                                     <div>
                                       <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Search Replacement Product</label>
-                                      <input type="search" placeholder="Product title, SKU..." onChange={(e) => productSearchFetcher.submit({ actionType: "SEARCH_PRODUCTS", query: e.target.value }, { method: "post" })} style={{ width: "100%", padding: "6px 10px" }} />
-                                      <select value={itemData.replacementVariantId || ""} onChange={(e) => { const product = availableProducts.find((p: any) => p.shopifyVariantId === e.target.value); if (product) { handleItemChange(li.lineItemId, "replacementVariantId", product.shopifyVariantId); handleItemChange(li.lineItemId, "replacementTitle", product.productTitle || product.title); handleItemChange(li.lineItemId, "replacementPrice", Number(product.price)); } }} style={{ width: "100%", padding: "6px 10px", marginTop: "6px" }}>
-                                        <option value="">Select Shopify variant</option>
-                                        {availableProducts.map((product: any) => <option key={product.shopifyVariantId} value={product.shopifyVariantId}>{product.productTitle || product.title} {product.variantTitle ? `- ${product.variantTitle}` : ""} {product.options?.length ? `- ${product.options.map((option: any) => `${option.name}: ${option.value}`).join(", ")}` : ""} {product.sku ? `(${product.sku})` : ""} - PKR {Number(product.price).toFixed(2)}</option>)}
-                                      </select>
-                                      {selectedProduct?.imageUrl && <img src={selectedProduct.imageUrl} alt={selectedProduct.productTitle || selectedProduct.title} style={{ width: "56px", height: "56px", objectFit: "cover", borderRadius: "6px", marginTop: "8px" }} />}
+                                      <input type="search" placeholder="Search Shopify products by title or SKU" onChange={(e) => productSearchFetcher.submit({ actionType: "SEARCH_PRODUCTS", query: e.target.value }, { method: "post" })} style={{ width: "100%", padding: "6px 10px" }} />
+                                      <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "240px", overflowY: "auto", marginTop: "8px" }}>
+                                        {availableProducts.length === 0 ? (
+                                          <span style={{ fontSize: "12px", color: "#64748b" }}>No Shopify products found for this store.</span>
+                                        ) : availableProducts.map((product: any) => {
+                                          const selected = itemData.replacementVariantId === product.shopifyVariantId;
+                                          const variantLabel = [product.variantTitle, ...(product.options || []).map((option: any) => `${option.name}: ${option.value}`)].filter(Boolean).join(" · ");
+                                          return (
+                                            <button
+                                              key={product.shopifyVariantId}
+                                              type="button"
+                                              onClick={() => {
+                                                handleItemChange(li.lineItemId, "replacementVariantId", product.shopifyVariantId);
+                                                handleItemChange(li.lineItemId, "replacementTitle", product.productTitle || product.title);
+                                                handleItemChange(li.lineItemId, "replacementPrice", Number(product.price));
+                                              }}
+                                              style={{ display: "flex", gap: "10px", alignItems: "center", textAlign: "left", padding: "8px", borderRadius: "8px", border: selected ? "2px solid #10b981" : "1px solid #e2e8f0", background: selected ? "#f0fdf4" : "#fff", cursor: "pointer" }}
+                                            >
+                                              {product.imageUrl ? <img src={product.imageUrl} alt="" style={{ width: "48px", height: "48px", objectFit: "cover", borderRadius: "6px" }} /> : <span style={{ width: "48px", height: "48px", borderRadius: "6px", background: "#e2e8f0" }} />}
+                                              <span style={{ minWidth: 0 }}>
+                                                <strong style={{ display: "block", fontSize: "13px" }}>{product.productTitle || product.title}</strong>
+                                                <span style={{ display: "block", fontSize: "12px", color: "#475569" }}>{variantLabel || "Default variant"}{product.sku ? ` · ${product.sku}` : ""}</span>
+                                                <span style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#059669" }}>PKR {Number(product.price).toFixed(2)}</span>
+                                              </span>
+                                            </button>
+                                          );
+                                        })}
+                                      </div>
+                                      {selectedProduct && <span style={{ fontSize: "12px", color: "#166534" }}>Selected: {selectedProduct.productTitle || selectedProduct.title} · PKR {Number(selectedProduct.price).toFixed(2)}</span>}
                                     </div>
                                     <div>
                                       <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Replacement Quantity</label>

@@ -143,7 +143,7 @@ export default function Dashboard() {
 
       {/* Business KPI Metric Cards */}
       <div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "16px" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: "16px", width: "100%" }}>
           <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)", minWidth: 0, boxSizing: "border-box" }}>
             <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Total Store Orders</div>
             <div style={{ fontSize: "28px", fontWeight: 800, color: "#0f172a", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
@@ -175,14 +175,14 @@ export default function Dashboard() {
           <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)", minWidth: 0, boxSizing: "border-box" }}>
             <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Revenue Retained</div>
             <div style={{ fontSize: "28px", fontWeight: 800, color: "#059669", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
-              ${metrics.revenueRetained.toFixed(2)}
+              PKR {metrics.revenueRetained.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>
           </div>
         </div>
       </div>
 
       {/* Recent Activity Tables */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "20px" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: "20px", width: "100%" }}>
         
         {/* Recent Returns Table */}
         <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", minWidth: 0, boxSizing: "border-box", overflow: "hidden" }}>

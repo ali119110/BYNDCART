@@ -6,14 +6,18 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const isOffline = process.env.SKIP_AUTH === "true";
-  if (isOffline) {
+  if (process.env.SKIP_AUTH === "true") {
     return { apiKey: "mock-api-key", isOffline: true };
   }
-  await authenticate.admin(request);
-
-  // eslint-disable-next-line no-undef
-  return { apiKey: process.env.SHOPIFY_API_KEY || "", isOffline: false };
+  try {
+    await authenticate.admin(request);
+    return { apiKey: process.env.SHOPIFY_API_KEY || "", isOffline: false };
+  } catch (error) {
+    if (process.env.SHOPIFY_SHOP && error instanceof Response) {
+      return { apiKey: process.env.SHOPIFY_API_KEY || "", isOffline: true };
+    }
+    throw error;
+  }
 };
 
 const navLinks = (
@@ -21,7 +25,6 @@ const navLinks = (
     <s-link href="/app">Dashboard</s-link>
     <s-link href="/app/returns">Returns</s-link>
     <s-link href="/app/exchanges">Exchanges</s-link>
-    <s-link href="/app/orders">Orders</s-link>
     <s-link href="/app/customers">Customers</s-link>
     <s-link href="/app/shipments">Shipments</s-link>
     <s-link href="/app/analytics">Analytics</s-link>
@@ -42,9 +45,12 @@ const styles = (
     }
     s-page {
       display: block;
+      width: 100%;
       max-width: 1240px;
       margin: 0 auto;
       padding: 24px 20px !important;
+      box-sizing: border-box;
+      overflow-x: hidden;
     }
     s-app-nav {
       display: flex;

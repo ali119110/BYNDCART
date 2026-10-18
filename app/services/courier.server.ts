@@ -371,8 +371,8 @@ export class TCSCourierAdapter implements ICourierAdapter {
   readonly isLive = true;
 
   async testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
-    if (!input.config.apiToken && !input.config.accountNumber) {
-      return { success: false, message: "TCS API key and Cost Center Code are required.", isLive: false };
+    if (!input.config.apiToken || !input.config.accountNumber) {
+      return { success: false, message: "TCS API key and cost center code are both required.", isLive: false };
     }
     return { success: true, message: "TCS Express API connection verified.", isLive: true };
   }
@@ -537,6 +537,44 @@ export class CallCourierAdapter implements ICourierAdapter {
 // -----------------------------------------------------------------------------
 // Courier Registry & Database Configuration Resolvers
 // -----------------------------------------------------------------------------
+export interface CourierSetupField {
+  key: "apiToken" | "accountNumber";
+  label: string;
+  placeholder: string;
+  required: boolean;
+  secret?: boolean;
+}
+
+const COURIER_SETUP: Record<string, { instructions: string; fields: CourierSetupField[] }> = {
+  POSTEX: {
+    instructions: "PostEx needs only the API token from the PostEx merchant portal. Send it as the token header. No account number or cost center is used. Docs: https://api.postex.pk/services/integration/api",
+    fields: [{ key: "apiToken", label: "API Token", placeholder: "PostEx API token", required: true, secret: true }],
+  },
+  LEOPARDS: {
+    instructions: "Leopards needs the merchant API key or password from the Leopards merchant portal. No separate account number is required. Docs: https://merchantapi.leopardscourier.com/api",
+    fields: [{ key: "apiToken", label: "API Key / Password", placeholder: "Leopards API key or password", required: true, secret: true }],
+  },
+  TRAX: {
+    instructions: "Trax needs only the API token from the Trax merchant account. No account number or user ID is required. Docs: https://api.trax.pk/v1",
+    fields: [{ key: "apiToken", label: "API Token", placeholder: "Trax API token", required: true, secret: true }],
+  },
+  TCS: {
+    instructions: "TCS needs both the API key and the cost center code from the TCS corporate account. Docs: https://atnetservices.tcscourier.com/api",
+    fields: [
+      { key: "apiToken", label: "API Key", placeholder: "TCS API key", required: true, secret: true },
+      { key: "accountNumber", label: "Cost Center Code", placeholder: "TCS cost center code", required: true },
+    ],
+  },
+  MNP: {
+    instructions: "M&P needs the API token from the Muller & Phipps merchant account. No separate account number is required.",
+    fields: [{ key: "apiToken", label: "API Token", placeholder: "M&P API token", required: true, secret: true }],
+  },
+  CALLCOURIER: {
+    instructions: "CallCourier needs the login or API credential from the CallCourier merchant account. No account number or user ID field is required.",
+    fields: [{ key: "apiToken", label: "Login / API Credential", placeholder: "CallCourier API credential", required: true, secret: true }],
+  },
+};
+
 export class CourierRegistry {
   private static adapters = new Map<string, ICourierAdapter>();
   private static defaultAdapter: ICourierAdapter = new TCSCourierAdapter();
@@ -557,6 +595,8 @@ export class CourierRegistry {
     description: string;
     cityHubs?: string[];
     isLive: boolean;
+    instructions: string;
+    fields: CourierSetupField[];
   }> {
     return Array.from(this.adapters.values()).map((a) => ({
       providerName: a.providerName,
@@ -564,6 +604,10 @@ export class CourierRegistry {
       description: a.description,
       cityHubs: a.cityHubs,
       isLive: a.isLive,
+      instructions: COURIER_SETUP[a.providerName]?.instructions || a.description,
+      fields: COURIER_SETUP[a.providerName]?.fields || [
+        { key: "apiToken", label: "API Token", placeholder: "API token", required: true, secret: true },
+      ],
     }));
   }
 }

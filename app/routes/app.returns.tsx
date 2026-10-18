@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useLoaderData, useFetcher } from "react-router";
 import type { Route } from "./+types/app.returns";
 import { requireTenantContext } from "../utils/tenant.server";
@@ -161,6 +161,15 @@ export default function Returns() {
     );
     return matchOrderNumber || matchCustomer || matchItem;
   });
+
+  useEffect(() => {
+    const query = orderSearchQuery.trim();
+    if (query.length < 2) return;
+    const timer = setTimeout(() => {
+      orderSearchFetcher.submit({ actionType: "SEARCH_ORDERS", query }, { method: "post" });
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [orderSearchQuery]);
 
   const handleOrderSelect = (ord: any) => {
     setSelectedOrderId(ord.shopifyOrderId);

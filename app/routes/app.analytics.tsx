@@ -212,7 +212,7 @@ export default function Analytics() {
             <s-heading>Top Returned Products</s-heading>
             {topReturnedProducts.length === 0 ? (
               <s-text tone="neutral">
-                No data yet. This populates once orders have synced (Orders page → Sync Orders) and returns exist against them.
+                No data yet. This populates once orders sync from the connected Shopify store and returns exist against them.
               </s-text>
             ) : (
               <s-stack direction="block" gap="small">

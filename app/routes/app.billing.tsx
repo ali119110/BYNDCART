@@ -3,7 +3,7 @@ import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { useLoaderData, useFetcher } from "react-router";
 import { requireTenantContext } from "../services/tenant.server";
 import { getStorePlan, createAppSubscription, cancelAppSubscription } from "../services/billing.server";
-import { PLAN_CONFIGS } from "../services/planGate.server";
+import { PLAN_CONFIGS, planPriceInPKR } from "../services/planGate.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopifyStoreId } = await requireTenantContext(request);
@@ -57,10 +57,10 @@ export default function Billing() {
     name: "Free Plan",
     planCode: "FREE",
     price: 0,
-    currency: "USD",
+    currency: "PKR",
     status: "ACTIVE",
     usageCount: 0,
-    returnsLimit: 15,
+    returnsLimit: 50,
     isUnlimited: false,
   };
 
@@ -75,7 +75,7 @@ export default function Billing() {
 
   const usagePercent = storePlan.isUnlimited
     ? 0
-    : Math.min(100, Math.round(((storePlan.usageCount ?? 0) / Math.max(1, storePlan.returnsLimit ?? 15)) * 100));
+    : Math.min(100, Math.round(((storePlan.usageCount ?? 0) / Math.max(1, storePlan.returnsLimit ?? 50)) * 100));
 
   return (
     <s-page heading="BYNDCART Billing & Subscription Plans">
@@ -100,7 +100,8 @@ export default function Billing() {
               <div>
                 <s-heading>Current Subscription: {storePlan.name ?? "Free Plan"}</s-heading>
                 <p style={{ margin: "4px 0 0 0", color: "#475569" }}>
-                  Status: <strong style={{ color: storePlan.status === "ACTIVE" ? "#008000" : "#d97706" }}>{storePlan.status ?? "ACTIVE"}</strong> — ${(storePlan.price ?? 0).toFixed(2)} / month
+                  Status: <strong style={{ color: storePlan.status === "ACTIVE" ? "#008000" : "#d97706" }}>{storePlan.status ?? "ACTIVE"}</strong> — PKR {planPriceInPKR(storePlan.price ?? 0).toLocaleString()} / month
+                  {(storePlan.price ?? 0) > 0 ? ` (USD ${(storePlan.price ?? 0).toFixed(2)} reference)` : ""}
                 </p>
               </div>
 
@@ -117,9 +118,9 @@ export default function Billing() {
             {/* Monthly Return Usage Bar */}
             <div style={{ marginTop: "12px", background: "#ffffff", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span>Monthly Return Requests Usage</span>
+                <span>Processed orders (returns and exchanges together)</span>
                 <span>
-                  <strong>{storePlan.usageCount}</strong> / {storePlan.isUnlimited ? "Unlimited" : `${storePlan.returnsLimit} returns`}
+                  <strong>{storePlan.usageCount}</strong> / {storePlan.isUnlimited ? "Unlimited" : `${storePlan.returnsLimit} orders`}
                 </span>
               </div>
               {!storePlan.isUnlimited && (
@@ -145,7 +146,7 @@ export default function Billing() {
             Choose the best plan for your store's return volume and reverse logistics requirements.
           </s-paragraph>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "20px", marginTop: "16px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "20px", marginTop: "16px", width: "100%" }}>
             {plans.map((plan) => {
               const isCurrent = storePlan.planCode === plan.code;
 
@@ -171,12 +172,17 @@ export default function Billing() {
                     )}
                     <strong>{plan.name}</strong>
                     <div style={{ fontSize: "24px", fontWeight: "bold", margin: "8px 0" }}>
-                      ${plan.price.toFixed(2)} <span style={{ fontSize: "14px", fontWeight: "normal", color: "#64748b" }}>/ mo</span>
+                      PKR {planPriceInPKR(plan.price).toLocaleString()} <span style={{ fontSize: "14px", fontWeight: "normal", color: "#64748b" }}>/ mo</span>
                     </div>
+                    {plan.price > 0 && (
+                      <div style={{ fontSize: "12px", color: "#64748b", marginBottom: "8px" }}>USD {plan.price.toFixed(2)} reference</div>
+                    )}
                     <s-paragraph tone="neutral">
-                      {plan.monthlyReturnLimit === -1
-                        ? "Unlimited return requests per month"
-                        : `Up to ${plan.monthlyReturnLimit} return requests per month`}
+                      {plan.code === "FREE"
+                        ? "50 orders total, counting returns and exchanges together"
+                        : plan.monthlyReturnLimit === -1
+                        ? "Unlimited processed orders"
+                        : `Up to ${plan.monthlyReturnLimit} processed orders per month, counting returns and exchanges together`}
                     </s-paragraph>
 
                     <div style={{ margin: "12px 0" }}>

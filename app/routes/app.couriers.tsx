@@ -120,12 +120,14 @@ export default function Couriers() {
   };
 
   const handleSave = (providerName: string) => {
+    const adapter = availableAdapters.find((item) => item.providerName === providerName);
+    const usesAccountNumber = (adapter?.fields || []).some((field: { key: string }) => field.key === "accountNumber");
     fetcher.submit(
       {
         intent: "SAVE_CONFIG",
         providerName,
         apiToken: apiTokenInput,
-        accountNumber: accountNumberInput,
+        accountNumber: usesAccountNumber ? accountNumberInput : "",
         enabled: "true",
       },
       { method: "post" }
@@ -176,7 +178,7 @@ export default function Couriers() {
           )}
 
           <s-heading>Integrated Pakistani Couriers</s-heading>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "16px", marginTop: "8px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: "16px", marginTop: "8px", width: "100%" }}>
             {availableAdapters.map((adapter) => {
               const config = configMap.get(adapter.providerName);
               const isConfigured = !!config?.hasToken;
@@ -205,6 +207,9 @@ export default function Couriers() {
                   <div style={{ fontSize: "13px", color: "#5c5f62", margin: "10px 0" }}>
                     {adapter.description}
                   </div>
+                  <div style={{ fontSize: "12px", color: "#475569", margin: "8px 0", lineHeight: 1.45 }}>
+                    {adapter.instructions}
+                  </div>
 
                   {/* DEFAULTS BADGES */}
                   <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", margin: "8px 0" }}>
@@ -220,33 +225,22 @@ export default function Couriers() {
                   {/* CREDENTIAL EDIT MODAL / FORM */}
                   {isEditing ? (
                     <div style={{ backgroundColor: "#fff", padding: "14px", borderRadius: "6px", border: "1px solid #c9cccf", marginTop: "12px" }}>
-                      <h4 style={{ margin: "0 0 10px 0", fontSize: "14px" }}>Configure Credentials ({adapter.providerName})</h4>
+                      <h4 style={{ margin: "0 0 10px 0", fontSize: "14px" }}>Configure {adapter.displayName}</h4>
 
-                      <div style={{ marginBottom: "10px" }}>
-                        <label style={{ display: "block", fontSize: "12px", fontWeight: 500, marginBottom: "4px" }}>
-                          API Token / Key / Password
-                        </label>
-                        <input
-                          type="password"
-                          placeholder={config?.maskedToken || "Enter API Token"}
-                          value={apiTokenInput}
-                          onChange={(e) => setApiTokenInput(e.target.value)}
-                          style={{ width: "100%", padding: "8px", border: "1px solid #c9cccf", borderRadius: "4px", fontSize: "13px" }}
-                        />
-                      </div>
-
-                      <div style={{ marginBottom: "12px" }}>
-                        <label style={{ display: "block", fontSize: "12px", fontWeight: 500, marginBottom: "4px" }}>
-                          Account # / Cost Center / User ID
-                        </label>
-                        <input
-                          type="text"
-                          placeholder="e.g. 98765"
-                          value={accountNumberInput}
-                          onChange={(e) => setAccountNumberInput(e.target.value)}
-                          style={{ width: "100%", padding: "8px", border: "1px solid #c9cccf", borderRadius: "4px", fontSize: "13px" }}
-                        />
-                      </div>
+                      {(adapter.fields || []).map((field: { key: string; label: string; placeholder: string; secret?: boolean }) => (
+                        <div key={field.key} style={{ marginBottom: "10px" }}>
+                          <label style={{ display: "block", fontSize: "12px", fontWeight: 500, marginBottom: "4px" }}>
+                            {field.label}
+                          </label>
+                          <input
+                            type={field.secret ? "password" : "text"}
+                            placeholder={field.key === "apiToken" ? (config?.maskedToken || field.placeholder) : field.placeholder}
+                            value={field.key === "apiToken" ? apiTokenInput : accountNumberInput}
+                            onChange={(e) => field.key === "apiToken" ? setApiTokenInput(e.target.value) : setAccountNumberInput(e.target.value)}
+                            style={{ width: "100%", padding: "8px", border: "1px solid #c9cccf", borderRadius: "4px", fontSize: "13px", boxSizing: "border-box" }}
+                          />
+                        </div>
+                      ))}
 
                       <div style={{ display: "flex", gap: "8px" }}>
                         <button

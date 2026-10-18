@@ -208,7 +208,7 @@ export async function getStoreCustomers(shopifyStoreId: string, search = ""): Pr
           flagged: reasons.length > 0,
           reasons,
         },
-        recentReturns: customerReturns.slice(0, 5).map((r) => ({
+        recentReturns: customerReturns.slice(0, 50).map((r) => ({
           id: r.id,
           orderNumber: r.orderNumber,
           status: r.status,
@@ -220,6 +220,8 @@ export async function getStoreCustomers(shopifyStoreId: string, search = ""): Pr
     const orders = await prisma.order.findMany({
       where: { shopifyStoreId },
       select: { customerEmail: true, customerName: true },
+      orderBy: { shopifyCreatedAt: "desc" },
+      take: 50,
     });
 
     const emailOrderCounts = new Map<string, { name: string; count: number }>();
@@ -264,7 +266,7 @@ export async function getStoreCustomers(shopifyStoreId: string, search = ""): Pr
           flagged: reasons.length > 0,
           reasons,
         },
-        recentReturns: customerReturns.slice(0, 5).map((r) => ({
+        recentReturns: customerReturns.slice(0, 50).map((r) => ({
           id: r.id,
           orderNumber: r.orderNumber,
           status: r.status,

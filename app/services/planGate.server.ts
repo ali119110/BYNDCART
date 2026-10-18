@@ -10,14 +10,20 @@ export interface PlanConfig {
   features: string[];
 }
 
+export const USD_TO_PKR = 280;
+
+export function planPriceInPKR(usdPrice: number): number {
+  return Math.round(usdPrice * USD_TO_PKR);
+}
+
 export const PLAN_CONFIGS: Record<string, PlanConfig> = {
   FREE: {
     code: "FREE",
     name: "Free Plan",
     price: 0,
-    currency: "USD",
+    currency: "PKR",
     interval: "EVERY_30_DAYS",
-    monthlyReturnLimit: 15,
+    monthlyReturnLimit: 50,
     features: ["BASIC_RETURNS", "EXCHANGES"],
   },
   BASIC: {
@@ -58,6 +64,16 @@ export async function getStoreSubscription(shopifyStoreId: string) {
     where: { shopifyStoreId },
   });
 
+  if (sub && sub.planCode === "FREE" && sub.monthlyReturnLimit !== PLAN_CONFIGS.FREE.monthlyReturnLimit) {
+    sub = await prisma.billingSubscription.update({
+      where: { id: sub.id },
+      data: {
+        monthlyReturnLimit: PLAN_CONFIGS.FREE.monthlyReturnLimit,
+        currency: PLAN_CONFIGS.FREE.currency,
+      },
+    });
+  }
+
   if (!sub) {
     sub = await prisma.billingSubscription.create({
       data: {
@@ -87,7 +103,7 @@ export async function getStoreSubscription(shopifyStoreId: string) {
 }
 
 /**
- * Checks usage limit for return requests in the current billing period/month.
+ * Counts returns and exchanges together. Free plan is a lifetime cap of 50 processed orders.
  */
 export async function checkUsageLimit(shopifyStoreId: string) {
   const sub = await getStoreSubscription(shopifyStoreId);
@@ -101,16 +117,14 @@ export async function checkUsageLimit(shopifyStoreId: string) {
   const now = new Date();
   const periodStart = sub.currentPeriodStart || new Date(now.getFullYear(), now.getMonth(), 1);
   const periodEnd = sub.currentPeriodEnd || new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59);
+  const lifetimeCap = sub.planCode === "FREE" || effectiveLimit === PLAN_CONFIGS.FREE.monthlyReturnLimit;
+  const createdAt = lifetimeCap ? undefined : { gte: periodStart, lte: periodEnd };
 
-  const usageCount = await prisma.returnRequest.count({
-    where: {
-      shopifyStoreId,
-      createdAt: {
-        gte: periodStart,
-        lte: periodEnd,
-      },
-    },
-  });
+  const [returnCount, exchangeCount] = await Promise.all([
+    prisma.returnRequest.count({ where: { shopifyStoreId, ...(createdAt ? { createdAt } : {}) } }),
+    prisma.exchangeRequest.count({ where: { shopifyStoreId, ...(createdAt ? { createdAt } : {}) } }),
+  ]);
+  const usageCount = returnCount + exchangeCount;
 
   const isUnlimited = effectiveLimit === -1;
   const allowed = isUnlimited || usageCount < effectiveLimit;
@@ -150,7 +164,7 @@ export async function assertCanCreateReturn(shopifyStoreId: string): Promise<voi
   const usage = await checkUsageLimit(shopifyStoreId);
   if (!usage.allowed) {
     const error = new Error(
-      `Plan usage limit reached. Your ${usage.planName} allows up to ${usage.limit} returns per month (${usage.usageCount} used). Please upgrade your subscription to submit more returns.`
+      `Plan usage limit reached. Your ${usage.planName} allows ${usage.limit} processed orders in total, counting returns and exchanges together (${usage.usageCount} used). Please upgrade your subscription to process more orders.`
     );
     (error as any).code = "PLAN_USAGE_LIMIT_EXCEEDED";
     throw error;

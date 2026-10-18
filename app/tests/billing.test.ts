@@ -27,6 +27,7 @@ let mockMerchants: any[] = [];
 let mockStores: any[] = [];
 let mockSubscriptions: any[] = [];
 let mockReturnRequests: any[] = [];
+let mockExchangeRequests: any[] = [];
 let mockAuditLogs: any[] = [];
 
 // Mock Prisma Methods
@@ -137,6 +138,22 @@ prisma.returnRequest.create = (async (args: any) => {
   return req;
 }) as any;
 
+prisma.exchangeRequest.count = (async (args: any) => {
+  const storeId = args?.where?.shopifyStoreId;
+  return mockExchangeRequests.filter((r) => r.shopifyStoreId === storeId).length;
+}) as any;
+
+prisma.exchangeRequest.create = (async (args: any) => {
+  const req = {
+    id: `exc-uuid-${Date.now()}-${Math.random()}`,
+    ...args.data,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+  mockExchangeRequests.push(req);
+  return req;
+}) as any;
+
 prisma.auditLog.create = (async (args: any) => {
   const log = {
     id: `log-uuid-${Date.now()}-${Math.random()}`,
@@ -169,11 +186,11 @@ test("Billing & PlanGate — Default Free Plan Creation", async () => {
   const sub = await getStoreSubscription(store.id);
   assert.equal(sub.planCode, "FREE");
   assert.equal(sub.status, "ACTIVE");
-  assert.equal(sub.monthlyReturnLimit, 15);
+  assert.equal(sub.monthlyReturnLimit, 50);
 
   const plan = await getStorePlan(store.id);
   assert.equal(plan.planCode, "FREE");
-  assert.equal(plan.returnsLimit, 15);
+  assert.equal(plan.returnsLimit, 50);
   assert.equal(plan.usageCount, 0);
 });
 
@@ -248,8 +265,8 @@ test("Billing & PlanGate — Subscription Cancellation", async () => {
   assert.equal(sub?.status, "CANCELLED");
 
   const usage = await checkUsageLimit(store.id);
-  // Cancelled status restricts limit to Free plan (15)
-  assert.equal(usage.limit, 15);
+  // Cancelled status restricts limit to the free plan cap
+  assert.equal(usage.limit, 50);
 });
 
 test("Billing & PlanGate — Duplicate Billing Request Idempotency", async () => {
@@ -282,11 +299,10 @@ test("Billing & PlanGate — Duplicate Billing Request Idempotency", async () =>
 test("Billing & PlanGate — Monthly Return Usage Limit Enforcement", async () => {
   const { store } = await createTestStore(`test-billing-limit-${Date.now()}.myshopify.com`);
 
-  // Free plan has limit of 15
+  // Free plan allows 50 processed orders in total, returns and exchanges together
   await getStoreSubscription(store.id);
 
-  // Insert 15 return requests in current month
-  for (let i = 1; i <= 15; i++) {
+  for (let i = 1; i <= 49; i++) {
     await prisma.returnRequest.create({
       data: {
         shopifyStoreId: store.id,
@@ -298,8 +314,22 @@ test("Billing & PlanGate — Monthly Return Usage Limit Enforcement", async () =
     });
   }
 
+  const beforeExchange = await checkUsageLimit(store.id);
+  assert.equal(beforeExchange.usageCount, 49);
+  assert.equal(beforeExchange.allowed, true);
+
+  await prisma.exchangeRequest.create({
+    data: {
+      shopifyStoreId: store.id,
+      shopifyOrderId: "gid://shopify/Order/ex_1",
+      orderNumber: "#2001",
+      customerEmail: "exchange@example.com",
+      status: "APPROVED",
+    },
+  });
+
   const usage = await checkUsageLimit(store.id);
-  assert.equal(usage.usageCount, 15);
+  assert.equal(usage.usageCount, 50);
   assert.equal(usage.allowed, false);
 
   // 16th return request must be rejected by assertCanCreateReturn()
@@ -334,7 +364,7 @@ test("Billing & PlanGate — Expired Subscription Fallback", async () => {
   assert.equal(sub.status, "EXPIRED");
 
   const usage = await checkUsageLimit(store.id);
-  assert.equal(usage.limit, 15); // Fallback to Free limit
+  assert.equal(usage.limit, 50);
 });
 
 test("Billing & PlanGate — Cross-Merchant Tenant Isolation", async () => {

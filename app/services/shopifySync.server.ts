@@ -12,20 +12,31 @@ export interface ShopifySyncInput {
 export async function getShopifyAdminClient(shopifyStoreId: string, providedAdmin?: any) {
   if (providedAdmin) return providedAdmin;
 
+  let storeShop: string | null = null;
   try {
     const store = await prisma.shopifyStore.findUnique({
       where: { id: shopifyStoreId },
     });
+    storeShop = store?.shop ?? null;
 
-    if (!store?.shop) {
+    if (!storeShop) {
       console.log(`[ShopifySync] No shop found for store ID ${shopifyStoreId}`);
       return null;
     }
 
     const { unauthenticated } = await import("../shopify.server");
-    const { admin } = await unauthenticated.admin(store.shop);
+    const { admin } = await unauthenticated.admin(storeShop);
     return admin;
   } catch (error) {
+    try {
+      const { configuredShopDomain, createClientCredentialsAdmin } = await import("./shopifyAdmin.server");
+      const configured = configuredShopDomain();
+      if (storeShop && configured && storeShop === configured) {
+        return await createClientCredentialsAdmin(storeShop);
+      }
+    } catch (tokenError) {
+      console.warn(`[ShopifySync] Client credentials fallback failed for store ${shopifyStoreId}:`, tokenError);
+    }
     console.warn(`[ShopifySync] Could not resolve offline admin client for store ${shopifyStoreId}:`, error);
     return null;
   }

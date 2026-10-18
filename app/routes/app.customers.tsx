@@ -16,6 +16,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export default function Customers() {
   const { customers, search } = useLoaderData<typeof loader>();
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerMetrics | null>(null);
+  const [riskFilter, setRiskFilter] = useState("ALL");
+  const visibleCustomers = customers.filter((customer) => {
+    if (riskFilter === "HIGH") return customer.riskFlag?.flagged;
+    if (riskFilter === "LOW") return !customer.riskFlag?.flagged;
+    return true;
+  });
   const [searchParams, setSearchParams] = useSearchParams();
 
   const handleSearchChange = (value: string) => {
@@ -32,6 +38,16 @@ export default function Customers() {
     <s-page heading="Customer Metrics & Return Risk Intelligence">
       <div style={{ marginBottom: "16px" }}>
         <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+          <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", marginBottom: "12px" }}>
+            <label style={{ fontSize: "13px", fontWeight: 600 }}>
+              Risk category{" "}
+              <select value={riskFilter} onChange={(event) => setRiskFilter(event.target.value)} style={{ marginLeft: "8px", padding: "6px 8px" }}>
+                <option value="ALL">All customers</option>
+                <option value="HIGH">High Risk</option>
+                <option value="LOW">Low Risk</option>
+              </select>
+            </label>
+          </div>
           <input
             type="text"
             placeholder="Search by customer name or email..."
@@ -49,7 +65,7 @@ export default function Customers() {
       </div>
 
       <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-        {customers.length === 0 ? (
+        {visibleCustomers.length === 0 ? (
           <s-stack direction="block" gap="base">
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "40px 0", width: "100%" }}>
               <s-heading>No Customer Records Found</s-heading>
@@ -71,7 +87,7 @@ export default function Customers() {
               </tr>
             </thead>
             <tbody>
-              {customers.map((c: CustomerMetrics) => (
+              {visibleCustomers.map((c: CustomerMetrics) => (
                 <tr
                   key={c.id}
                   onClick={() => setSelectedCustomer(c)}
@@ -147,7 +163,7 @@ export default function Customers() {
 
             <div style={{ margin: "16px 0" }}>
               <s-badge tone={selectedCustomer.riskFlag?.flagged ? "critical" : "success"}>
-                {selectedCustomer.riskFlag?.flagged ? "High Risk Account" : "Standard Account"}
+                {selectedCustomer.riskFlag?.flagged ? "High Risk" : "Low Risk"}
               </s-badge>
             </div>
 
@@ -187,7 +203,7 @@ export default function Customers() {
               </s-box>
             </div>
 
-            <s-heading>Recent Returns History</s-heading>
+            <s-heading>Recent history (latest 50)</s-heading>
             <div style={{ marginTop: "8px" }}>
               {(!selectedCustomer.recentReturns || selectedCustomer.recentReturns.length === 0) ? (
                 <s-paragraph tone="neutral">No return requests on file.</s-paragraph>
