@@ -1,4 +1,5 @@
 import prisma from "../db.server";
+export { USD_TO_PKR, planPriceInPKR } from "../utils/pricing";
 
 export interface PlanConfig {
   code: string;
@@ -8,12 +9,6 @@ export interface PlanConfig {
   interval: string;
   monthlyReturnLimit: number;
   features: string[];
-}
-
-export const USD_TO_PKR = 280;
-
-export function planPriceInPKR(usdPrice: number): number {
-  return Math.round(usdPrice * USD_TO_PKR);
 }
 
 export const PLAN_CONFIGS: Record<string, PlanConfig> = {

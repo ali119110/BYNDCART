@@ -3,7 +3,8 @@ import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { useLoaderData, useFetcher } from "react-router";
 import { requireTenantContext } from "../services/tenant.server";
 import { getStorePlan, createAppSubscription, cancelAppSubscription } from "../services/billing.server";
-import { PLAN_CONFIGS, planPriceInPKR } from "../services/planGate.server";
+import { PLAN_CONFIGS } from "../services/planGate.server";
+import { planPriceInPKR } from "../utils/pricing";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopifyStoreId } = await requireTenantContext(request);
