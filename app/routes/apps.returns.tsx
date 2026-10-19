@@ -3,7 +3,7 @@ import { authenticate } from "../shopify.server";
 import { normalizeShopDomain, resolvePortalStore } from "../services/portalAccess.server";
 import { lookupShopperOrder, submitShopperReturn } from "../services/portal.server";
 import { requestCustomerOTP, verifyCustomerOTP } from "../services/otp.server";
-import { CourierRegistry } from "../services/courier.server";
+import { CourierRegistry, getDefaultMerchantCourier, getStoreCourierConfigs } from "../services/courier.server";
 
 /**
  * Shopify app proxy for https://{store}/apps/returns.
@@ -33,6 +33,7 @@ async function renderStorePage(request: Request) {
 
   try {
     const { shopifyStoreId } = await resolvePortalStore(shop);
+    const courierChoices = await loadCourierChoices(shopifyStoreId);
 
     if (intent === "REQUEST_OTP" && form) {
       const orderNumber = String(form.get("orderNumber") || "");
@@ -50,7 +51,7 @@ async function renderStorePage(request: Request) {
         body = codeForm(orderNumber, customerEmail);
       } else {
         const lookup = await lookupShopperOrder(shopifyStoreId, verified.sessionToken);
-        body = orderForm(lookup, verified.sessionToken);
+        body = orderForm(lookup, verified.sessionToken, courierChoices);
       }
     } else if (intent === "SUBMIT_RETURN" && form) {
       const sessionToken = String(form.get("sessionToken") || "");
@@ -66,7 +67,7 @@ async function renderStorePage(request: Request) {
         }));
       if (!items.length) {
         error = "Choose at least one item.";
-        body = orderForm(lookup, sessionToken);
+        body = orderForm(lookup, sessionToken, courierChoices);
       } else {
         const result = await submitShopperReturn({
           shopifyStoreId,
@@ -74,12 +75,16 @@ async function renderStorePage(request: Request) {
           orderNumber: lookup.order.orderNumber,
           customerEmail: lookup.order.customerEmail,
           customerName: lookup.order.customerName,
-          courier: String(form.get("courier") || "TCS"),
+          courier: String(form.get("courier") || courierChoices.defaultCourier),
+          customerPhone: String(form.get("customerPhone") || ""),
+          pickupAddress: String(form.get("pickupAddress") || ""),
           reason: items[0].reason,
           sessionToken,
           items,
         });
-        notice = `Your request ${result.returnRequestId} was received. The store will review it.`;
+        notice = result.bookingConfirmed
+          ? `Return ${result.returnRequestId} was booked with ${result.courier}. Tracking ${result.trackingNumber}.`
+          : `Return request ${result.returnRequestId} was recorded. ${result.bookingMessage}`;
         body = `<p>You can close this page.</p>`;
       }
     }
@@ -114,8 +119,29 @@ function codeForm(orderNumber: string, email: string) {
   </form>`;
 }
 
-function orderForm(lookup: Awaited<ReturnType<typeof lookupShopperOrder>>, sessionToken: string) {
-  const couriers = CourierRegistry.getRegisteredAdapters();
+async function loadCourierChoices(shopifyStoreId: string) {
+  const adapters = CourierRegistry.getRegisteredAdapters();
+  const configs = await getStoreCourierConfigs(shopifyStoreId);
+  const configured = new Map(configs.map((config) => [config.providerName, config]));
+  const defaultCourier = (await getDefaultMerchantCourier(shopifyStoreId, "REVERSE")).providerName;
+  return {
+    defaultCourier,
+    couriers: adapters.map((adapter) => {
+      const config = configured.get(adapter.providerName);
+      return {
+        providerName: adapter.providerName,
+        displayName: adapter.displayName,
+        liveBookingConfigured: Boolean(adapter.isLive && config?.enabled && config?.hasToken),
+      };
+    }),
+  };
+}
+
+function orderForm(
+  lookup: Awaited<ReturnType<typeof lookupShopperOrder>>,
+  sessionToken: string,
+  courierChoices: Awaited<ReturnType<typeof loadCourierChoices>>,
+) {
   const items = lookup.order.lineItems.map((item) => `<label class="item">
       <input type="checkbox" name="lineItemId" value="${escapeHtml(item.lineItemId)}">
       <span>${escapeHtml(item.title)} · Rs. ${Number(item.price).toLocaleString("en-PK")}</span>
@@ -126,7 +152,12 @@ function orderForm(lookup: Awaited<ReturnType<typeof lookupShopperOrder>>, sessi
         <option>Changed Mind</option>
       </select>
     </label>`).join("");
-  const courierOptions = couriers.map((courier) => `<option value="${escapeHtml(courier.providerName)}">${escapeHtml(courier.displayName)}</option>`).join("");
+  const courierOptions = courierChoices.couriers.map((courier) => {
+    const note = courier.liveBookingConfigured ? "PostEx return API; pickup details required" : "Manual airway bill required";
+    const selected = courier.providerName === courierChoices.defaultCourier ? " selected" : "";
+    return `<option value="${escapeHtml(courier.providerName)}"${selected}>${escapeHtml(courier.displayName)} — ${escapeHtml(note)}</option>`;
+  }).join("");
+  const liveCourier = courierChoices.couriers.some((courier) => courier.liveBookingConfigured);
   return `<form method="post" action="/apps/returns">
     <h2>Order ${escapeHtml(lookup.order.orderNumber)}</h2>
     ${lookup.eligible ? "" : `<p class="warn">${escapeHtml(lookup.ineligibilityReason || "This order cannot be requested online.")}</p>`}
@@ -134,6 +165,9 @@ function orderForm(lookup: Awaited<ReturnType<typeof lookupShopperOrder>>, sessi
     <input type="hidden" name="sessionToken" value="${escapeHtml(sessionToken)}">
     ${items}
     <label>Pickup courier<select name="courier">${courierOptions}</select></label>
+    ${liveCourier ? `<label>Pickup phone<input name="customerPhone" type="tel" autocomplete="tel" placeholder="03XX XXXXXXX"></label>
+    <label>Pickup address<input name="pickupAddress" autocomplete="street-address" placeholder="Full address where the parcel will be collected"></label>
+    <p>PostEx booking needs both the phone number and the pickup address. Other couriers are recorded without a live shipment.</p>` : `<p>This store has no live courier booking. The request is recorded and the store adds the airway bill after booking with the carrier.</p>`}
     <button type="submit" ${lookup.eligible ? "" : "disabled"}>Submit request</button>
   </form>`;
 }

@@ -4,16 +4,27 @@ import { useState } from "react";
 import { resolvePortalStore } from "../services/portalAccess.server";
 import { lookupShopperOrder, submitShopperReturn, ShopperOrderLookupResult } from "../services/portal.server";
 import { requestCustomerOTP, verifyCustomerOTP } from "../services/otp.server";
-import { CourierRegistry } from "../services/courier.server";
+import { CourierRegistry, getDefaultMerchantCourier, getStoreCourierConfigs } from "../services/courier.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const { shop, shopifyStoreId } = await resolvePortalStore(url.searchParams.get("shop"));
-  const availableCouriers = CourierRegistry.getRegisteredAdapters();
+  const adapters = CourierRegistry.getRegisteredAdapters();
+  const storeCourierConfigs = await getStoreCourierConfigs(shopifyStoreId);
+  const configuredByProvider = new Map(storeCourierConfigs.map((config) => [config.providerName, config]));
+  const availableCouriers = adapters.map((adapter) => {
+    const config = configuredByProvider.get(adapter.providerName);
+    return {
+      ...adapter,
+      liveBookingConfigured: Boolean(adapter.isLive && config?.enabled && config?.hasToken),
+    };
+  });
+  const defaultReturnCourier = await getDefaultMerchantCourier(shopifyStoreId, "REVERSE");
   return {
     shop,
     shopifyStoreId,
     availableCouriers,
+    defaultReturnCourier: defaultReturnCourier.providerName,
     embedded: url.searchParams.get("embedded") === "1",
     storefrontUrl: `https://${shop}/apps/returns`,
   };
@@ -75,6 +86,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const customerEmail = formData.get("customerEmail") as string;
     const customerName = formData.get("customerName") as string;
     const courier = formData.get("courier") as string;
+    const customerPhone = String(formData.get("customerPhone") || "");
+    const pickupAddress = String(formData.get("pickupAddress") || "");
     const reason = formData.get("reason") as string;
     const itemsJson = formData.get("items") as string;
 
@@ -87,6 +100,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         customerEmail,
         customerName,
         courier,
+        customerPhone,
+        pickupAddress,
         reason,
         sessionToken,
         items,
@@ -102,7 +117,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function ShopperPortal() {
-  const { shop, availableCouriers, embedded, storefrontUrl } = useLoaderData<typeof loader>();
+  const { shop, availableCouriers, defaultReturnCourier, embedded, storefrontUrl } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<any>();
 
   // State management
@@ -112,7 +127,10 @@ export default function ShopperPortal() {
 
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [selectedItems, setSelectedItems] = useState<Record<string, { quantity: number; reason: string }>>({});
-  const [selectedCourier, setSelectedCourier] = useState("TCS");
+  const [selectedCourier, setSelectedCourier] = useState(defaultReturnCourier || "TCS");
+  const [pickupPhoneInput, setPickupPhoneInput] = useState("");
+  const [pickupAddressInput, setPickupAddressInput] = useState("");
+  const [pickupDetailsError, setPickupDetailsError] = useState("");
   const [generalReason, setGeneralReason] = useState("Size Mismatch");
 
   const isSubmitting = fetcher.state !== "idle";
@@ -167,13 +185,20 @@ export default function ShopperPortal() {
 
   const restockingFeePercent = lookupData?.settings?.restockingFeePercent || 0;
   const restockingFeePKR = Math.round((totalSelectedPKR * restockingFeePercent) / 100);
-  const estimatedPickupChargePKR = 200;
-  const netRefundPKR = Math.max(0, totalSelectedPKR - restockingFeePKR - estimatedPickupChargePKR);
+  const selectedCourierHasLiveBooking = Boolean(
+    availableCouriers.find((courier) => courier.providerName === selectedCourier)?.liveBookingConfigured
+  );
+  const netRefundPKR = Math.max(0, totalSelectedPKR - restockingFeePKR);
 
   const selectedItemsCount = Object.keys(selectedItems).length;
 
   const handleSubmitReturn = () => {
     if (!lookupData || !sessionToken) return;
+    if (selectedCourierHasLiveBooking && (!pickupPhoneInput.trim() || !pickupAddressInput.trim())) {
+      setPickupDetailsError("PostEx needs a pickup phone number and a full pickup address before it can book the return.");
+      return;
+    }
+    setPickupDetailsError("");
 
     const payloadItems = Object.entries(selectedItems).map(([lineItemId, data]) => {
       const original = lookupData.order.lineItems.find((li) => li.lineItemId === lineItemId);
@@ -195,6 +220,8 @@ export default function ShopperPortal() {
         customerEmail: lookupData.order.customerEmail,
         customerName: lookupData.order.customerName,
         courier: selectedCourier,
+        customerPhone: pickupPhoneInput,
+        pickupAddress: pickupAddressInput,
         reason: generalReason,
         items: JSON.stringify(payloadItems),
       },
@@ -237,10 +264,14 @@ export default function ShopperPortal() {
 
       {/* SUCCESS CONFIRMATION SCREEN */}
       {returnResult ? (
-        <div style={{ backgroundColor: "#f1f8f5", border: "1px solid #008060", borderRadius: "8px", padding: "32px", textAlign: "center" }}>
-          <h2 style={{ color: "#008060", margin: "0 0 12px 0" }}>Return Booking Confirmed! 🎉</h2>
+        <div style={{ backgroundColor: returnResult.bookingConfirmed ? "#f1f8f5" : "#fff8eb", border: `1px solid ${returnResult.bookingConfirmed ? "#008060" : "#e08c00"}`, borderRadius: "8px", padding: "32px", textAlign: "center" }}>
+          <h2 style={{ color: returnResult.bookingConfirmed ? "#008060" : "#8a6116", margin: "0 0 12px 0" }}>
+            {returnResult.bookingConfirmed ? "Return booking confirmed" : "Return request recorded"}
+          </h2>
           <p style={{ fontSize: "16px", margin: "0 0 24px 0" }}>
-            Your return request for order <strong>{returnResult.orderNumber}</strong> has been successfully booked.
+            {returnResult.bookingConfirmed
+              ? <>The courier confirmed the pickup for order <strong>{returnResult.orderNumber}</strong>.</>
+              : <>Your return request for order <strong>{returnResult.orderNumber}</strong> was recorded. The airway bill is still pending. {returnResult.bookingMessage}</>}
           </p>
 
           <div style={{ backgroundColor: "#fff", padding: "20px", borderRadius: "6px", textAlign: "left", marginBottom: "24px" }}>
@@ -250,9 +281,11 @@ export default function ShopperPortal() {
             <div style={{ marginBottom: "8px" }}>
               <strong>Pickup Courier:</strong> {returnResult.courier}
             </div>
-            <div style={{ marginBottom: "8px" }}>
-              <strong>Consignment Tracking CN:</strong> <span style={{ fontFamily: "monospace", color: "#2c6ecb" }}>{returnResult.trackingNumber}</span>
-            </div>
+            {returnResult.bookingConfirmed && returnResult.trackingNumber && (
+              <div style={{ marginBottom: "8px" }}>
+                <strong>Consignment Tracking CN:</strong> <span style={{ fontFamily: "monospace", color: "#2c6ecb" }}>{returnResult.trackingNumber}</span>
+              </div>
+            )}
             <div style={{ margin: "16px 0 0 0", paddingTop: "12px", borderTop: "1px solid #e1e3e5" }}>
               <strong>Estimated Net Refund (PKR):</strong> <span style={{ fontSize: "18px", color: "#008060", fontWeight: "bold" }}>Rs. {returnResult.summaryPKR?.netRefundAmount?.toLocaleString()}</span>
             </div>
@@ -509,10 +542,52 @@ export default function ShopperPortal() {
                     >
                       {availableCouriers.map((c) => (
                         <option key={c.providerName} value={c.providerName}>
-                          {c.displayName} — Doorstep Collection
+                          {c.displayName} — {c.liveBookingConfigured ? "PostEx return API; pickup details required" : "Manual airway bill required"}
                         </option>
                       ))}
                     </select>
+                    {selectedCourierHasLiveBooking && (
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.5fr", gap: "12px", marginTop: "14px" }}>
+                        <div>
+                          <label htmlFor="pickup-phone" style={{ display: "block", marginBottom: "5px", fontSize: "13px", fontWeight: 600 }}>
+                            Pickup phone number
+                          </label>
+                          <input
+                            id="pickup-phone"
+                            type="tel"
+                            autoComplete="tel"
+                            value={pickupPhoneInput}
+                            onChange={(e) => { setPickupPhoneInput(e.target.value); setPickupDetailsError(""); }}
+                            placeholder="03XX XXXXXXX"
+                            required
+                            style={{ width: "100%", padding: "10px", border: "1px solid #c9cccf", borderRadius: "4px", fontSize: "14px", boxSizing: "border-box" }}
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="pickup-address" style={{ display: "block", marginBottom: "5px", fontSize: "13px", fontWeight: 600 }}>
+                            Pickup address
+                          </label>
+                          <input
+                            id="pickup-address"
+                            type="text"
+                            autoComplete="street-address"
+                            value={pickupAddressInput}
+                            onChange={(e) => { setPickupAddressInput(e.target.value); setPickupDetailsError(""); }}
+                            placeholder="Full address where the parcel will be collected"
+                            required
+                            style={{ width: "100%", padding: "10px", border: "1px solid #c9cccf", borderRadius: "4px", fontSize: "14px", boxSizing: "border-box" }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {!selectedCourierHasLiveBooking && (
+                      <p style={{ fontSize: "12px", color: "#6d7175", margin: "10px 0 0" }}>
+                        BYNDCART will not create a live shipment for this selection. The store will book it with the carrier and add the airway bill manually.
+                      </p>
+                    )}
+                    {pickupDetailsError && (
+                      <p role="alert" style={{ fontSize: "12px", color: "#b42318", margin: "10px 0 0" }}>{pickupDetailsError}</p>
+                    )}
                   </div>
                 )}
               </div>
@@ -534,13 +609,13 @@ export default function ShopperPortal() {
                     </div>
                   )}
 
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px", color: "#d72c0d" }}>
-                    <span>Pickup Shipping Charge:</span>
-                    <span>- Rs. {estimatedPickupChargePKR.toLocaleString()}</span>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px", color: "#6d7175", fontSize: "13px" }}>
+                    <span>Courier pickup charge:</span>
+                    <span>{selectedCourierHasLiveBooking ? "Not quoted by the current integration" : "Not quoted; airway bill entered manually"}</span>
                   </div>
 
                   <div style={{ display: "flex", justifyContent: "space-between", marginTop: "16px", paddingTop: "12px", borderTop: "1px solid #e1e3e5", fontSize: "18px", fontWeight: "bold" }}>
-                    <span>Net Estimated Refund:</span>
+                    <span>Estimated refund before any unquoted courier fee:</span>
                     <span style={{ color: "#008060" }}>Rs. {netRefundPKR.toLocaleString()}</span>
                   </div>
 

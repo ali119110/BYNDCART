@@ -108,13 +108,13 @@ export interface ICourierAdapter {
   getLabel?(trackingNumber: string, credentials?: any): Promise<{ labelUrl: string }>;
 }
 
-export function unconfirmedBooking(courierName: string): LabelResult {
+export function unconfirmedBooking(courierName: string, message?: string): LabelResult {
   return {
     success: false,
     trackingNumber: "",
     courierName,
     isLive: false,
-    error: `${courierName} did not confirm this shipment. Enter the airway bill manually.`,
+    error: message || `${courierName} did not confirm this shipment. Enter the airway bill manually.`,
   };
 }
 
@@ -132,7 +132,7 @@ export function credentialsStored(provider: string): TestConnectionResult {
   return {
     success: true,
     isLive: false,
-    message: `${provider} credentials were saved. Live booking is not verified, so use a manual airway bill until the courier confirms one.`,
+    message: `${provider} credentials were provided, but BYNDCART did not verify a live API connection. This carrier still requires a manually entered airway bill.`,
   };
 }
 
@@ -150,10 +150,11 @@ export function unconfirmedCancel(provider: string) {
 // -----------------------------------------------------------------------------
 export class PostExCourierAdapter implements ICourierAdapter {
   readonly providerName = "POSTEX";
-  readonly displayName = "PostEx Reverse Logistics";
-  readonly description = "Fintech & reverse logistics platform for Shopify merchants in Pakistan";
+  readonly displayName = "PostEx";
+  readonly description = "Live API booking is implemented for return pickups only. Forward/exchange booking and live tracking are not implemented.";
   readonly cityHubs = ["Lahore", "Karachi", "Islamabad", "Faisalabad", "Multan", "Sialkot"];
-  readonly isLive = false;
+  // This flag describes implemented live booking support for the customer return flow, not live tracking.
+  readonly isLive = true;
 
   async testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
     if (!input.config.apiToken || input.config.apiToken.startsWith("invalid")) {
@@ -175,8 +176,17 @@ export class PostExCourierAdapter implements ICourierAdapter {
 
 
   async createReverseShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
-    const apiToken = credentials?.apiToken || process.env.POSTEX_API_TOKEN;
-    if (!apiToken) return unconfirmedBooking(this.providerName);
+    // Never fall back to a global app token: each merchant must book with its own tenant-scoped credential.
+    const apiToken = typeof credentials?.apiToken === "string" ? credentials.apiToken.trim() : "";
+    if (!apiToken) {
+      return unconfirmedBooking(this.providerName, "PostEx is not configured for this store. Save this store's PostEx API token or enter the airway bill manually.");
+    }
+
+    const customerPhone = input.customerPhone?.trim();
+    const pickupAddress = input.originAddress?.address1?.trim();
+    if (!customerPhone || !pickupAddress) {
+      return unconfirmedBooking(this.providerName, "PostEx needs the customer's pickup phone number and pickup address. Add those details or enter the airway bill manually.");
+    }
 
     try {
       const response = await fetch("https://api.postex.pk/services/integration/api/order/create-return-order", {
@@ -188,8 +198,8 @@ export class PostExCourierAdapter implements ICourierAdapter {
         body: JSON.stringify({
           orderRefNum: input.orderNumber,
           customerName: input.customerName || "Customer",
-          customerPhone: input.customerPhone || "03000000000",
-          pickupAddress: input.originAddress?.address1 || "Customer Address",
+          customerPhone,
+          pickupAddress,
           orderType: "RETURN",
         }),
       });
@@ -209,14 +219,14 @@ export class PostExCourierAdapter implements ICourierAdapter {
         }
       }
     } catch {
-      return unconfirmedBooking(this.providerName);
+      return unconfirmedBooking(this.providerName, "PostEx could not be reached. No shipment was confirmed; enter the airway bill manually after booking with PostEx.");
     }
 
-    return unconfirmedBooking(this.providerName);
+    return unconfirmedBooking(this.providerName, "PostEx did not return a confirmed tracking number. No shipment was recorded as booked; enter the airway bill manually after confirming it with PostEx.");
   }
 
-  async createForwardShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
-    return this.createReverseShipment(input, credentials);
+  async createForwardShipment(_input: ShipmentInput, _credentials?: any): Promise<LabelResult> {
+    return unconfirmedBooking(this.providerName, "BYNDCART does not yet implement PostEx forward/exchange booking. Create the shipment in PostEx and enter the airway bill manually.");
   }
 
   async generateReturnLabel(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
@@ -240,7 +250,7 @@ export class PostExCourierAdapter implements ICourierAdapter {
 export class LeopardsCourierAdapter implements ICourierAdapter {
   readonly providerName = "LEOPARDS";
   readonly displayName = "Leopards Courier Service";
-  readonly description = "Nationwide reverse door-step pickup and e-commerce returns";
+  readonly description = "Credentials can be saved, but BYNDCART does not currently book or track Leopards shipments. Enter the airway bill manually.";
   readonly cityHubs = ["Karachi", "Lahore", "Islamabad", "Sialkot", "Gujranwala", "Hyderabad", "Sukkur"];
   readonly isLive = false;
 
@@ -281,7 +291,7 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
 export class TraxCourierAdapter implements ICourierAdapter {
   readonly providerName = "TRAX";
   readonly displayName = "Trax Express Smart Returns";
-  readonly description = "Tech-first Pakistani e-commerce reverse logistics & instant API booking";
+  readonly description = "Credentials can be saved, but Trax booking and tracking are not currently integrated in BYNDCART. Enter the airway bill manually.";
   readonly cityHubs = ["Karachi", "Lahore", "Islamabad", "Faisalabad", "Multan", "Peshawar"];
   readonly isLive = false;
 
@@ -320,7 +330,7 @@ export class TraxCourierAdapter implements ICourierAdapter {
 export class TCSCourierAdapter implements ICourierAdapter {
   readonly providerName = "TCS";
   readonly displayName = "TCS Express Reverse Logistics";
-  readonly description = "Pakistan's largest reverse pickup & nationwide return network";
+  readonly description = "Credentials can be saved, but BYNDCART does not currently book or track TCS shipments. Enter the airway bill manually.";
   readonly cityHubs = ["Karachi", "Lahore", "Islamabad", "Rawalpindi", "Faisalabad", "Multan", "Peshawar", "Quetta"];
   readonly isLive = false;
 
@@ -358,7 +368,7 @@ export class TCSCourierAdapter implements ICourierAdapter {
 export class MnPCourierAdapter implements ICourierAdapter {
   readonly providerName = "MNP";
   readonly displayName = "M&P Courier (Muller & Phipps)";
-  readonly description = "Express reverse logistics & COD return management across Pakistan";
+  readonly description = "Credentials can be saved, but M&P booking and tracking are not currently integrated in BYNDCART. Enter the airway bill manually.";
   readonly cityHubs = ["Karachi", "Lahore", "Islamabad", "Rawalpindi", "Faisalabad", "Sargodha"];
   readonly isLive = false;
 
@@ -396,7 +406,7 @@ export class MnPCourierAdapter implements ICourierAdapter {
 export class CallCourierAdapter implements ICourierAdapter {
   readonly providerName = "CALLCOURIER";
   readonly displayName = "CallCourier Express Returns";
-  readonly description = "Doorstep reverse pickup & return parcel delivery across 500+ PK cities";
+  readonly description = "Credentials can be saved, but CallCourier booking and tracking are not currently integrated in BYNDCART. Enter the airway bill manually.";
   readonly cityHubs = ["Lahore", "Karachi", "Rawalpindi", "Peshawar", "Quetta", "Bahawalpur"];
   readonly isLive = false;
 
@@ -441,34 +451,34 @@ export interface CourierSetupField {
 
 const COURIER_SETUP: Record<string, { instructions: string; fields: CourierSetupField[] }> = {
   POSTEX: {
-    instructions: "PostEx needs only the API token from the PostEx merchant portal. Send it as the token header. No account number or cost center is used. Docs: https://api.postex.pk/services/integration/api",
+    instructions: "PostEx return booking is the only live booking integration currently implemented. Save the store's API token, test the connection, and collect a real pickup phone number and full pickup address. Forward/exchange booking, tracking, and cancellation are not integrated. Vendor docs: https://api.postex.pk/services/integration/api",
     fields: [{ key: "apiToken", label: "API Token", placeholder: "PostEx API token", required: true, secret: true }],
   },
   LEOPARDS: {
-    instructions: "Leopards needs the merchant API key or password from the Leopards merchant portal. No separate account number is required. Docs: https://merchantapi.leopardscourier.com/api",
+    instructions: "Save the Leopards merchant API key/password here for reference. BYNDCART does not currently verify this credential or create/track Leopards shipments; book with Leopards and enter the airway bill manually. Vendor docs: https://merchantapi.leopardscourier.com/api",
     fields: [{ key: "apiToken", label: "API Key / Password", placeholder: "Leopards API key or password", required: true, secret: true }],
   },
   TRAX: {
-    instructions: "Trax needs only the API token from the Trax merchant account. No account number or user ID is required. Docs: https://api.trax.pk/v1",
+    instructions: "Save the Trax merchant API token here for reference. BYNDCART does not currently verify this credential or create/track Trax shipments; book with Trax and enter the airway bill manually. Vendor docs: https://api.trax.pk/v1",
     fields: [{ key: "apiToken", label: "API Token", placeholder: "Trax API token", required: true, secret: true }],
   },
   TCS: {
-    instructions: "TCS needs both the API key and the cost center code from the TCS corporate account. Docs: https://atnetservices.tcscourier.com/api",
+    instructions: "Save the TCS API key and cost center code here for reference. BYNDCART does not currently verify these credentials or create/track TCS shipments; book with TCS and enter the airway bill manually. Vendor docs: https://atnetservices.tcscourier.com/api",
     fields: [
       { key: "apiToken", label: "API Key", placeholder: "TCS API key", required: true, secret: true },
       { key: "accountNumber", label: "Cost Center Code", placeholder: "TCS cost center code", required: true },
     ],
   },
   MNP: {
-    instructions: "M&P needs the API token from the Muller & Phipps merchant account. No separate account number is required.",
+    instructions: "Save the M&P merchant API token here for reference. BYNDCART does not currently verify this credential or create/track M&P shipments; book with M&P and enter the airway bill manually.",
     fields: [{ key: "apiToken", label: "API Token", placeholder: "M&P API token", required: true, secret: true }],
   },
   CALLCOURIER: {
-    instructions: "CallCourier needs the login or API credential from the CallCourier merchant account. No account number or user ID field is required. Booking stays manual until a courier response is verified.",
+    instructions: "Save the CallCourier login/API credential here for reference. BYNDCART does not currently verify this credential or create/track CallCourier shipments; book with CallCourier and enter the airway bill manually.",
     fields: [{ key: "apiToken", label: "Login / API Credential", placeholder: "CallCourier API credential", required: true, secret: true }],
   },
   RIDER: {
-    instructions: "Rider does not have a verified booking API in BYNDCART. Save the account reference if you have one, then enter airway bills manually.",
+    instructions: "No Rider booking or tracking API is connected in BYNDCART. You can save an account reference, then enter airway bills manually.",
     fields: [{ key: "apiToken", label: "Account reference", placeholder: "Rider account reference", required: false, secret: true }],
   },
 };
@@ -483,8 +493,14 @@ export class CourierRegistry {
 
   static get(providerName?: string): ICourierAdapter {
     if (!providerName) return this.defaultAdapter;
-    const adapter = this.adapters.get(providerName.toUpperCase());
-    return adapter || this.defaultAdapter;
+    const normalized = providerName.trim().toUpperCase();
+    const adapter = this.adapters.get(normalized);
+    if (!adapter) throw new Error(`Unsupported courier provider: ${normalized}`);
+    return adapter;
+  }
+
+  static has(providerName: string): boolean {
+    return this.adapters.has(providerName.trim().toUpperCase());
   }
 
   static getRegisteredAdapters(): Array<{
@@ -513,7 +529,7 @@ export class CourierRegistry {
 export class RiderCourierAdapter implements ICourierAdapter {
   readonly providerName = "RIDER";
   readonly displayName = "Rider";
-  readonly description = "Manual reverse pickup. No verified Rider booking API is connected.";
+  readonly description = "Manual airway-bill workflow only. No Rider booking or tracking API is connected in BYNDCART.";
   readonly cityHubs = ["Karachi", "Lahore", "Islamabad"];
   readonly isLive = false;
 
@@ -569,8 +585,12 @@ export async function saveMerchantCourierConfig(
     isDefaultForward?: boolean;
   }
 ) {
-  const normalizedProvider = providerName.toUpperCase();
-  const encryptedApiToken = data.apiToken ? encryptCredential(data.apiToken) : "";
+  const normalizedProvider = providerName.trim().toUpperCase();
+  if (!normalizedProvider || !CourierRegistry.has(normalizedProvider)) {
+    throw new Error("Unsupported courier provider.");
+  }
+  const trimmedToken = data.apiToken?.trim() || "";
+  const encryptedApiToken = trimmedToken ? encryptCredential(trimmedToken) : "";
 
   // If setting default reverse/forward, un-set existing defaults for this store
   if (data.isDefaultReverse) {
@@ -597,7 +617,7 @@ export async function saveMerchantCourierConfig(
       },
     },
     update: {
-      ...(data.apiToken ? { encryptedApiToken } : {}),
+      ...(trimmedToken ? { encryptedApiToken } : {}),
       ...(data.accountNumber !== undefined ? { accountNumber: data.accountNumber } : {}),
       ...(data.additionalConfig !== undefined ? { additionalConfig: data.additionalConfig } : {}),
       ...(data.enabled !== undefined ? { enabled: data.enabled } : {}),

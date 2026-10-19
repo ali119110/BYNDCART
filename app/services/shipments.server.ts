@@ -15,6 +15,7 @@ export interface RegisterShipmentInput {
   orderNumber?: string;
   courier?: string;
   trackingNumber?: string;
+  labelUrl?: string;
   type?: "FORWARD" | "RETURN" | "EXCHANGE";
   returnRequestId?: string;
   exchangeRequestId?: string;
@@ -33,6 +34,47 @@ export interface RegisterShipmentInput {
 export async function registerShipmentTrack(input: RegisterShipmentInput) {
   const shipmentType = input.type || "RETURN";
   const orderNumber = input.orderNumber || input.orderId;
+
+  // Prevent a tracking number from being reused to mutate a shipment owned by another tenant
+  // or a different order/type within this tenant. trackingNumber is unique in the current schema.
+  let existingByTrackingNumber: {
+    id: string;
+    shopifyStoreId: string;
+    shopifyOrderId: string;
+    type: string;
+    courier: string;
+    status: string;
+    labelUrl: string | null;
+    location: string | null;
+  } | null = null;
+  if (input.trackingNumber) {
+    existingByTrackingNumber = await prisma.shipmentTrack.findUnique({
+      where: { trackingNumber: input.trackingNumber },
+      select: {
+        id: true,
+        shopifyStoreId: true,
+        shopifyOrderId: true,
+        type: true,
+        courier: true,
+        status: true,
+        labelUrl: true,
+        location: true,
+      },
+    });
+
+    if (existingByTrackingNumber) {
+      if (existingByTrackingNumber.shopifyStoreId !== input.shopifyStoreId) {
+        throw new Error("This airway bill is already assigned to another shipment.");
+      }
+      if (
+        existingByTrackingNumber.shopifyOrderId !== input.orderId ||
+        existingByTrackingNumber.type !== shipmentType ||
+        (Boolean(input.courier) && existingByTrackingNumber.courier !== input.courier!.trim().toUpperCase())
+      ) {
+        throw new Error("This airway bill is already assigned to a different order or shipment type.");
+      }
+    }
+  }
 
   // 1. Idempotency Check: Prevent duplicate package booking for same order & type
   if (!input.trackingNumber) {
@@ -65,22 +107,26 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
 
 
   // 2. Resolve Courier Adapter (Requested vs Default Merchant Inbound/Outbound)
+  const usesForwardCourier = shipmentType === "FORWARD" || shipmentType === "EXCHANGE";
+  if (input.courier && !CourierRegistry.has(input.courier)) {
+    throw new Error("Unsupported courier provider.");
+  }
   const adapter = input.courier
     ? CourierRegistry.get(input.courier)
-    : await getDefaultMerchantCourier(input.shopifyStoreId, shipmentType === "FORWARD" ? "FORWARD" : "REVERSE");
+    : await getDefaultMerchantCourier(input.shopifyStoreId, usesForwardCourier ? "FORWARD" : "REVERSE");
 
   // Load merchant's decrypted API credentials
   const credentials = await getDecryptedCourierCredentials(input.shopifyStoreId, adapter.providerName);
 
   let trackingNumber = input.trackingNumber;
-  let labelUrl = "";
+  let labelUrl = input.labelUrl?.trim() || existingByTrackingNumber?.labelUrl || "";
   let estimatedDeliveryDate: Date | undefined;
   let labelResult: LabelResult | null = null;
 
   // 3. Generate Reverse or Forward Shipping Label via Courier Adapter if tracking number not provided
   if (!trackingNumber) {
     try {
-      if (shipmentType === "FORWARD") {
+      if (usesForwardCourier) {
         labelResult = await adapter.createForwardShipment(
           {
             shopifyStoreId: input.shopifyStoreId,
@@ -145,8 +191,10 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
 
   // Manual airway bills and confirmed bookings start as LABEL_CREATED.
   // A tracking poll only changes that status when the courier returns a real status.
-  let normalizedStatus: StandardShipmentStatus = "LABEL_CREATED";
-  let location: string | undefined;
+  let normalizedStatus: StandardShipmentStatus = existingByTrackingNumber
+    ? existingByTrackingNumber.status as StandardShipmentStatus
+    : "LABEL_CREATED";
+  let location: string | undefined = existingByTrackingNumber?.location || undefined;
   let rawPayload: any;
   if (!input.trackingNumber && labelResult?.isLive) {
     const trackingInfo = await adapter.trackShipment(trackingNumber!, credentials);
@@ -163,6 +211,7 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
     update: {
       status: normalizedStatus,
       location: location || null,
+      ...(labelUrl ? { labelUrl } : {}),
       updatedAt: new Date(),
     },
     create: {

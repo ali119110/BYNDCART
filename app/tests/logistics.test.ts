@@ -42,6 +42,7 @@ prisma.shipmentTrack.findMany = (async () => [
 ]) as any;
 
 prisma.shipmentTrack.findFirst = (async () => null) as any;
+prisma.shipmentTrack.findUnique = (async () => null) as any;
 prisma.shipmentEvent.create = (async () => ({})) as any;
 prisma.auditLog.create = (async () => ({})) as any;
 

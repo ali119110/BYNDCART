@@ -2,7 +2,7 @@ import prisma from "../db.server";
 import { getSettings } from "./settings.server";
 import { createReturnRequest } from "./returns.server";
 import { registerShipmentTrack } from "./shipments.server";
-import { CourierRegistry } from "./courier.server";
+import { CourierRegistry, getDecryptedCourierCredentials } from "./courier.server";
 import { verifyCustomerSessionToken } from "./otp.server";
 import { checkReturnEligibility, EligibilityResult } from "./policyEngine.server";
 import { assertCanCreateReturn } from "./planGate.server";
@@ -112,6 +112,8 @@ export interface SubmitShopperReturnInput {
   customerEmail: string;
   customerName?: string;
   courier?: string;
+  customerPhone?: string;
+  pickupAddress?: string;
   reason: string;
   customerNote?: string;
   sessionToken: string;
@@ -167,16 +169,25 @@ export async function submitShopperReturn(input: SubmitShopperReturnInput) {
   const restockingFeePercent = Number(settings.restockingFeePercent) || 0;
   const restockingFeePKR = Math.round((totalItemValuePKR * restockingFeePercent) / 100);
 
-  const selectedCourier = input.courier || "TCS";
+  const selectedCourier = (input.courier || "TCS").trim().toUpperCase();
+  if (!CourierRegistry.has(selectedCourier)) {
+    throw new Error("Please select a supported courier.");
+  }
   const adapter = CourierRegistry.get(selectedCourier);
 
-  // Generate return shipping label via selected Pakistani courier
+  // Fetch credentials for this merchant only. Never use another store's or a global app credential.
+  const credentials = await getDecryptedCourierCredentials(input.shopifyStoreId, adapter.providerName);
+
+  // PostEx live return booking requires real pickup details. Other adapters return an
+  // unconfirmed result until a live booking API has been implemented.
   const labelResult = await adapter.generateReturnLabel({
     shopifyStoreId: input.shopifyStoreId,
     orderId: input.shopifyOrderId,
     orderNumber: input.orderNumber,
     customerName: input.customerName,
-  });
+    customerPhone: input.customerPhone?.trim(),
+    originAddress: input.pickupAddress?.trim() ? { address1: input.pickupAddress.trim() } : undefined,
+  }, credentials || undefined);
 
   const bookingConfirmed = Boolean(labelResult.success && labelResult.isLive && labelResult.trackingNumber);
   const pickupFeePKR = bookingConfirmed ? Number(labelResult.costPKR || 0) : 0;

@@ -28,6 +28,7 @@ prisma.storeSettings.findUnique = (async () => ({
   updatedAt: new Date(),
 })) as any;
 
+prisma.shipmentTrack.findUnique = (async () => null) as any;
 prisma.shipmentTrack.upsert = (async (args: any) => ({
   id: "ship-uuid-100",
   shopifyStoreId: args.create.shopifyStoreId,

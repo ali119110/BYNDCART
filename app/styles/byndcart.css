@@ -1704,3 +1704,230 @@ a.bc-btn svg {
     flex-direction: column;
   }
 }
+
+/* Courier configuration and manual airway-bill workflows */
+.bc-couriers-page,
+.bc-shipments-page {
+  max-width: 1180px;
+}
+
+.bc-courier-capability-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 15px 17px;
+  border: 1px solid #dce5ff;
+  border-radius: var(--bc-radius);
+  background: #f5f7ff;
+  color: #354779;
+}
+
+.bc-courier-capability-icon {
+  display: inline-flex;
+  flex: 0 0 22px;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #c9d5ff;
+  border-radius: 50%;
+  color: #334b9a;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.bc-courier-capability-note strong {
+  display: block;
+  margin: 0 0 3px;
+  font-size: 13px;
+  color: #25366a;
+}
+
+.bc-courier-capability-note p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.bc-courier-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: stretch;
+}
+
+.bc-courier-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 12px;
+  padding: 20px;
+}
+
+.bc-courier-card-header,
+.bc-courier-meta,
+.bc-courier-editor-actions,
+.bc-courier-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.bc-courier-card-header {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bc-courier-title-wrap h2 {
+  margin: 0;
+  color: var(--bc-ink);
+  font-size: 16px;
+  line-height: 1.35;
+  font-weight: 700;
+}
+
+.bc-courier-code,
+.bc-courier-masked-token {
+  color: var(--bc-subtle);
+  font-size: 11px;
+}
+
+.bc-courier-description,
+.bc-courier-instructions {
+  margin: 0;
+  color: var(--bc-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.bc-courier-instructions,
+.bc-courier-editor {
+  padding: 12px;
+  border: 1px solid var(--bc-line);
+  border-radius: var(--bc-radius-sm);
+  background: var(--bc-surface-subtle);
+}
+
+.bc-courier-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.bc-courier-capability {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.bc-courier-capability.live { color: var(--bc-ok); }
+.bc-courier-capability.manual { color: var(--bc-warn); }
+
+.bc-courier-capability-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.bc-courier-field,
+.bc-awb-form label,
+.bc-shipments-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  color: var(--bc-ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.bc-courier-field input,
+.bc-awb-form input,
+.bc-awb-form select,
+.bc-shipments-toolbar input,
+.bc-shipments-toolbar select {
+  width: 100%;
+  min-height: var(--bc-control-height);
+  box-sizing: border-box;
+}
+
+.bc-courier-card-actions {
+  margin-top: auto;
+}
+
+.bc-note.warn {
+  border: 1px solid #f1dfab;
+  background: var(--bc-warn-bg);
+  color: var(--bc-warn);
+}
+
+.bc-shipments-toolbar {
+  align-items: flex-end;
+  padding: 16px;
+}
+
+.bc-shipments-toolbar .bc-grow {
+  flex: 1 1 320px;
+}
+
+.bc-type-filter {
+  flex: 0 1 230px;
+  min-width: 180px;
+}
+
+.bc-manual-awb-card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.bc-awb-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: end;
+}
+
+.bc-awb-label-url,
+.bc-awb-submit {
+  grid-column: 1 / -1;
+}
+
+.bc-awb-submit {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 900px) {
+  .bc-courier-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .bc-shipments-toolbar,
+  .bc-manual-awb-card .bc-section-heading,
+  .bc-courier-card-actions,
+  .bc-courier-editor-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .bc-awb-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bc-awb-label-url,
+  .bc-awb-submit,
+  .bc-awb-submit .bc-btn,
+  .bc-courier-card-actions .bc-btn,
+  .bc-courier-editor-actions .bc-btn {
+    grid-column: auto;
+    width: 100%;
+  }
+}

@@ -1,6 +1,6 @@
 # Courier capability matrix
 
-This matrix records what BYNDCART actually does. A saved API token is not a verified booking. No tracking number is created unless the courier response includes one, or a merchant types an airway bill.
+This matrix records what BYNDCART actually does. A saved API token is not a verified booking. No tracking number is created unless the courier response includes one, or a merchant types an airway bill. PostEx live booking is return pickup only and needs the store token plus a real pickup phone and address. Forward and exchange booking are not implemented. See `docs/COURIER_INTEGRATION_STATUS.md`.
 
 | Provider | Credentials can be stored | Live booking in this release | Tracking poll | Cancellation | COD settlement API | Manual airway bill |
 |---|---|---|---|---|---|---|
