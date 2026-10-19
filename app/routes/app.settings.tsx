@@ -8,10 +8,9 @@ import { getReturnPolicyRule, saveReturnPolicyRule } from "../services/policyEng
 // ===== LOADER: Fetch settings & policy rules from database =====
 export async function loader({ request }: Route.LoaderArgs) {
   const { shop, shopifyStoreId, admin } = await requireTenantContext(request);
-  const appApiKey = process.env.SHOPIFY_API_KEY || "252648044723f8dd1b39be58eb856035";
+  const appUrl = (process.env.SHOPIFY_APP_URL || "https://byndcart-production-23f7.up.railway.app").replace(/\/$/, "");
   const portal = {
-    storefrontUrl: `https://${shop}/apps/returns`,
-    footerEditorUrl: `https://${shop}/admin/themes/current/editor?template=index&addAppBlockId=${appApiKey}/returns-link&target=sectionGroup:footer`,
+    storefrontUrl: `${appUrl}/portal?shop=${encodeURIComponent(shop)}`,
   };
 
   try {
@@ -143,28 +142,18 @@ export default function Settings() {
         <div>
           <p className="bc-kicker">Store footer</p>
           <h2 className="bc-title">Let customers request a return or exchange</h2>
-          <p className="bc-muted">Shoppers use your website. They do not open the Shopify admin. Add one link in the footer, then save the theme or the menu.</p>
+          <p className="bc-muted">Paste the customer link into the footer menu. A link like yourstore.com/apps/returns is not a theme page, so the store shows a 404 until you publish the store proxy yourself.</p>
         </div>
 
-        <div className="bc-split">
-          <div className="bc-method">
-            <h3 className="bc-title" style={{ fontSize: "1.05rem" }}>Option 1. Theme block</h3>
-            <ol className="bc-steps">
-              <li>Click <b>Add to footer</b>.</li>
-              <li>In the theme editor, open <b>Footer</b>.</li>
-              <li>Choose <b>Add block</b>, then <b>Apps</b>, then <b>Returns and exchanges</b>.</li>
-              <li>Save the theme.</li>
-            </ol>
-          </div>
-          <div className="bc-method">
-            <h3 className="bc-title" style={{ fontSize: "1.05rem" }}>Option 2. Footer menu</h3>
-            <ol className="bc-steps">
-              <li>In Shopify admin, open <b>Content → Menus</b>.</li>
-              <li>Open the footer menu.</li>
-              <li>Add a menu item named <b>Returns &amp; exchanges</b>.</li>
-              <li>Paste the customer link below, then save the menu.</li>
-            </ol>
-          </div>
+        <div className="bc-method">
+          <h3 className="bc-title" style={{ fontSize: "1.05rem" }}>Add it to the footer menu</h3>
+          <ol className="bc-steps">
+            <li>Copy the customer link below.</li>
+            <li>In Shopify admin, open <b>Content → Menus</b>.</li>
+            <li>Open the footer menu.</li>
+            <li>Add a menu item named <b>Returns &amp; exchanges</b> and paste the full link.</li>
+            <li>Save the menu. This works on a draft theme and on the live theme.</li>
+          </ol>
         </div>
 
         <div className="bc-stack">
@@ -174,11 +163,8 @@ export default function Settings() {
             <button type="button" className="bc-btn" onClick={copyStorefrontLink}>
               {copied ? "Copied" : "Copy link"}
             </button>
-            {portal?.footerEditorUrl && (
-              <a className="bc-btn primary" href={portal.footerEditorUrl} target="_top">Add to footer</a>
-            )}
             {portal?.storefrontUrl && (
-              <a className="bc-btn" href={portal.storefrontUrl} target="_blank" rel="noreferrer">Open customer link</a>
+              <a className="bc-btn primary" href={portal.storefrontUrl} target="_blank" rel="noreferrer">Open customer link</a>
             )}
           </div>
         </div>
