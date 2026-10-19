@@ -156,29 +156,20 @@ export default function Couriers() {
   };
 
   return (
-    <s-page heading="Pakistani Logistics & Courier Manager">
-      <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-        <s-stack direction="block" gap="base">
-          <s-heading>Pakistani Multi-Courier Framework 🇵🇰</s-heading>
-          <s-paragraph>
-            Configure your merchant API credentials for Pakistan&apos;s leading logistics providers. Manage separate default couriers for reverse pickup returns and forward exchange deliveries.
-          </s-paragraph>
+    <div className="bc-page">
+      <header className="bc-header">
+        <div className="bc-header-copy">
+          <p className="bc-eyebrow">LOGISTICS</p>
+          <h1>Couriers</h1>
+          <p>Save each courier&apos;s API credentials and choose the default for returns and for exchanges.</p>
+        </div>
+      </header>
+      <div className="bc-stack">
 
           {/* ACTION ALERT NOTIFICATIONS */}
-          {actionData?.message && (
-            <div style={{ padding: "12px", backgroundColor: "#f4f9f7", border: "1px solid #008060", borderRadius: "6px", color: "#008060", marginBottom: "16px" }}>
-              {actionData.message}
-            </div>
-          )}
-
-          {actionData?.error && (
-            <div style={{ padding: "12px", backgroundColor: "#fdf2f2", border: "1px solid #d72c0d", borderRadius: "6px", color: "#d72c0d", marginBottom: "16px" }}>
-              {actionData.error}
-            </div>
-          )}
-
-          <s-heading>Integrated Pakistani Couriers</s-heading>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: "16px", marginTop: "8px", width: "100%" }}>
+          {actionData?.message && <div className="bc-note ok">{actionData.message}</div>}
+          {actionData?.error && <div className="bc-note bad">{actionData.error}</div>}
+          <div className="bc-split-cards">
             {availableAdapters.map((adapter) => {
               const config = configMap.get(adapter.providerName);
               const isConfigured = !!config?.hasToken;
@@ -187,7 +178,7 @@ export default function Couriers() {
               const isEditing = selectedProvider === adapter.providerName;
 
               return (
-                <s-box key={adapter.providerName} padding="base" borderWidth="base" borderRadius="base" background="subdued">
+                <article key={adapter.providerName} className="bc-card">
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                     <div>
                       <strong>{adapter.displayName}</strong>
@@ -197,9 +188,9 @@ export default function Couriers() {
                     </div>
                     <div>
                       {isConfigured ? (
-                        <s-badge tone="success">Configured</s-badge>
+                        <span className="bc-badge ok">Configured</span>
                       ) : (
-                        <s-badge tone="warning">Not Configured</s-badge>
+                        <span className="bc-badge warn">Not configured</span>
                       )}
                     </div>
                   </div>
@@ -213,8 +204,8 @@ export default function Couriers() {
 
                   {/* DEFAULTS BADGES */}
                   <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", margin: "8px 0" }}>
-                    {isDefaultRev && <s-badge tone="info">Default Reverse (Returns)</s-badge>}
-                    {isDefaultFwd && <s-badge tone="info">Default Forward (Exchanges)</s-badge>}
+                    {isDefaultRev && <span className="bc-badge">Default return</span>}
+                    {isDefaultFwd && <span className="bc-badge">Default exchange</span>}
                     {config?.maskedToken && (
                       <span style={{ fontSize: "12px", color: "#6d7175" }}>
                         Key: <code>{config.maskedToken}</code>
@@ -243,62 +234,29 @@ export default function Couriers() {
                       ))}
 
                       <div style={{ display: "flex", gap: "8px" }}>
-                        <button
-                          onClick={() => handleSave(adapter.providerName)}
-                          disabled={isSubmitting}
-                          style={{ padding: "6px 12px", backgroundColor: "#008060", color: "#fff", border: "none", borderRadius: "4px", fontSize: "12px", fontWeight: "bold", cursor: "pointer" }}
-                        >
-                          Save Credentials
-                        </button>
-                        <button
-                          onClick={() => handleTestConnection(adapter.providerName)}
-                          disabled={isSubmitting}
-                          style={{ padding: "6px 12px", backgroundColor: "#2c6ecb", color: "#fff", border: "none", borderRadius: "4px", fontSize: "12px", fontWeight: "bold", cursor: "pointer" }}
-                        >
-                          Test API
-                        </button>
-                        <button
-                          onClick={() => setSelectedProvider(null)}
-                          style={{ padding: "6px 12px", backgroundColor: "#f1f2f3", border: "1px solid #c9cccf", borderRadius: "4px", fontSize: "12px", cursor: "pointer" }}
-                        >
-                          Cancel
-                        </button>
+                        <button type="button" className="bc-btn primary" onClick={() => handleSave(adapter.providerName)} disabled={isSubmitting}>Save</button>
+                        <button type="button" className="bc-btn" onClick={() => handleTestConnection(adapter.providerName)} disabled={isSubmitting}>Test</button>
+                        <button type="button" className="bc-btn" onClick={() => setSelectedProvider(null)}>Cancel</button>
                       </div>
                     </div>
                   ) : (
                     <div style={{ marginTop: "14px", display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
-                      <button
-                        onClick={() => handleEditClick(adapter)}
-                        style={{ padding: "6px 12px", backgroundColor: "#fff", border: "1px solid #c9cccf", borderRadius: "4px", fontSize: "12px", fontWeight: 500, cursor: "pointer" }}
-                      >
-                        {isConfigured ? "Edit Credentials" : "Add Credentials"}
+                      <button type="button" className="bc-btn" onClick={() => handleEditClick(adapter)}>
+                        {isConfigured ? "Edit credentials" : "Add credentials"}
                       </button>
-
                       {!isDefaultRev && (
-                        <button
-                          onClick={() => handleSetDefaultReverse(adapter.providerName)}
-                          style={{ padding: "6px 10px", backgroundColor: "#f4f9f7", border: "1px solid #008060", color: "#008060", borderRadius: "4px", fontSize: "11px", fontWeight: 500, cursor: "pointer" }}
-                        >
-                          Set Default Reverse
-                        </button>
+                        <button type="button" className="bc-btn" onClick={() => handleSetDefaultReverse(adapter.providerName)}>Default for returns</button>
                       )}
-
                       {!isDefaultFwd && (
-                        <button
-                          onClick={() => handleSetDefaultForward(adapter.providerName)}
-                          style={{ padding: "6px 10px", backgroundColor: "#f4f8fc", border: "1px solid #2c6ecb", color: "#2c6ecb", borderRadius: "4px", fontSize: "11px", fontWeight: 500, cursor: "pointer" }}
-                        >
-                          Set Default Forward
-                        </button>
+                        <button type="button" className="bc-btn" onClick={() => handleSetDefaultForward(adapter.providerName)}>Default for exchanges</button>
                       )}
                     </div>
                   )}
-                </s-box>
+                </article>
               );
             })}
           </div>
-        </s-stack>
-      </s-box>
-    </s-page>
+      </div>
+    </div>
   );
 }

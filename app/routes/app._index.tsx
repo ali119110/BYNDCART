@@ -142,6 +142,21 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 }
 
+function getStatusTone(status: string): "success" | "warning" | "danger" | "neutral" {
+  const normalized = String(status || "").toUpperCase();
+
+  if (["COMPLETED", "APPROVED", "RECEIVED", "DELIVERED", "REFUNDED", "RESOLVED", "FULFILLED"].includes(normalized)) {
+    return "success";
+  }
+  if (["PENDING", "IN_PROGRESS", "PROCESSING", "UNDER_REVIEW", "RETURN_IN_PROGRESS", "OPEN"].includes(normalized)) {
+    return "warning";
+  }
+  if (["FAILED", "REJECTED", "CANCELLED", "CANCELED", "ERROR"].includes(normalized)) {
+    return "danger";
+  }
+  return "neutral";
+}
+
 export default function Dashboard() {
   const loaderData = useLoaderData<typeof loader>();
 
@@ -153,7 +168,6 @@ export default function Dashboard() {
     customersCount: 0,
     revenueRetained: 0,
   };
-
   const operations = loaderData?.operations ?? {
     pendingReturns: 0,
     pendingExchanges: 0,
@@ -166,156 +180,222 @@ export default function Dashboard() {
   const recentReturns = loaderData?.recentReturns ?? [];
   const recentExchanges = loaderData?.recentExchanges ?? [];
 
+  const revenueRetained = `PKR ${Number(metrics.revenueRetained || 0).toLocaleString("en-PK", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "24px", maxWidth: "1240px", margin: "0 auto", padding: "8px 0", boxSizing: "border-box", overflow: "hidden", width: "100%" }}>
-      {/* Header Banner */}
-      <div style={{ borderBottom: "1px solid #e2e8f0", paddingBottom: "16px" }}>
-        <h1 style={{ fontSize: "24px", fontWeight: "700", color: "#0f172a", margin: 0, fontFamily: "Outfit, sans-serif" }}>
-          Dashboard
-        </h1>
-      </div>
-
-      {/* Business KPI Metric Cards */}
-      <div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: "16px", width: "100%" }}>
-          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)", minWidth: 0, boxSizing: "border-box" }}>
-            <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Total Store Orders</div>
-            <div style={{ fontSize: "28px", fontWeight: 800, color: "#0f172a", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
-              {metrics.ordersCount}
-            </div>
-          </div>
-
-          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)", minWidth: 0, boxSizing: "border-box" }}>
-            <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Return Requests</div>
-            <div style={{ fontSize: "28px", fontWeight: 800, color: "#6366f1", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
-              {metrics.returnsCount}
-            </div>
-          </div>
-
-          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)", minWidth: 0, boxSizing: "border-box" }}>
-            <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Exchange Requests</div>
-            <div style={{ fontSize: "28px", fontWeight: 800, color: "#10b981", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
-              {metrics.exchangesCount}
-            </div>
-          </div>
-
-          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)", minWidth: 0, boxSizing: "border-box" }}>
-            <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Registered Customers</div>
-            <div style={{ fontSize: "28px", fontWeight: 800, color: "#0f172a", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
-              {metrics.customersCount}
-            </div>
-          </div>
-
-          <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", boxShadow: "0 4px 6px -1px rgba(0,0,0,0.02)", minWidth: 0, boxSizing: "border-box" }}>
-            <div style={{ fontSize: "13px", color: "#64748b", fontWeight: 600 }}>Revenue Retained</div>
-            <div style={{ fontSize: "28px", fontWeight: 800, color: "#059669", margin: "8px 0", fontFamily: "Outfit, sans-serif" }}>
-              PKR {metrics.revenueRetained.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </div>
-          </div>
-        </div>
-      </div>
-      <div className="bc-grid">
-        <a className="bc-card" href="/app/returns"><span className="bc-muted">Pending returns</span><strong className="bc-metric">{operations.pendingReturns}</strong></a>
-        <a className="bc-card" href="/app/exchanges"><span className="bc-muted">Pending exchanges</span><strong className="bc-metric">{operations.pendingExchanges}</strong></a>
-        <a className="bc-card" href="/app/shipments"><span className="bc-muted">Parcels in transit</span><strong className="bc-metric">{operations.inTransit}</strong></a>
-        <a className="bc-card" href="/app/warehouse"><span className="bc-muted">Awaiting inspection</span><strong className="bc-metric">{operations.awaitingInspection}</strong></a>
-        <a className="bc-card" href="/app/refunds"><span className="bc-muted">Refunds pending</span><strong className="bc-metric">{operations.pendingRefunds}</strong></a>
-        <a className="bc-card" href="/app/reconciliation"><span className="bc-muted">Unreconciled COD</span><strong className="bc-metric">{operations.unreconciledCod}</strong></a>
-        <a className="bc-card" href="/app/shipments"><span className="bc-muted">Failed shipments</span><strong className="bc-metric">{operations.failedShipments}</strong></a>
-      </div>
-
-      {/* Recent Activity Tables */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))", gap: "20px", width: "100%" }}>
-        
-        {/* Recent Returns Table */}
-        <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", minWidth: 0, boxSizing: "border-box", overflow: "hidden" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
-            <h3 style={{ fontSize: "16px", fontWeight: 700, margin: 0, fontFamily: "Outfit, sans-serif" }}>Recent Returns</h3>
-            <a href="/app/returns" style={{ color: "#6366f1", fontSize: "13px", fontWeight: 600, textDecoration: "none" }}>View All →</a>
-          </div>
-          {recentReturns.length === 0 ? (
-            <p style={{ color: "#64748b", fontSize: "13px", margin: "20px 0", textAlign: "center" }}>No returns recorded yet.</p>
-          ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid #e2e8f0", textAlign: "left" }}>
-                  <th style={{ padding: "8px 0", fontSize: "11px", color: "#64748b", textTransform: "uppercase" }}>Order</th>
-                  <th style={{ padding: "8px 0", fontSize: "11px", color: "#64748b", textTransform: "uppercase" }}>Customer</th>
-                  <th style={{ padding: "8px 0", fontSize: "11px", color: "#64748b", textTransform: "uppercase" }}>Status</th>
-                  <th style={{ padding: "8px 0", fontSize: "11px", color: "#64748b", textTransform: "uppercase", textAlign: "right" }}>Date</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentReturns.map((r: any) => (
-                  <tr key={r.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                    <td style={{ padding: "10px 0", fontWeight: 600 }}>{r.orderNumber}</td>
-                    <td style={{ padding: "10px 0", color: "#475569" }}>{r.customerName}</td>
-                    <td style={{ padding: "10px 0" }}>
-                      <span style={{
-                        fontSize: "11px",
-                        fontWeight: "bold",
-                        padding: "2px 8px",
-                        borderRadius: "12px",
-                        backgroundColor: r.status === "PENDING" ? "#fef3c7" : "#dcfce7",
-                        color: r.status === "PENDING" ? "#d97706" : "#15803d",
-                      }}>
-                        {r.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: "10px 0", textAlign: "right", color: "#64748b", fontSize: "12px" }}>{r.date}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+    <main className="bc-page bc-dashboard">
+      <header className="bc-dashboard-header">
+        <div className="bc-dashboard-header-copy">
+          <p className="bc-eyebrow">OPERATIONS OVERVIEW</p>
+          <h1>Dashboard</h1>
+          <p>Monitor store activity, manage open requests, and keep fulfilment moving.</p>
         </div>
 
-        {/* Recent Exchanges Table */}
-        <div style={{ background: "#ffffff", padding: "20px", borderRadius: "16px", border: "1px solid #e2e8f0", minWidth: 0, boxSizing: "border-box", overflow: "hidden" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
-            <h3 style={{ fontSize: "16px", fontWeight: 700, margin: 0, fontFamily: "Outfit, sans-serif" }}>Recent Exchanges</h3>
-            <a href="/app/exchanges" style={{ color: "#6366f1", fontSize: "13px", fontWeight: 600, textDecoration: "none" }}>View All →</a>
+        <div className="bc-dashboard-store" title={shop}>
+          <span className="bc-store-avatar" aria-hidden="true">
+            {String(shop || "S").trim().slice(0, 1).toUpperCase() || "S"}
+          </span>
+          <span className="bc-store-copy">
+            <span className="bc-store-label">STORE</span>
+            <strong>{shop}</strong>
+          </span>
+        </div>
+      </header>
+
+      <section className="bc-dashboard-section" aria-labelledby="bc-overview-title">
+        <div className="bc-dashboard-section-heading">
+          <div>
+            <h2 id="bc-overview-title">Store overview</h2>
+            <p>Your store totals and retained exchange revenue.</p>
           </div>
-          {recentExchanges.length === 0 ? (
-            <p style={{ color: "#64748b", fontSize: "13px", margin: "20px 0", textAlign: "center" }}>No exchanges recorded yet.</p>
-          ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
-              <thead>
-                <tr style={{ borderBottom: "1px solid #e2e8f0", textAlign: "left" }}>
-                  <th style={{ padding: "8px 0", fontSize: "11px", color: "#64748b", textTransform: "uppercase" }}>Order</th>
-                  <th style={{ padding: "8px 0", fontSize: "11px", color: "#64748b", textTransform: "uppercase" }}>Replacement</th>
-                  <th style={{ padding: "8px 0", fontSize: "11px", color: "#64748b", textTransform: "uppercase" }}>Status</th>
-                  <th style={{ padding: "8px 0", fontSize: "11px", color: "#64748b", textTransform: "uppercase", textAlign: "right" }}>Date</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentExchanges.map((e: any) => (
-                  <tr key={e.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                    <td style={{ padding: "10px 0", fontWeight: 600 }}>{e.orderNumber}</td>
-                    <td style={{ padding: "10px 0", color: "#475569" }}>{e.replacementTitle}</td>
-                    <td style={{ padding: "10px 0" }}>
-                      <span style={{
-                        fontSize: "11px",
-                        fontWeight: "bold",
-                        padding: "2px 8px",
-                        borderRadius: "12px",
-                        backgroundColor: e.status === "PENDING" ? "#fef3c7" : "#dcfce7",
-                        color: e.status === "PENDING" ? "#d97706" : "#15803d",
-                      }}>
-                        {e.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: "10px 0", textAlign: "right", color: "#64748b", fontSize: "12px" }}>{e.date}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+          <span className="bc-dashboard-section-tag">SUMMARY</span>
         </div>
 
-      </div>
-    </div>
+        <div className="bc-kpi-grid">
+          <article className="bc-kpi-card bc-kpi-orders">
+            <div className="bc-kpi-card-top">
+              <span className="bc-kpi-label">Total store orders</span>
+              <span className="bc-kpi-marker" aria-hidden="true">#</span>
+            </div>
+            <p className="bc-kpi-value">{metrics.ordersCount.toLocaleString("en-PK")}</p>
+          </article>
+
+          <article className="bc-kpi-card bc-kpi-returns">
+            <div className="bc-kpi-card-top">
+              <span className="bc-kpi-label">Return requests</span>
+              <span className="bc-kpi-marker" aria-hidden="true">↩</span>
+            </div>
+            <p className="bc-kpi-value">{metrics.returnsCount.toLocaleString("en-PK")}</p>
+          </article>
+
+          <article className="bc-kpi-card bc-kpi-exchanges">
+            <div className="bc-kpi-card-top">
+              <span className="bc-kpi-label">Exchange requests</span>
+              <span className="bc-kpi-marker" aria-hidden="true">⇄</span>
+            </div>
+            <p className="bc-kpi-value">{metrics.exchangesCount.toLocaleString("en-PK")}</p>
+          </article>
+
+          <article className="bc-kpi-card bc-kpi-customers">
+            <div className="bc-kpi-card-top">
+              <span className="bc-kpi-label">Registered customers</span>
+              <span className="bc-kpi-marker" aria-hidden="true">◎</span>
+            </div>
+            <p className="bc-kpi-value">{metrics.customersCount.toLocaleString("en-PK")}</p>
+          </article>
+
+          <article className="bc-kpi-card bc-kpi-revenue">
+            <div className="bc-kpi-card-top">
+              <span className="bc-kpi-label">Revenue retained</span>
+              <span className="bc-kpi-marker" aria-hidden="true">₨</span>
+            </div>
+            <p className="bc-kpi-value bc-kpi-value-currency">{revenueRetained}</p>
+          </article>
+        </div>
+      </section>
+
+      <section className="bc-dashboard-section" aria-labelledby="bc-operations-title">
+        <div className="bc-dashboard-section-heading">
+          <div>
+            <h2 id="bc-operations-title">Operational queue</h2>
+            <p>Select a queue to review the records that need attention.</p>
+          </div>
+        </div>
+
+        <div className="bc-ops-grid">
+          <a className={`bc-ops-card ${operations.pendingReturns > 0 ? "has-attention" : ""}`} href="/app/returns">
+            <span className="bc-ops-label">Pending returns</span>
+            <span className="bc-ops-value">{operations.pendingReturns.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
+          </a>
+          <a className={`bc-ops-card ${operations.pendingExchanges > 0 ? "has-attention" : ""}`} href="/app/exchanges">
+            <span className="bc-ops-label">Pending exchanges</span>
+            <span className="bc-ops-value">{operations.pendingExchanges.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
+          </a>
+          <a className="bc-ops-card" href="/app/shipments">
+            <span className="bc-ops-label">Parcels in transit</span>
+            <span className="bc-ops-value">{operations.inTransit.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
+          </a>
+          <a className="bc-ops-card" href="/app/warehouse">
+            <span className="bc-ops-label">Awaiting inspection</span>
+            <span className="bc-ops-value">{operations.awaitingInspection.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
+          </a>
+          <a className={`bc-ops-card ${operations.pendingRefunds > 0 ? "has-attention" : ""}`} href="/app/refunds">
+            <span className="bc-ops-label">Refunds pending</span>
+            <span className="bc-ops-value">{operations.pendingRefunds.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
+          </a>
+          <a className={`bc-ops-card ${operations.unreconciledCod > 0 ? "has-attention" : ""}`} href="/app/reconciliation">
+            <span className="bc-ops-label">Unreconciled COD</span>
+            <span className="bc-ops-value">{operations.unreconciledCod.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
+          </a>
+          <a className={`bc-ops-card ${operations.failedShipments > 0 ? "has-error" : ""}`} href="/app/shipments">
+            <span className="bc-ops-label">Failed shipments</span>
+            <span className="bc-ops-value">{operations.failedShipments.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
+          </a>
+        </div>
+      </section>
+
+      <section className="bc-dashboard-section" aria-labelledby="bc-activity-title">
+        <div className="bc-dashboard-section-heading">
+          <div>
+            <h2 id="bc-activity-title">Recent activity</h2>
+            <p>The latest return and exchange requests recorded in BYNDCART.</p>
+          </div>
+        </div>
+
+        <div className="bc-activity-grid">
+          <section className="bc-activity-card" aria-labelledby="bc-recent-returns-title">
+            <header className="bc-activity-card-header">
+              <div>
+                <h3 id="bc-recent-returns-title">Recent returns</h3>
+                <p>Latest return requests</p>
+              </div>
+              <a className="bc-text-link" href="/app/returns">View all <span aria-hidden="true">→</span></a>
+            </header>
+
+            {recentReturns.length === 0 ? (
+              <div className="bc-empty-state">
+                <span className="bc-empty-symbol" aria-hidden="true">↩</span>
+                <strong>No returns yet</strong>
+                <p>New return requests will appear here.</p>
+              </div>
+            ) : (
+              <div className="bc-dashboard-table-wrap">
+                <table className="bc-dashboard-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Order</th>
+                      <th scope="col">Customer</th>
+                      <th scope="col">Status</th>
+                      <th scope="col" className="bc-date-cell">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentReturns.map((item) => (
+                      <tr key={item.id}>
+                        <td><span className="bc-table-primary">{item.orderNumber || "—"}</span></td>
+                        <td><span className="bc-table-secondary" title={item.customerName || "—"}>{item.customerName || "—"}</span></td>
+                        <td><span className={`bc-status-badge bc-status-${getStatusTone(item.status)}`}>{item.status}</span></td>
+                        <td className="bc-date-cell"><span className="bc-table-date">{item.date}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          <section className="bc-activity-card" aria-labelledby="bc-recent-exchanges-title">
+            <header className="bc-activity-card-header">
+              <div>
+                <h3 id="bc-recent-exchanges-title">Recent exchanges</h3>
+                <p>Latest exchange requests</p>
+              </div>
+              <a className="bc-text-link" href="/app/exchanges">View all <span aria-hidden="true">→</span></a>
+            </header>
+
+            {recentExchanges.length === 0 ? (
+              <div className="bc-empty-state">
+                <span className="bc-empty-symbol" aria-hidden="true">⇄</span>
+                <strong>No exchanges yet</strong>
+                <p>New exchange requests will appear here.</p>
+              </div>
+            ) : (
+              <div className="bc-dashboard-table-wrap">
+                <table className="bc-dashboard-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Order</th>
+                      <th scope="col">Replacement</th>
+                      <th scope="col">Status</th>
+                      <th scope="col" className="bc-date-cell">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentExchanges.map((item) => (
+                      <tr key={item.id}>
+                        <td><span className="bc-table-primary">{item.orderNumber || "—"}</span></td>
+                        <td><span className="bc-table-secondary" title={item.replacementTitle || "—"}>{item.replacementTitle || "—"}</span></td>
+                        <td><span className={`bc-status-badge bc-status-${getStatusTone(item.status)}`}>{item.status}</span></td>
+                        <td className="bc-date-cell"><span className="bc-table-date">{item.date}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </div>
+      </section>
+    </main>
   );
 }
-
-

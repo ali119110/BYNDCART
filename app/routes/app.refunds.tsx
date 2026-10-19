@@ -112,8 +112,11 @@ export default function RefundsPage() {
   return (
     <div className="bc-page">
       <header className="bc-header">
-        <h1>Refunds and evidence</h1>
-        <p>Shopify, store credit, bank transfer, Easypaisa, and JazzCash stay pending until a merchant confirms them. Saving a record does not move money.</p>
+        <div className="bc-header-copy">
+          <p className="bc-eyebrow">PAYMENTS</p>
+          <h1>Refunds and evidence</h1>
+          <p>Shopify, store credit, bank transfer, Easypaisa, and JazzCash stay pending until a merchant confirms them. Saving a record does not move money.</p>
+        </div>
       </header>
       {actionData?.message && <div className={actionData.ok ? "bc-note ok" : "bc-note bad"}>{actionData.message}</div>}
       <div className="bc-split">

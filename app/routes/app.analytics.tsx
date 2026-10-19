@@ -63,65 +63,54 @@ export default function Analytics() {
   const maxProductReturnCount = Math.max(1, ...topReturnedProducts.map((p) => p.returnCount));
 
   return (
-    <s-page heading="Returns & Exchanges Analytics">
-
-      {/* Header Actions */}
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "16px" }}>
-        <exportFetcher.Form method="POST">
-          <s-button variant="primary" type="submit">
-            Export Financial CSV Ledger
-          </s-button>
-        </exportFetcher.Form>
-      </div>
+    <div className="bc-page">
+      <header className="bc-header">
+        <div className="bc-page-bar">
+          <div className="bc-header-copy">
+            <p className="bc-eyebrow">INSIGHTS</p>
+            <h1>Analytics</h1>
+            <p>Return rate, refunds, and the products shoppers send back most often.</p>
+          </div>
+          <exportFetcher.Form method="POST">
+            <button type="submit" className="bc-btn primary">Export CSV</button>
+          </exportFetcher.Form>
+        </div>
+      </header>
 
       {/* Rate Metrics Cards */}
-      <s-section heading="Key Rate & PKR Financial Metrics">
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "16px", marginBottom: "20px" }}>
-          <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-            <s-stack direction="block" gap="small">
-              <s-text tone="neutral">Return Rate</s-text>
-              <s-heading>{summary.returnRate}%</s-heading>
-              <s-text tone="neutral">{summary.totalReturns} of {summary.totalRequests} requests</s-text>
-            </s-stack>
-          </s-box>
-
-          <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-            <s-stack direction="block" gap="small">
-              <s-text tone="neutral">Exchange Rate</s-text>
-              <s-heading>{summary.exchangeRate}%</s-heading>
-              <s-text tone="neutral">{summary.totalExchanges} of {summary.totalRequests} requests</s-text>
-            </s-stack>
-          </s-box>
-
-          <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-            <s-stack direction="block" gap="small">
-              <s-text tone="neutral">Total PKR Refunded</s-text>
-              <s-heading>Rs. {(summary.totalRefunded || 0).toLocaleString()}</s-heading>
-              <s-text tone="neutral">Net payout for completed returns</s-text>
-            </s-stack>
-          </s-box>
-
-          <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-            <s-stack direction="block" gap="small">
-              <s-text tone="neutral">Exchange Price Diff (Completed)</s-text>
-              <s-heading>Rs. {(summary.revenueFromExchanges || 0).toLocaleString()}</s-heading>
-              <s-text tone="neutral">Net revenue retained from exchanges</s-text>
-            </s-stack>
-          </s-box>
-        </div>
-      </s-section>
+      <section className="bc-kpi-grid">
+        <article className="bc-kpi-card bc-kpi-returns">
+          <span className="bc-kpi-label">Return rate</span>
+          <p className="bc-kpi-value">{summary.returnRate}%</p>
+          <p className="bc-muted">{summary.totalReturns} of {summary.totalRequests} requests</p>
+        </article>
+        <article className="bc-kpi-card bc-kpi-exchanges">
+          <span className="bc-kpi-label">Exchange rate</span>
+          <p className="bc-kpi-value">{summary.exchangeRate}%</p>
+          <p className="bc-muted">{summary.totalExchanges} of {summary.totalRequests} requests</p>
+        </article>
+        <article className="bc-kpi-card">
+          <span className="bc-kpi-label">Refunded</span>
+          <p className="bc-kpi-value bc-kpi-value-currency">Rs. {(summary.totalRefunded || 0).toLocaleString()}</p>
+          <p className="bc-muted">Completed return payouts</p>
+        </article>
+        <article className="bc-kpi-card bc-kpi-revenue">
+          <span className="bc-kpi-label">Kept from exchanges</span>
+          <p className="bc-kpi-value bc-kpi-value-currency">Rs. {(summary.revenueFromExchanges || 0).toLocaleString()}</p>
+          <p className="bc-muted">Price difference on completed exchanges</p>
+        </article>
+      </section>
 
       {/* Monthly Return Trend Chart */}
-      <s-section heading="Monthly Returns & Exchanges Trend">
-        <div style={{ marginBottom: "20px" }}>
-          <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-            <s-stack direction="block" gap="base">
-              <s-paragraph>Volume of returns vs exchanges over the last 6 months.</s-paragraph>
-
+      <section className="bc-card">
+        <h2 className="bc-title">Last 6 months</h2>
+        <p className="bc-muted">Volume of returns and exchanges.</p>
+        <div>
               {monthlyTrend.length === 0 ? (
-                <s-text tone="neutral">No data yet.</s-text>
+                <p className="bc-muted">No data yet.</p>
               ) : (
                 <>
+
                   {/* Bar Chart Container */}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", height: "200px", padding: "20px 10px 10px 10px", borderBottom: "2px solid #e1e3e5" }}>
                     {monthlyTrend.map((t, idx) => (
@@ -133,7 +122,7 @@ export default function Analytics() {
                             style={{
                               width: "16px",
                               height: `${(t.returnsCount / maxTrendValue) * 100}%`,
-                              background: "#5c6ac4",
+                              background: "#263f8c",
                               borderRadius: "2px 2px 0 0"
                             }}
                             title={`Returns: ${t.returnsCount}`}
@@ -144,7 +133,7 @@ export default function Analytics() {
                             style={{
                               width: "16px",
                               height: `${(t.exchangesCount / maxTrendValue) * 100}%`,
-                              background: "#008060",
+                              background: "#16866d",
                               borderRadius: "2px 2px 0 0"
                             }}
                             title={`Exchanges: ${t.exchangesCount}`}
@@ -159,31 +148,28 @@ export default function Analytics() {
                   {/* Chart Legend */}
                   <div style={{ display: "flex", gap: "16px", fontSize: "13px", justifyContent: "center", marginTop: "8px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                      <div style={{ width: "12px", height: "12px", background: "#5c6ac4", borderRadius: "2px" }} />
+                      <div style={{ width: "12px", height: "12px", background: "#263f8c", borderRadius: "2px" }} />
                       <span>Returns</span>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                      <div style={{ width: "12px", height: "12px", background: "#008060", borderRadius: "2px" }} />
+                      <div style={{ width: "12px", height: "12px", background: "#16866d", borderRadius: "2px" }} />
                       <span>Exchanges</span>
                     </div>
                   </div>
                 </>
               )}
 
-            </s-stack>
-          </s-box>
         </div>
-      </s-section>
+      </section>
 
       {/* Return Reasons Breakdown + Top Returned Products */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: "16px" }}>
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-stack direction="block" gap="base">
-            <s-heading>Return Reasons Analysis</s-heading>
+      <div className="bc-split">
+        <section className="bc-card">
+            <h2 className="bc-title">Return reasons</h2>
             {returnReasons.length === 0 ? (
-              <s-text tone="neutral">No returns recorded yet.</s-text>
+              <p className="bc-muted">No returns recorded yet.</p>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <table className="bc-table">
                 <thead>
                   <tr style={{ borderBottom: "1px solid #f1f2f3", textAlign: "left" }}>
                     <th style={{ padding: "8px 0" }}><s-text tone="neutral">Reason</s-text></th>
@@ -204,18 +190,14 @@ export default function Analytics() {
                 </tbody>
               </table>
             )}
-          </s-stack>
-        </s-box>
+        </section>
 
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-stack direction="block" gap="base">
-            <s-heading>Top Returned Products</s-heading>
+        <section className="bc-card">
+            <h2 className="bc-title">Most returned products</h2>
             {topReturnedProducts.length === 0 ? (
-              <s-text tone="neutral">
-                No data yet. This populates once orders sync from the connected Shopify store and returns exist against them.
-              </s-text>
+              <p className="bc-muted">This fills in after orders sync and returns exist.</p>
             ) : (
-              <s-stack direction="block" gap="small">
+              <div className="bc-stack">
                 {topReturnedProducts.map((p, idx) => (
                   <div key={idx} style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
@@ -227,19 +209,17 @@ export default function Analytics() {
                         style={{
                           width: `${(p.returnCount / maxProductReturnCount) * 100}%`,
                           height: "100%",
-                          background: "#5c6ac4",
+                          background: "#263f8c",
                           borderRadius: "3px",
                         }}
                       />
                     </div>
                   </div>
                 ))}
-              </s-stack>
+              </div>
             )}
-          </s-stack>
-        </s-box>
+        </section>
       </div>
-
-    </s-page>
+    </div>
   );
 }

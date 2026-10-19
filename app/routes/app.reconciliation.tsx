@@ -85,8 +85,11 @@ export default function ReconciliationPage() {
   return (
     <div className="bc-page">
       <header className="bc-header">
-        <h1>COD reconciliation</h1>
-        <p>Expected, imported, matched, disputed, and merchant-confirmed settlements. No courier settlement API is connected, so imports and manual entries are the source of truth.</p>
+        <div className="bc-header-copy">
+          <p className="bc-eyebrow">PAYMENTS</p>
+          <h1>COD reconciliation</h1>
+          <p>Expected, imported, matched, disputed, and merchant-confirmed settlements. Imports and manual entries are the source of truth.</p>
+        </div>
       </header>
       {actionData?.message && <div className={actionData.ok ? "bc-note ok" : "bc-note bad"}>{actionData.message}</div>}
       <div className="bc-split">

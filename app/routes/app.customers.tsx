@@ -35,55 +35,51 @@ export default function Customers() {
   };
 
   return (
-    <s-page heading="Customer Metrics & Return Risk Intelligence">
-      <div style={{ marginBottom: "16px" }}>
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", marginBottom: "12px" }}>
-            <label style={{ fontSize: "13px", fontWeight: 600 }}>
-              Risk category{" "}
-              <select value={riskFilter} onChange={(event) => setRiskFilter(event.target.value)} style={{ marginLeft: "8px", padding: "6px 8px" }}>
-                <option value="ALL">All customers</option>
-                <option value="HIGH">High Risk</option>
-                <option value="LOW">Low Risk</option>
-              </select>
-            </label>
-          </div>
+    <div className="bc-page">
+      <header className="bc-header">
+        <div className="bc-header-copy">
+          <p className="bc-eyebrow">CUSTOMERS</p>
+          <h1>Customer risk</h1>
+          <p>See order history, refund totals, and which shoppers are flagged for review.</p>
+        </div>
+      </header>
+      <section className="bc-card bc-toolbar">
+        <label className="bc-field-label">
+          Risk
+          <select value={riskFilter} onChange={(event) => setRiskFilter(event.target.value)}>
+            <option value="ALL">All customers</option>
+            <option value="HIGH">High risk</option>
+            <option value="LOW">Low risk</option>
+          </select>
+        </label>
+        <div className="bc-grow">
           <input
             type="text"
-            placeholder="Search by customer name or email..."
+            placeholder="Search by customer name or email"
             defaultValue={search}
             onChange={(e) => handleSearchChange(e.target.value)}
-            style={{
-              width: "100%",
-              padding: "8px 12px",
-              border: "1px solid #c9cccf",
-              borderRadius: "4px",
-              fontSize: "14px",
-            }}
           />
-        </s-box>
-      </div>
+        </div>
+      </section>
 
-      <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+      <section className="bc-table-wrap">
         {visibleCustomers.length === 0 ? (
-          <s-stack direction="block" gap="base">
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "40px 0", width: "100%" }}>
-              <s-heading>No Customer Records Found</s-heading>
-              <s-paragraph tone="neutral">Customer profiles compile automatically as orders and return requests are received.</s-paragraph>
-            </div>
-          </s-stack>
+          <div className="bc-empty-state">
+            <strong>No customers yet</strong>
+            <p>Profiles appear after orders and return requests are recorded.</p>
+          </div>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+          <table className="bc-table">
             <thead>
-              <tr style={{ borderBottom: "1px solid #e1e3e5" }}>
-                <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Customer</s-text></th>
-                <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Orders</s-text></th>
-                <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Returns</s-text></th>
-                <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Exchanges</s-text></th>
-                <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Total Refunded (PKR)</s-text></th>
-                <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Return Rate</s-text></th>
-                <th style={{ padding: "12px 8px" }}><s-text tone="neutral">Risk Profile</s-text></th>
-                <th style={{ padding: "12px 8px", textAlign: "right" }}><s-text tone="neutral">Action</s-text></th>
+              <tr>
+                <th>Customer</th>
+                <th>Orders</th>
+                <th>Returns</th>
+                <th>Exchanges</th>
+                <th>Refunded</th>
+                <th>Return rate</th>
+                <th>Risk</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -108,24 +104,22 @@ export default function Customers() {
                     <strong>Rs. {(c.totalRefundedPKR ?? 0).toLocaleString()}</strong>
                   </td>
                   <td style={{ padding: "12px 8px" }}>
-                    <s-text tone={parseFloat(c.returnRate) > 30 ? "critical" : "neutral"}>
-                      {c.returnRate}
-                    </s-text>
+                    <span className={parseFloat(c.returnRate) > 30 ? "bc-badge bad" : "bc-badge"}>{c.returnRate}</span>
                   </td>
                   <td style={{ padding: "12px 8px" }}>
-                    <s-badge tone={c.riskFlag?.flagged ? "critical" : "success"}>
-                      {c.riskFlag?.flagged ? "High Return Risk" : "Low Risk"}
-                    </s-badge>
+                    <span className={c.riskFlag?.flagged ? "bc-badge bad" : "bc-badge ok"}>
+                      {c.riskFlag?.flagged ? "High risk" : "Low risk"}
+                    </span>
                   </td>
                   <td style={{ padding: "12px 8px", textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
-                    <s-button onClick={() => setSelectedCustomer(c)}>View Details</s-button>
+                    <button type="button" className="bc-btn" onClick={() => setSelectedCustomer(c)}>View</button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
-      </s-box>
+      </section>
 
       {/* Customer Detail Drawer */}
       {selectedCustomer && (
@@ -155,22 +149,21 @@ export default function Customers() {
             onClick={(e) => e.stopPropagation()}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
-              <s-heading>{selectedCustomer.name}</s-heading>
-              <s-button onClick={() => setSelectedCustomer(null)}>Close</s-button>
+              <h2 className="bc-title">{selectedCustomer.name}</h2>
+              <button type="button" className="bc-btn" onClick={() => setSelectedCustomer(null)}>Close</button>
             </div>
 
-            <s-paragraph tone="neutral">{selectedCustomer.email}</s-paragraph>
-
+            <p className="bc-muted">{selectedCustomer.email}</p>
             <div style={{ margin: "16px 0" }}>
-              <s-badge tone={selectedCustomer.riskFlag?.flagged ? "critical" : "success"}>
-                {selectedCustomer.riskFlag?.flagged ? "High Risk" : "Low Risk"}
-              </s-badge>
+              <span className={selectedCustomer.riskFlag?.flagged ? "bc-badge bad" : "bc-badge ok"}>
+                {selectedCustomer.riskFlag?.flagged ? "High risk" : "Low risk"}
+              </span>
             </div>
 
             {selectedCustomer.riskFlag?.reasons && selectedCustomer.riskFlag.reasons.length > 0 && (
               <div style={{ marginBottom: "16px" }}>
-                <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-                  <strong>Risk Flag Reasons:</strong>
+                <div className="bc-note bad">
+                  <span>Review reasons</span>
                   <ul style={{ margin: "8px 0 0 16px", padding: 0 }}>
                     {selectedCustomer.riskFlag.reasons.map((r: string, i: number) => (
                       <li key={i} style={{ fontSize: "13px", color: "#d72c0d" }}>
@@ -178,41 +171,27 @@ export default function Customers() {
                       </li>
                     ))}
                   </ul>
-                </s-box>
+                </div>
               </div>
             )}
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "20px" }}>
-              <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-                <div style={{ fontSize: "12px", color: "#6d7175" }}>Total Orders</div>
-                <div style={{ fontSize: "18px", fontWeight: "bold" }}>{selectedCustomer.ordersCount}</div>
-              </s-box>
-              <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-                <div style={{ fontSize: "12px", color: "#6d7175" }}>Return Rate</div>
-                <div style={{ fontSize: "18px", fontWeight: "bold" }}>{selectedCustomer.returnRate}</div>
-              </s-box>
-              <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-                <div style={{ fontSize: "12px", color: "#6d7175" }}>Returns / Exchanges</div>
-                <div style={{ fontSize: "18px", fontWeight: "bold" }}>
-                  {selectedCustomer.returnsCount} / {selectedCustomer.exchangesCount}
-                </div>
-              </s-box>
-              <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-                <div style={{ fontSize: "12px", color: "#6d7175" }}>Total Refunded</div>
-                <div style={{ fontSize: "18px", fontWeight: "bold" }}>Rs. {(selectedCustomer.totalRefundedPKR ?? 0).toLocaleString()}</div>
-              </s-box>
+              <article className="bc-kpi-card"><span className="bc-kpi-label">Orders</span><p className="bc-kpi-value">{selectedCustomer.ordersCount}</p></article>
+              <article className="bc-kpi-card"><span className="bc-kpi-label">Return rate</span><p className="bc-kpi-value">{selectedCustomer.returnRate}</p></article>
+              <article className="bc-kpi-card"><span className="bc-kpi-label">Returns / exchanges</span><p className="bc-kpi-value">{selectedCustomer.returnsCount} / {selectedCustomer.exchangesCount}</p></article>
+              <article className="bc-kpi-card"><span className="bc-kpi-label">Refunded</span><p className="bc-kpi-value">Rs. {(selectedCustomer.totalRefundedPKR ?? 0).toLocaleString()}</p></article>
             </div>
 
-            <s-heading>Recent history (latest 50)</s-heading>
+            <h3 className="bc-title">Recent history</h3>
             <div style={{ marginTop: "8px" }}>
               {(!selectedCustomer.recentReturns || selectedCustomer.recentReturns.length === 0) ? (
-                <s-paragraph tone="neutral">No return requests on file.</s-paragraph>
+                <p className="bc-muted">No return requests on file.</p>
               ) : (
                 selectedCustomer.recentReturns.map((r: any) => (
                   <div key={r.id} style={{ padding: "8px 0", borderBottom: "1px solid #f1f2f3" }}>
                     <div style={{ display: "flex", justifyContent: "space-between" }}>
                       <strong>{r.orderNumber}</strong>
-                      <s-badge tone={r.status === "APPROVED" ? "success" : "warning"}>{r.status}</s-badge>
+                      <span className={r.status === "APPROVED" ? "bc-badge ok" : "bc-badge warn"}>{r.status}</span>
                     </div>
                   </div>
                 ))
@@ -221,6 +200,6 @@ export default function Customers() {
           </div>
         </div>
       )}
-    </s-page>
+    </div>
   );
 }

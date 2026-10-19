@@ -318,71 +318,38 @@ export default function Returns() {
   const isSubmitting = fetcher.state !== "idle" && fetcher.formData?.get("actionType") === "CREATE_MANUAL_RETURN";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "20px", maxWidth: "1240px", margin: "0 auto" }}>
-      {/* Header Bar */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "16px" }}>
-        <div>
-          <h1 style={{ fontSize: "22px", fontWeight: "700", color: "#0f172a", margin: 0, fontFamily: "Outfit, sans-serif" }}>
-            Return Requests
-          </h1>
-          <p style={{ margin: "4px 0 0 0", color: "#64748b", fontSize: "14px" }}>
-            Manage customer returns and create manual return requests with full order validation.
-          </p>
+    <div className="bc-page">
+      <header className="bc-header">
+        <div className="bc-page-bar">
+          <div className="bc-header-copy">
+            <p className="bc-eyebrow">REQUESTS</p>
+            <h1>Return requests</h1>
+            <p>Review customer returns and create one when the shopper cannot send it from the store.</p>
+          </div>
+          <button type="button" className="bc-btn primary" onClick={() => setIsCreateModalOpen(true)}>
+            Create return
+          </button>
         </div>
-        <button
-          onClick={() => setIsCreateModalOpen(true)}
-          style={{
-            background: "linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)",
-            color: "#ffffff",
-            border: "none",
-            borderRadius: "8px",
-            padding: "9px 18px",
-            fontWeight: 600,
-            fontSize: "13.5px",
-            cursor: "pointer",
-            boxShadow: "0 4px 12px rgba(99, 102, 241, 0.3)",
-          }}
-        >
-          + Create Return
-        </button>
-      </div>
+      </header>
 
-      {/* Search & Filter Toolbar */}
-      <div style={{ background: "#ffffff", padding: "16px", borderRadius: "12px", border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,0.02)" }}>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "12px", alignItems: "center" }}>
-          {/* Search Box */}
-          <div style={{ flex: "1 1 240px" }}>
+      <section className="bc-card bc-toolbar">
+          <div className="bc-grow">
             <input
               type="text"
-              placeholder="Search by Order #, Customer name or email..."
+              placeholder="Search by order number, customer name, or email"
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
                 setCurrentPage(1);
               }}
-              style={{
-                width: "100%",
-                padding: "9px 14px",
-                border: "1px solid #cbd5e1",
-                borderRadius: "8px",
-                fontSize: "13.5px",
-              }}
             />
           </div>
-
-          {/* Status Filter */}
           <div>
             <select
               value={statusFilter}
               onChange={(e) => {
                 setStatusFilter(e.target.value);
                 setCurrentPage(1);
-              }}
-              style={{
-                padding: "9px 14px",
-                border: "1px solid #cbd5e1",
-                borderRadius: "8px",
-                fontSize: "13.5px",
               }}
             >
               <option value="All">All Statuses</option>
@@ -393,9 +360,7 @@ export default function Returns() {
               <option value="CANCELLED">Cancelled</option>
             </select>
           </div>
-
-          {/* Flagged Checkbox */}
-          <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#475569", cursor: "pointer", userSelect: "none" }}>
+          <label className="bc-check">
             <input
               type="checkbox"
               checked={flaggedOnly}
@@ -405,21 +370,19 @@ export default function Returns() {
               }}
               style={{ width: "16px", height: "16px" }}
             />
-            <span>Flagged for Risk Only</span>
+            <span className="bc-check-copy"><span className="bc-check-title">Flagged for review only</span></span>
           </label>
-        </div>
-      </div>
+      </section>
 
-      {/* Main Returns Table */}
-      <div style={{ background: "#ffffff", borderRadius: "16px", border: "1px solid #e2e8f0", overflow: "hidden" }}>
+      <section className="bc-table-wrap">
         {filteredReturns.length === 0 ? (
-          <div style={{ padding: "48px 0", textAlign: "center" }}>
-            <h3 style={{ fontSize: "16px", fontWeight: 700, color: "#0f172a" }}>No Return Requests Found</h3>
-            <p style={{ color: "#64748b", fontSize: "13.5px", marginTop: "4px" }}>Refine your search or filters.</p>
+          <div className="bc-empty-state">
+            <strong>No return requests</strong>
+            <p>Try another search or filter.</p>
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+          <div>
+            <table className="bc-table">
               <thead>
                 <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
                   <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Return ID</th>
@@ -475,8 +438,8 @@ export default function Returns() {
                     </td>
                     <td style={{ padding: "12px 16px", fontSize: "13px", color: "#64748b" }}>{ret.date}</td>
                     <td style={{ padding: "12px 16px", textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
-                      <button onClick={() => setSelectedReturn(ret)} style={{ fontSize: "12.5px" }}>
-                        View Details
+                      <button type="button" className="bc-btn" onClick={() => setSelectedReturn(ret)}>
+                        View
                       </button>
                     </td>
                   </tr>
@@ -510,7 +473,7 @@ export default function Returns() {
             </div>
           </div>
         )}
-      </div>
+      </section>
 
       {/* Advanced Search Autocomplete Manual Return Modal */}
       {isCreateModalOpen && (

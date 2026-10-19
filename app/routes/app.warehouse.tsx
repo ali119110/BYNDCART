@@ -152,42 +152,30 @@ export default function Warehouse() {
   };
 
   return (
-    <s-page heading="Warehouse Receiving & Inspection System">
-      
-      {/* Search Bar / AWB Barcode Scanner */}
-      <s-section heading="Package Intake Scanner">
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-stack direction="block" gap="base">
-            <s-paragraph>
-              Scan or enter the Inbound Courier AWB tracking number (e.g. <code>771234567890</code>, <code>LEO-79138694-PK</code>) or order number.
-            </s-paragraph>
-
-            <form onSubmit={handleLookupSubmit} style={{ display: "flex", gap: "12px", maxWidth: "600px" }}>
+    <div className="bc-page">
+      <header className="bc-header">
+        <div className="bc-header-copy">
+          <p className="bc-eyebrow">WAREHOUSE</p>
+          <h1>Receiving</h1>
+          <p>Scan an airway bill or order number, then grade each item before the return is completed.</p>
+        </div>
+      </header>
+      <section className="bc-card">
+        <h2 className="bc-title">Find a package</h2>
+        <p className="bc-muted">Use the courier airway bill, for example 771234567890, or the order number.</p>
+            <form onSubmit={handleLookupSubmit} className="bc-inline-form">
               <input
                 type="text"
                 value={awbInput}
                 onChange={(e) => setAwbInput(e.target.value)}
                 placeholder="Scan AWB barcode or enter Order #..."
-                style={{
-                  flex: 1,
-                  padding: "10px 14px",
-                  fontSize: "14px",
-                  border: "1px solid #c9cccf",
-                  borderRadius: "4px",
-                  fontFamily: "monospace",
-                }}
               />
-              <s-button variant="primary" type="submit" disabled={isLookingUp || !awbInput.trim()}>
-                {isLookingUp ? "Searching..." : "Find Inbound Package"}
-              </s-button>
+              <button type="submit" className="bc-btn primary" disabled={isLookingUp || !awbInput.trim()}>
+                {isLookingUp ? "Searching..." : "Find package"}
+              </button>
             </form>
-
-            {fetcher.data?.error && (
-              <s-text tone="critical">{fetcher.data.error}</s-text>
-            )}
-          </s-stack>
-        </s-box>
-      </s-section>
+            {fetcher.data?.error && <p className="bc-note bad">{fetcher.data.error}</p>}
+      </section>
 
       {/* Success Notification */}
       {actionData?.intakeSuccess && (
@@ -252,7 +240,7 @@ export default function Warehouse() {
               <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
                 <s-stack direction="block" gap="base">
                   <s-heading>Item Condition & Quality Control Grading</s-heading>
-                  <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+                  <table className="bc-table">
                     <thead>
                       <tr style={{ borderBottom: "2px solid #e1e3e5" }}>
                         <th style={{ padding: "10px 8px" }}>Item / SKU</th>
@@ -342,9 +330,9 @@ export default function Warehouse() {
                   </table>
 
                   <div style={{ marginTop: "16px", display: "flex", justifyContent: "flex-end" }}>
-                    <s-button variant="primary" onClick={handleCompleteIntake} disabled={isSubmittingIntake}>
-                      {isSubmittingIntake ? "Processing Intake..." : "Complete Package Intake & Inspection"}
-                    </s-button>
+                    <button type="button" className="bc-btn primary" onClick={handleCompleteIntake} disabled={isSubmittingIntake}>
+                      {isSubmittingIntake ? "Saving..." : "Complete inspection"}
+                    </button>
                   </div>
                 </s-stack>
               </s-box>
@@ -354,13 +342,12 @@ export default function Warehouse() {
       )}
 
       {/* Historical Intake Audit Trail */}
-      <s-section heading="Recent Package Receiving Log">
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-stack direction="block" gap="base">
+      <section className="bc-card">
+        <h2 className="bc-title">Recent receiving</h2>
             {recentIntakes.length === 0 ? (
-              <s-text tone="neutral">No warehouse package intakes recorded yet.</s-text>
+              <p className="bc-muted">No packages have been received yet.</p>
             ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+              <table className="bc-table">
                 <thead>
                   <tr style={{ borderBottom: "2px solid #e1e3e5" }}>
                     <th style={{ padding: "8px 0" }}><s-text tone="neutral">AWB / Order</s-text></th>
@@ -382,7 +369,7 @@ export default function Warehouse() {
                         <strong>{intake.inspections?.length || 0} items</strong>
                       </td>
                       <td style={{ padding: "8px 0" }}>
-                        <s-badge tone="success">{intake.status}</s-badge>
+                        <span className="bc-badge ok">{intake.status}</span>
                       </td>
                       <td style={{ padding: "8px 0" }}>
                         {new Date(intake.receivedAt).toLocaleString()}
@@ -392,10 +379,7 @@ export default function Warehouse() {
                 </tbody>
               </table>
             )}
-          </s-stack>
-        </s-box>
-      </s-section>
-
-    </s-page>
+      </section>
+    </div>
   );
 }

@@ -79,27 +79,22 @@ export default function Billing() {
     : Math.min(100, Math.round(((storePlan.usageCount ?? 0) / Math.max(1, storePlan.returnsLimit ?? 50)) * 100));
 
   return (
-    <s-page heading="BYNDCART Billing & Subscription Plans">
-      <s-stack direction="block" gap="large">
-        
-        {/* Status Messages */}
-        {actionData?.error && (
-          <div style={{ padding: "12px 16px", backgroundColor: "#fef2f2", border: "1px solid #fca5a5", borderRadius: "8px", color: "#991b1b" }}>
-            <strong>Error:</strong> {actionData.error}
-          </div>
-        )}
-        {actionData?.message && (
-          <div style={{ padding: "12px 16px", backgroundColor: "#f0fdf4", border: "1px solid #86efac", borderRadius: "8px", color: "#166534" }}>
-            <strong>Success:</strong> {actionData.message}
-          </div>
-        )}
+    <div className="bc-page">
+      <header className="bc-header">
+        <div className="bc-header-copy">
+          <p className="bc-eyebrow">ACCOUNT</p>
+          <h1>Billing</h1>
+          <p>The current plan and how many return and exchange orders this store has used.</p>
+        </div>
+      </header>
+        {actionData?.error && <div className="bc-note bad">{actionData.error}</div>}
+        {actionData?.message && <div className="bc-note ok">{actionData.message}</div>}
 
         {/* Current Active Plan Overview Card */}
-        <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-          <s-stack direction="block" gap="base">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <section className="bc-card">
+            <div className="bc-page-bar">
               <div>
-                <s-heading>Current Subscription: {storePlan.name ?? "Free Plan"}</s-heading>
+                <h2 className="bc-title">Current plan: {storePlan.name ?? "Free"}</h2>
                 <p style={{ margin: "4px 0 0 0", color: "#475569" }}>
                   Status: <strong style={{ color: storePlan.status === "ACTIVE" ? "#008000" : "#d97706" }}>{storePlan.status ?? "ACTIVE"}</strong> — PKR {planPriceInPKR(storePlan.price ?? 0).toLocaleString()} / month
                   {(storePlan.price ?? 0) > 0 ? ` (USD ${(storePlan.price ?? 0).toFixed(2)} reference)` : ""}
@@ -109,15 +104,11 @@ export default function Billing() {
               {storePlan.planCode !== "FREE" && (
                 <fetcher.Form method="post">
                   <input type="hidden" name="actionType" value="cancel" />
-                  <s-button type="submit" tone="critical" loading={isSubmitting}>
-                    Cancel Subscription
-                  </s-button>
+                  <button type="submit" className="bc-btn" disabled={isSubmitting}>Cancel plan</button>
                 </fetcher.Form>
               )}
             </div>
-
-            {/* Monthly Return Usage Bar */}
-            <div style={{ marginTop: "12px", background: "#ffffff", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+            <div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <span>Processed orders (returns and exchanges together)</span>
                 <span>
@@ -125,66 +116,40 @@ export default function Billing() {
                 </span>
               </div>
               {!storePlan.isUnlimited && (
-                <div style={{ width: "100%", height: "10px", backgroundColor: "#cbd5e1", borderRadius: "5px", marginTop: "8px", overflow: "hidden" }}>
-                  <div
-                    style={{
-                      width: `${usagePercent}%`,
-                      height: "100%",
-                      backgroundColor: usagePercent > 90 ? "#ef4444" : usagePercent > 75 ? "#f59e0b" : "#3b82f6",
-                      transition: "width 0.3s ease",
-                    }}
-                  />
+                <div className="bc-usage" style={{ marginTop: "8px" }}>
+                  <span style={{ width: `${usagePercent}%`, background: usagePercent > 90 ? "#b42318" : usagePercent > 75 ? "#916a00" : undefined }} />
                 </div>
               )}
             </div>
-          </s-stack>
-        </s-box>
+        </section>
 
-        {/* Pricing Tiers Grid */}
-        <s-box padding="base">
-          <s-heading>Available SaaS Tiers</s-heading>
-          <s-paragraph tone="neutral">
-            Choose the best plan for your store's return volume and reverse logistics requirements.
-          </s-paragraph>
+        <section className="bc-stack">
+          <div>
+            <h2 className="bc-title">Plans</h2>
+            <p className="bc-muted">Choose the plan for this store&apos;s return and exchange volume.</p>
+          </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "20px", marginTop: "16px", width: "100%" }}>
+          <div className="bc-split-cards">
             {plans.map((plan) => {
               const isCurrent = storePlan.planCode === plan.code;
 
               return (
-                <div
-                  key={plan.code}
-                  style={{
-                    border: isCurrent ? "2px solid #3b82f6" : "1px solid #e2e8f0",
-                    borderRadius: "10px",
-                    padding: "20px",
-                    backgroundColor: isCurrent ? "#f8fafc" : "#ffffff",
-                    display: "flex",
-                    flexDirection: "column",
-                    justifyContent: "space-between",
-                    boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
-                  }}
-                >
-                  <s-stack direction="block" gap="small">
-                    {isCurrent && (
-                      <span style={{ fontSize: "12px", background: "#3b82f6", color: "#fff", padding: "2px 8px", borderRadius: "12px", width: "fit-content", fontWeight: "bold" }}>
-                        Active Tier
-                      </span>
-                    )}
-                    <strong>{plan.name}</strong>
+                <article key={plan.code} className="bc-card" style={isCurrent ? { borderColor: "#263f8c" } : undefined}>
+                    {isCurrent && <span className="bc-badge">Current plan</span>}
+                    <h3 className="bc-title">{plan.name}</h3>
                     <div style={{ fontSize: "24px", fontWeight: "bold", margin: "8px 0" }}>
                       PKR {planPriceInPKR(plan.price).toLocaleString()} <span style={{ fontSize: "14px", fontWeight: "normal", color: "#64748b" }}>/ mo</span>
                     </div>
                     {plan.price > 0 && (
                       <div style={{ fontSize: "12px", color: "#64748b", marginBottom: "8px" }}>USD {plan.price.toFixed(2)} reference</div>
                     )}
-                    <s-paragraph tone="neutral">
+                    <p className="bc-muted">
                       {plan.code === "FREE"
                         ? "50 orders total, counting returns and exchanges together"
                         : plan.monthlyReturnLimit === -1
                         ? "Unlimited processed orders"
                         : `Up to ${plan.monthlyReturnLimit} processed orders per month, counting returns and exchanges together`}
-                    </s-paragraph>
+                    </p>
 
                     <div style={{ margin: "12px 0" }}>
                       <ul style={{ paddingLeft: "18px", margin: 0, fontSize: "13px", color: "#475569" }}>
@@ -195,27 +160,18 @@ export default function Billing() {
                         ))}
                       </ul>
                     </div>
-                  </s-stack>
-
                   <fetcher.Form method="post" style={{ marginTop: "16px" }}>
                     <input type="hidden" name="actionType" value="subscribe" />
                     <input type="hidden" name="planCode" value={plan.code} />
-                    <s-button
-                      type="submit"
-                      variant={isCurrent ? "secondary" : "primary"}
-                      disabled={isCurrent || isSubmitting}
-                      loading={isSubmitting && fetcher.formData?.get("planCode") === plan.code}
-                    >
-                      {isCurrent ? "Current Plan" : plan.price === 0 ? "Downgrade to Free" : `Select ${plan.name}`}
-                    </s-button>
+                    <button type="submit" className={isCurrent ? "bc-btn" : "bc-btn primary"} disabled={isCurrent || isSubmitting}>
+                      {isCurrent ? "Current plan" : plan.price === 0 ? "Use free plan" : `Select ${plan.name}`}
+                    </button>
                   </fetcher.Form>
-                </div>
+                </article>
               );
             })}
           </div>
-        </s-box>
-
-      </s-stack>
-    </s-page>
+        </section>
+    </div>
   );
 }

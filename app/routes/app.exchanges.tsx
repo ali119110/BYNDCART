@@ -334,52 +334,33 @@ export default function Exchanges() {
   const isApproving = fetcher.state !== "idle" && fetcher.formData?.get("status") === "APPROVED";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "20px", maxWidth: "1240px", margin: "0 auto" }}>
-      {/* Header Bar */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "16px" }}>
-        <div>
-          <h1 style={{ fontSize: "22px", fontWeight: "700", color: "#0f172a", margin: 0, fontFamily: "Outfit, sans-serif" }}>
-            Exchange Requests
-          </h1>
-          <p style={{ margin: "4px 0 0 0", color: "#64748b", fontSize: "14px" }}>
-            Manage product exchanges with seamless Shopify Order auto-creation.
-          </p>
+    <div className="bc-page">
+      <header className="bc-header">
+        <div className="bc-page-bar">
+          <div className="bc-header-copy">
+            <p className="bc-eyebrow">REQUESTS</p>
+            <h1>Exchange requests</h1>
+            <p>Review replacement requests and create one from a store order.</p>
+          </div>
+          <button type="button" className="bc-btn primary" onClick={() => setIsCreateModalOpen(true)}>
+            Create exchange
+          </button>
         </div>
-        <button
-          onClick={() => setIsCreateModalOpen(true)}
-          style={{
-            background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
-            color: "#ffffff",
-            border: "none",
-            borderRadius: "8px",
-            padding: "9px 18px",
-            fontWeight: 600,
-            fontSize: "13.5px",
-            cursor: "pointer",
-            boxShadow: "0 4px 12px rgba(16, 185, 129, 0.3)",
-          }}
-        >
-          + Create Exchange
-        </button>
-      </div>
+      </header>
 
-      {/* Toolbar */}
-      <div style={{ background: "#ffffff", padding: "16px", borderRadius: "12px", border: "1px solid #e2e8f0", boxShadow: "0 1px 3px rgba(0,0,0,0.02)" }}>
-        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-          <div style={{ flex: 1 }}>
+      <section className="bc-card bc-toolbar">
+          <div className="bc-grow">
             <input
               type="text"
-              placeholder="Search by ID, original order, customer email..."
+              placeholder="Search by order, customer, or email"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              style={{ width: "100%", padding: "9px 14px", border: "1px solid #cbd5e1", borderRadius: "8px", fontSize: "13.5px" }}
             />
           </div>
           <div>
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              style={{ padding: "9px 14px", border: "1px solid #cbd5e1", borderRadius: "8px", fontSize: "13.5px" }}
             >
               <option value="All">All Statuses</option>
               <option value="PENDING">Pending</option>
@@ -390,19 +371,17 @@ export default function Exchanges() {
               <option value="CANCELLED">Cancelled</option>
             </select>
           </div>
-        </div>
-      </div>
+      </section>
 
-      {/* Main Table */}
-      <div style={{ background: "#ffffff", borderRadius: "16px", border: "1px solid #e2e8f0", overflow: "hidden" }}>
+      <section className="bc-table-wrap">
         {filteredExchanges.length === 0 ? (
-          <div style={{ padding: "48px 0", textAlign: "center" }}>
-            <h3 style={{ fontSize: "16px", fontWeight: 700, color: "#0f172a" }}>No Exchange Requests Found</h3>
-            <p style={{ color: "#64748b", fontSize: "13.5px", marginTop: "4px" }}>Refine your search query.</p>
+          <div className="bc-empty-state">
+            <strong>No exchange requests</strong>
+            <p>Try another search or status.</p>
           </div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+          <div>
+            <table className="bc-table">
               <thead>
                 <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
                   <th style={{ padding: "12px 16px", fontSize: "11.5px", color: "#64748b", textTransform: "uppercase" }}>Exchange ID</th>
@@ -464,8 +443,8 @@ export default function Exchanges() {
                     </td>
                     <td style={{ padding: "12px 16px", fontSize: "13px", color: "#64748b" }}>{exc.date}</td>
                     <td style={{ padding: "12px 16px", textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
-                      <button onClick={() => setSelectedExchange(exc)} style={{ fontSize: "12.5px" }}>
-                        View Workflow
+                      <button type="button" className="bc-btn" onClick={() => setSelectedExchange(exc)}>
+                        View
                       </button>
                     </td>
                   </tr>
@@ -474,7 +453,7 @@ export default function Exchanges() {
             </table>
           </div>
         )}
-      </div>
+      </section>
 
       {/* Advanced Search Autocomplete Manual Exchange Modal */}
       {isCreateModalOpen && (
