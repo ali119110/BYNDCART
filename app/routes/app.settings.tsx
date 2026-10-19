@@ -8,10 +8,10 @@ import { getReturnPolicyRule, saveReturnPolicyRule } from "../services/policyEng
 // ===== LOADER: Fetch settings & policy rules from database =====
 export async function loader({ request }: Route.LoaderArgs) {
   const { shop, shopifyStoreId, admin } = await requireTenantContext(request);
-  const storeHandle = shop.replace(".myshopify.com", "");
+  const appApiKey = process.env.SHOPIFY_API_KEY || "252648044723f8dd1b39be58eb856035";
   const portal = {
     storefrontUrl: `https://${shop}/apps/returns`,
-    footerEditorUrl: `https://admin.shopify.com/store/${storeHandle}/themes/current/editor?template=index&addAppBlockId=${process.env.SHOPIFY_API_KEY}/returns-link&target=sectionGroup:footer`,
+    footerEditorUrl: `https://${shop}/admin/themes/current/editor?template=index&addAppBlockId=${appApiKey}/returns-link&target=sectionGroup:footer`,
   };
 
   try {
@@ -159,7 +159,7 @@ export default function Settings() {
           <div className="bc-method">
             <h3 className="bc-title" style={{ fontSize: "1.05rem" }}>Option 2. Footer menu</h3>
             <ol className="bc-steps">
-              <li>In Shopify admin, open <b>Content → Menus</b>. Older admin menus are under <b>Online Store → Navigation</b>.</li>
+              <li>In Shopify admin, open <b>Content → Menus</b>.</li>
               <li>Open the footer menu.</li>
               <li>Add a menu item named <b>Returns &amp; exchanges</b>.</li>
               <li>Paste the customer link below, then save the menu.</li>
