@@ -1,0 +1,7 @@
+api_version = "2026-10"
+
+[[extensions]]
+name = "t:name"
+handle = "returns-link"
+uid = "b7c1e2a4-6d4f-4a1e-9c33-1f0a9e2b7d55"
+type = "theme"

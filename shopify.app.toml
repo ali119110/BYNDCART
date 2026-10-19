@@ -33,5 +33,10 @@ api_version = "2026-10"
 [auth]
 redirect_urls = [ "https://shopify.dev/apps/default-app-home/api/auth" ]
 
+[app_proxy]
+url = "/apps/returns"
+prefix = "apps"
+subpath = "returns"
+
 [build]
 automatically_update_urls_on_dev = true

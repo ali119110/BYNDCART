@@ -1,20 +1,21 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { useState } from "react";
-import { requireTenantContext } from "../services/tenant.server";
+import { resolvePortalStore } from "../services/portalAccess.server";
 import { lookupShopperOrder, submitShopperReturn, ShopperOrderLookupResult } from "../services/portal.server";
 import { requestCustomerOTP, verifyCustomerOTP } from "../services/otp.server";
 import { CourierRegistry } from "../services/courier.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { shopifyStoreId } = await requireTenantContext(request);
+  const url = new URL(request.url);
+  const { shop, shopifyStoreId } = await resolvePortalStore(url.searchParams.get("shop"));
   const availableCouriers = CourierRegistry.getRegisteredAdapters();
-  return { shopifyStoreId, availableCouriers };
+  return { shop, shopifyStoreId, availableCouriers };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { shopifyStoreId } = await requireTenantContext(request);
   const formData = await request.formData();
+  const { shopifyStoreId } = await resolvePortalStore(String(formData.get("shop") || new URL(request.url).searchParams.get("shop") || ""));
   const intent = formData.get("intent") as string;
 
   if (intent === "REQUEST_OTP") {
@@ -94,7 +95,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function ShopperPortal() {
-  const { availableCouriers } = useLoaderData<typeof loader>();
+  const { shop, availableCouriers } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<any>();
 
   // State management
@@ -180,6 +181,7 @@ export default function ShopperPortal() {
     fetcher.submit(
       {
         intent: "SUBMIT_RETURN",
+        shop,
         sessionToken,
         shopifyOrderId: lookupData.order.shopifyOrderId,
         orderNumber: lookupData.order.orderNumber,
@@ -276,6 +278,7 @@ export default function ShopperPortal() {
                 Enter your order number and email/phone to receive a 6-digit verification code.
               </p>
               <fetcher.Form method="post">
+                <input type="hidden" name="shop" value={shop} />
                 <input type="hidden" name="intent" value="REQUEST_OTP" />
                 <div style={{ marginBottom: "16px" }}>
                   <label style={{ display: "block", marginBottom: "6px", fontSize: "14px", fontWeight: 500 }}>
@@ -337,6 +340,7 @@ export default function ShopperPortal() {
               </p>
 
               <fetcher.Form method="post">
+                <input type="hidden" name="shop" value={shop} />
                 <input type="hidden" name="intent" value="VERIFY_OTP" />
                 <input type="hidden" name="orderNumber" value={actionData?.orderNumber || orderNumberInput} />
                 <input type="hidden" name="customerEmail" value={actionData?.customerEmail || emailInput} />

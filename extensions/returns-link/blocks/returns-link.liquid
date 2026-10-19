@@ -1,0 +1,21 @@
+<a class="byndcart-returns-link" href="/apps/returns">
+  {{ block.settings.label }}
+</a>
+
+{% schema %}
+{
+  "name": "Returns and exchanges",
+  "target": "section",
+  "enabled_on": {
+    "groups": ["footer"]
+  },
+  "settings": [
+    {
+      "type": "text",
+      "id": "label",
+      "label": "Link text",
+      "default": "Returns & exchanges"
+    }
+  ]
+}
+{% endschema %}

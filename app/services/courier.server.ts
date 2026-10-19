@@ -228,7 +228,7 @@ export class PostExCourierAdapter implements ICourierAdapter {
     return unconfirmedTracking(this.providerName, trackingNumber);
   }
 
-  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+  async cancelShipment(_trackingNumber?: string): Promise<{ success: boolean; message?: string }> {
     return unconfirmedCancel(this.providerName);
   }
 }
@@ -251,7 +251,7 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
     return credentialsStored("Leopards");
   }
 
-  async createReverseShipment(): Promise<LabelResult> {
+  async createReverseShipment(_input?: ShipmentInput, _credentials?: unknown): Promise<LabelResult> {
     return unconfirmedBooking(this.providerName);
   }
 
@@ -269,7 +269,7 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
     return unconfirmedTracking(this.providerName, trackingNumber);
   }
 
-  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+  async cancelShipment(_trackingNumber?: string): Promise<{ success: boolean; message?: string }> {
     return unconfirmedCancel(this.providerName);
   }
 }
@@ -292,7 +292,7 @@ export class TraxCourierAdapter implements ICourierAdapter {
     return credentialsStored("Trax");
   }
 
-  async createReverseShipment(): Promise<LabelResult> {
+  async createReverseShipment(_input?: ShipmentInput, _credentials?: unknown): Promise<LabelResult> {
     return unconfirmedBooking(this.providerName);
   }
 
@@ -308,7 +308,7 @@ export class TraxCourierAdapter implements ICourierAdapter {
     return unconfirmedTracking(this.providerName, trackingNumber);
   }
 
-  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+  async cancelShipment(_trackingNumber?: string): Promise<{ success: boolean; message?: string }> {
     return unconfirmedCancel(this.providerName);
   }
 }
@@ -331,7 +331,7 @@ export class TCSCourierAdapter implements ICourierAdapter {
     return credentialsStored("TCS");
   }
 
-  async createReverseShipment(): Promise<LabelResult> {
+  async createReverseShipment(_input?: ShipmentInput, _credentials?: unknown): Promise<LabelResult> {
     return unconfirmedBooking(this.providerName);
   }
 
@@ -347,7 +347,7 @@ export class TCSCourierAdapter implements ICourierAdapter {
     return unconfirmedTracking(this.providerName, trackingNumber);
   }
 
-  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+  async cancelShipment(_trackingNumber?: string): Promise<{ success: boolean; message?: string }> {
     return unconfirmedCancel(this.providerName);
   }
 }
@@ -369,7 +369,7 @@ export class MnPCourierAdapter implements ICourierAdapter {
     return credentialsStored("M&P");
   }
 
-  async createReverseShipment(): Promise<LabelResult> {
+  async createReverseShipment(_input?: ShipmentInput, _credentials?: unknown): Promise<LabelResult> {
     return unconfirmedBooking(this.providerName);
   }
 
@@ -385,7 +385,7 @@ export class MnPCourierAdapter implements ICourierAdapter {
     return unconfirmedTracking(this.providerName, trackingNumber);
   }
 
-  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+  async cancelShipment(_trackingNumber?: string): Promise<{ success: boolean; message?: string }> {
     return unconfirmedCancel(this.providerName);
   }
 }
@@ -407,7 +407,7 @@ export class CallCourierAdapter implements ICourierAdapter {
     return credentialsStored("CallCourier");
   }
 
-  async createReverseShipment(): Promise<LabelResult> {
+  async createReverseShipment(_input?: ShipmentInput, _credentials?: unknown): Promise<LabelResult> {
     return unconfirmedBooking(this.providerName);
   }
 
@@ -423,7 +423,7 @@ export class CallCourierAdapter implements ICourierAdapter {
     return unconfirmedTracking(this.providerName, trackingNumber);
   }
 
-  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+  async cancelShipment(_trackingNumber?: string): Promise<{ success: boolean; message?: string }> {
     return unconfirmedCancel(this.providerName);
   }
 }
@@ -524,7 +524,7 @@ export class RiderCourierAdapter implements ICourierAdapter {
     return credentialsStored("Rider");
   }
 
-  async createReverseShipment(): Promise<LabelResult> {
+  async createReverseShipment(_input?: ShipmentInput, _credentials?: unknown): Promise<LabelResult> {
     return unconfirmedBooking(this.providerName);
   }
 
@@ -540,7 +540,7 @@ export class RiderCourierAdapter implements ICourierAdapter {
     return unconfirmedTracking(this.providerName, trackingNumber);
   }
 
-  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+  async cancelShipment(_trackingNumber?: string): Promise<{ success: boolean; message?: string }> {
     return unconfirmedCancel(this.providerName);
   }
 }
