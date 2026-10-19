@@ -164,32 +164,23 @@ test("Multi-Courier Framework — All 6 Adapters Interface Implementation", asyn
       orderId: "gid://shopify/Order/1001",
       orderNumber: "#1001",
     });
-    assert.strictEqual(revResult.success, true);
-    assert.ok(revResult.trackingNumber);
+    assert.strictEqual(revResult.success, false);
+    assert.strictEqual(revResult.isLive, false);
+    assert.strictEqual(revResult.trackingNumber, "");
 
-    // Test forward shipment
     const fwdResult = await adapter.createForwardShipment({
       shopifyStoreId: "store-1",
       orderId: "gid://shopify/Order/1002",
       orderNumber: "#1002",
     });
-    assert.strictEqual(fwdResult.success, true);
-    assert.ok(fwdResult.trackingNumber);
+    assert.strictEqual(fwdResult.success, false);
+    assert.strictEqual(fwdResult.isLive, false);
 
-    // Test tracking
-    const trackResult = await adapter.trackShipment(revResult.trackingNumber);
-    assert.strictEqual(trackResult.trackingNumber, revResult.trackingNumber);
-    assert.ok(trackResult.status);
+    const trackResult = await adapter.trackShipment("MANUAL-1001");
+    assert.strictEqual(trackResult.status, "UNKNOWN");
 
-    // Test cancel
-    const cancelResult = await adapter.cancelShipment(revResult.trackingNumber);
-    assert.strictEqual(cancelResult.success, true);
-
-    // Test label
-    if (adapter.getLabel) {
-      const label = await adapter.getLabel(revResult.trackingNumber);
-      assert.ok(label.labelUrl);
-    }
+    const cancelResult = await adapter.cancelShipment("MANUAL-1001");
+    assert.strictEqual(cancelResult.success, false);
   }
 });
 
@@ -254,7 +245,10 @@ test("Multi-Courier Framework — Connection Testing Valid vs Invalid Credential
     shopifyStoreId: "store-1",
     config: { apiToken: "valid_dummy_token" },
   });
-  assert.strictEqual(testValid.success, true);
+  assert.strictEqual(testValid.isLive, testValid.success);
+  if (!testValid.success) {
+    assert.match(testValid.message, /not verified|rejected|could not/i);
+  }
 });
 
 test("Multi-Courier Framework — Separate Reverse & Forward Courier Selection", async () => {
@@ -289,6 +283,7 @@ test("Multi-Courier Framework — Duplicate Booking Idempotency Prevention", asy
     orderId: "gid://shopify/Order/777",
     orderNumber: "#777",
     courier: "TRAX",
+    trackingNumber: "TRX-MANUAL-777",
     type: "RETURN",
   });
 
@@ -317,6 +312,7 @@ test("Multi-Courier Framework — Webhook Deduplication & Event Tracking", async
     orderId: "gid://shopify/Order/888",
     orderNumber: "#888",
     courier: "LEOPARDS",
+    trackingNumber: "LEO-MANUAL-888",
     type: "RETURN",
   });
 

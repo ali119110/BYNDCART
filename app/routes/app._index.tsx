@@ -36,7 +36,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
 
     // Query real counts from Database
-    const [ordersCount, returnsCount, exchangesCount, customerCacheCount, exchangeItems, recentReturnsDb, recentExchangesDb] = await Promise.all([
+    const [ordersCount, returnsCount, exchangesCount, customerCacheCount, exchangeItems, recentReturnsDb, recentExchangesDb, pendingReturns, pendingExchanges, inTransit, awaitingInspection, pendingRefunds, unreconciledCod, failedShipments] = await Promise.all([
       prisma.order.count({ where: { shopifyStoreId } }),
       prisma.returnRequest.count({ where: { shopifyStoreId } }),
       prisma.exchangeRequest.count({ where: { shopifyStoreId } }),
@@ -56,6 +56,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
         orderBy: { createdAt: "desc" },
         include: { items: true },
       }),
+      prisma.returnRequest.count({ where: { shopifyStoreId, status: "PENDING" } }),
+      prisma.exchangeRequest.count({ where: { shopifyStoreId, status: "PENDING" } }),
+      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "IN_TRANSIT" } }),
+      prisma.warehouseIntake.count({ where: { shopifyStoreId, status: "RECEIVED" } }),
+      prisma.refundRecord.count({ where: { shopifyStoreId, status: "PENDING" } }),
+      prisma.codSettlement.count({ where: { shopifyStoreId, status: { in: ["EXPECTED", "IMPORTED", "DISPUTED"] } } }),
+      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "FAILED" } }),
     ]);
 
     // Calculate revenue retained from exchanges
@@ -84,6 +91,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
         customersCount,
         revenueRetained,
       },
+      operations: {
+        pendingReturns,
+        pendingExchanges,
+        inTransit,
+        awaitingInspection,
+        pendingRefunds,
+        unreconciledCod,
+        failedShipments,
+      },
       recentReturns: recentReturnsDb.map((r) => ({
         id: r.id,
         orderNumber: r.orderNumber,
@@ -111,6 +127,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
         customersCount: 0,
         revenueRetained: 0,
       },
+      operations: {
+        pendingReturns: 0,
+        pendingExchanges: 0,
+        inTransit: 0,
+        awaitingInspection: 0,
+        pendingRefunds: 0,
+        unreconciledCod: 0,
+        failedShipments: 0,
+      },
       recentReturns: [],
       recentExchanges: [],
     };
@@ -129,6 +154,15 @@ export default function Dashboard() {
     revenueRetained: 0,
   };
 
+  const operations = loaderData?.operations ?? {
+    pendingReturns: 0,
+    pendingExchanges: 0,
+    inTransit: 0,
+    awaitingInspection: 0,
+    pendingRefunds: 0,
+    unreconciledCod: 0,
+    failedShipments: 0,
+  };
   const recentReturns = loaderData?.recentReturns ?? [];
   const recentExchanges = loaderData?.recentExchanges ?? [];
 
@@ -179,6 +213,15 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+      </div>
+      <div className="bc-grid">
+        <a className="bc-card" href="/app/returns"><span className="bc-muted">Pending returns</span><strong className="bc-metric">{operations.pendingReturns}</strong></a>
+        <a className="bc-card" href="/app/exchanges"><span className="bc-muted">Pending exchanges</span><strong className="bc-metric">{operations.pendingExchanges}</strong></a>
+        <a className="bc-card" href="/app/shipments"><span className="bc-muted">Parcels in transit</span><strong className="bc-metric">{operations.inTransit}</strong></a>
+        <a className="bc-card" href="/app/warehouse"><span className="bc-muted">Awaiting inspection</span><strong className="bc-metric">{operations.awaitingInspection}</strong></a>
+        <a className="bc-card" href="/app/refunds"><span className="bc-muted">Refunds pending</span><strong className="bc-metric">{operations.pendingRefunds}</strong></a>
+        <a className="bc-card" href="/app/reconciliation"><span className="bc-muted">Unreconciled COD</span><strong className="bc-metric">{operations.unreconciledCod}</strong></a>
+        <a className="bc-card" href="/app/shipments"><span className="bc-muted">Failed shipments</span><strong className="bc-metric">{operations.failedShipments}</strong></a>
       </div>
 
       {/* Recent Activity Tables */}

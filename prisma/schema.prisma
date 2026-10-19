@@ -69,6 +69,10 @@ model ShopifyStore {
   billingSubscription BillingSubscription?
   notificationTemplates NotificationTemplate[]
   notificationLogs      NotificationLog[]
+  refundRecords         RefundRecord[]
+  evidenceAttachments   EvidenceAttachment[]
+  codSettlements        CodSettlement[]
+  codImportBatches      CodImportBatch[]
 }
 
 model User {
@@ -411,6 +415,8 @@ model ReturnPolicyRule {
   excludedProductIds      String[]     @default([])
   excludedCategories      String[]     @default([])
   eligibleCategories      String[]     @default([])
+  evidenceRequired        Boolean      @default(false)
+  reserveInventoryOnReceipt Boolean    @default(true)
   createdAt               DateTime     @default(now())
   updatedAt               DateTime     @updatedAt
   shopifyStore            ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
@@ -478,4 +484,92 @@ model NotificationLog {
   @@index([shopifyStoreId])
   @@index([idempotencyKey])
   @@index([status])
+}
+
+model RefundRecord {
+  id                String       @id @default(uuid())
+  shopifyStoreId    String
+  returnRequestId   String?
+  exchangeRequestId String?
+  method            String       // SHOPIFY, STORE_CREDIT, BANK_TRANSFER, EASYPAISA, JAZZCASH, MANUAL
+  amount            Decimal      @db.Decimal(12, 2)
+  currency          String       @default("PKR")
+  status            String       @default("PENDING") // PENDING, CONFIRMED, FAILED, CANCELLED
+  reference         String?
+  reason            String?
+  notes             String?
+  confirmedAt       DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  shopifyStore      ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@index([shopifyStoreId])
+  @@index([shopifyStoreId, status])
+  @@index([returnRequestId])
+  @@index([exchangeRequestId])
+}
+
+model EvidenceAttachment {
+  id                String       @id @default(uuid())
+  shopifyStoreId    String
+  returnRequestId   String?
+  exchangeRequestId String?
+  kind              String       @default("PHOTO") // PHOTO, VIDEO, PACKAGING, OTHER
+  fileName          String
+  mimeType          String
+  sizeBytes         Int
+  sourceUrl         String?
+  contentBase64     String?
+  uploadedBy        String       @default("MERCHANT") // MERCHANT, CUSTOMER
+  createdAt         DateTime     @default(now())
+  shopifyStore      ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@index([shopifyStoreId])
+  @@index([returnRequestId])
+  @@index([exchangeRequestId])
+}
+
+model CodImportBatch {
+  id             String          @id @default(uuid())
+  shopifyStoreId String
+  fileName       String
+  fileHash       String
+  rowCount       Int
+  createdAt      DateTime        @default(now())
+  shopifyStore   ShopifyStore    @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+  settlements    CodSettlement[]
+
+  @@unique([shopifyStoreId, fileHash])
+  @@index([shopifyStoreId])
+}
+
+model CodSettlement {
+  id               String          @id @default(uuid())
+  shopifyStoreId   String
+  courier          String
+  trackingNumber   String?
+  orderNumber      String?
+  expectedAmount   Decimal         @db.Decimal(12, 2)
+  collectedAmount  Decimal         @default(0) @db.Decimal(12, 2)
+  shippingCharge   Decimal         @default(0) @db.Decimal(12, 2)
+  reverseCharge    Decimal         @default(0) @db.Decimal(12, 2)
+  fees             Decimal         @default(0) @db.Decimal(12, 2)
+  adjustments      Decimal         @default(0) @db.Decimal(12, 2)
+  netAmount        Decimal         @db.Decimal(12, 2)
+  settlementDate   DateTime?
+  batchReference   String?
+  courierReference String?
+  bankReference    String?
+  status           String          @default("EXPECTED") // EXPECTED, IMPORTED, MATCHED, DISPUTED, CONFIRMED
+  source           String          @default("MANUAL") // MANUAL, CSV
+  importBatchId    String?
+  notes            String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  shopifyStore     ShopifyStore    @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+  importBatch      CodImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+
+  @@index([shopifyStoreId])
+  @@index([shopifyStoreId, status])
+  @@index([shopifyStoreId, courierReference])
 }

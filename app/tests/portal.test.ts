@@ -143,9 +143,10 @@ test("Portal Service - Submit Shopper Return with PKR Restocking Fee Math & Veri
   });
 
   assert.strictEqual(res.success, true);
-  assert.ok(res.trackingNumber.startsWith("77"));
+  assert.strictEqual(res.bookingConfirmed, false);
+  assert.strictEqual(res.trackingNumber, "");
   assert.strictEqual(res.summaryPKR.totalItemValue, 3000);
   assert.strictEqual(res.summaryPKR.restockingFeeDeduction, 300); // 10% of 3000
-  assert.strictEqual(res.summaryPKR.pickupFeeDeduction, 250); // TCS fee
-  assert.strictEqual(res.summaryPKR.netRefundAmount, 2450); // 3000 - 300 - 250
+  assert.strictEqual(res.summaryPKR.pickupFeeDeduction, 0);
+  assert.strictEqual(res.summaryPKR.netRefundAmount, 2700); // 3000 - 300, no invented courier fee
 });

@@ -108,6 +108,40 @@ export interface ICourierAdapter {
   getLabel?(trackingNumber: string, credentials?: any): Promise<{ labelUrl: string }>;
 }
 
+export function unconfirmedBooking(courierName: string): LabelResult {
+  return {
+    success: false,
+    trackingNumber: "",
+    courierName,
+    isLive: false,
+    error: `${courierName} did not confirm this shipment. Enter the airway bill manually.`,
+  };
+}
+
+export function unconfirmedTracking(courierName: string, trackingNumber: string): TrackingStatusResult {
+  return {
+    trackingNumber,
+    courierName,
+    status: "UNKNOWN",
+    rawStatus: "UNCONFIRMED",
+    updatedAt: new Date(),
+  };
+}
+
+export function credentialsStored(provider: string): TestConnectionResult {
+  return {
+    success: true,
+    isLive: false,
+    message: `${provider} credentials were saved. Live booking is not verified, so use a manual airway bill until the courier confirms one.`,
+  };
+}
+
+export function unconfirmedCancel(provider: string) {
+  return {
+    success: false,
+    message: `${provider} did not confirm a cancellation. Update the shipment manually if the courier voided it.`,
+  };
+}
 
 // -----------------------------------------------------------------------------
 // 1. PostEx Courier Adapter (Live REST API Integration)
@@ -119,7 +153,7 @@ export class PostExCourierAdapter implements ICourierAdapter {
   readonly displayName = "PostEx Reverse Logistics";
   readonly description = "Fintech & reverse logistics platform for Shopify merchants in Pakistan";
   readonly cityHubs = ["Lahore", "Karachi", "Islamabad", "Faisalabad", "Multan", "Sialkot"];
-  readonly isLive = true;
+  readonly isLive = false;
 
   async testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
     if (!input.config.apiToken || input.config.apiToken.startsWith("invalid")) {
@@ -133,29 +167,16 @@ export class PostExCourierAdapter implements ICourierAdapter {
       if (response.ok) {
         return { success: true, message: "PostEx API connection verified successfully.", isLive: true };
       }
+      return { success: false, message: "PostEx rejected the API token. The connection was not verified.", isLive: false };
     } catch {
-      // Network offline fallback
+      return { success: false, message: "PostEx could not be reached, so the connection was not verified.", isLive: false };
     }
-    return { success: true, message: "PostEx API connection configured.", isLive: true };
   }
 
 
   async createReverseShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
     const apiToken = credentials?.apiToken || process.env.POSTEX_API_TOKEN;
-    const trackingNumber = `PEX-${Date.now().toString().slice(-8)}`;
-
-    if (!apiToken) {
-      // Configuration boundary: No hardcoded live token -> return clear non-live result
-      return {
-        success: true,
-        trackingNumber,
-        labelUrl: `https://postex.pk/labels/${trackingNumber}.pdf`,
-        courierName: this.providerName,
-        estimatedDeliveryDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
-        costPKR: 190,
-        isLive: false,
-      };
-    }
+    if (!apiToken) return unconfirmedBooking(this.providerName);
 
     try {
       const response = await fetch("https://api.postex.pk/services/integration/api/order/create-return-order", {
@@ -175,28 +196,23 @@ export class PostExCourierAdapter implements ICourierAdapter {
 
       if (response.ok) {
         const data = await response.json();
-        return {
-          success: true,
-          trackingNumber: data.distTrackingNumber || trackingNumber,
-          labelUrl: `https://postex.pk/labels/${data.distTrackingNumber || trackingNumber}.pdf`,
-          courierName: this.providerName,
-          costPKR: 190,
-          rawResponse: data,
-          isLive: true,
-        };
+        const trackingNumber = data.distTrackingNumber || data.trackingNumber;
+        if (trackingNumber) {
+          return {
+            success: true,
+            trackingNumber: String(trackingNumber),
+            labelUrl: data.labelUrl || undefined,
+            courierName: this.providerName,
+            rawResponse: data,
+            isLive: true,
+          };
+        }
       }
     } catch {
-      // Fallback boundary handling
+      return unconfirmedBooking(this.providerName);
     }
 
-    return {
-      success: true,
-      trackingNumber,
-      labelUrl: `https://postex.pk/labels/${trackingNumber}.pdf`,
-      courierName: this.providerName,
-      costPKR: 190,
-      isLive: false,
-    };
+    return unconfirmedBooking(this.providerName);
   }
 
   async createForwardShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
@@ -209,30 +225,11 @@ export class PostExCourierAdapter implements ICourierAdapter {
 
 
   async trackShipment(trackingNumber: string): Promise<TrackingStatusResult> {
-    return {
-      trackingNumber,
-      courierName: this.providerName,
-      status: "IN_TRANSIT",
-      rawStatus: "In Transit",
-      location: "PostEx Smart Hub - Gulberg Lahore",
-      updatedAt: new Date(),
-      events: [
-        {
-          timestamp: new Date(),
-          status: "IN_TRANSIT",
-          description: "Shipment received at PostEx sorting hub",
-          location: "Lahore Hub",
-        },
-      ],
-    };
+    return unconfirmedTracking(this.providerName, trackingNumber);
   }
 
-  async cancelShipment(trackingNumber: string): Promise<{ success: boolean; message?: string }> {
-    return { success: true, message: `Cancelled PostEx shipment ${trackingNumber}` };
-  }
-
-  async getLabel(trackingNumber: string): Promise<{ labelUrl: string }> {
-    return { labelUrl: `https://postex.pk/labels/${trackingNumber}.pdf` };
+  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+    return unconfirmedCancel(this.providerName);
   }
 }
 
@@ -245,26 +242,17 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
   readonly displayName = "Leopards Courier Service";
   readonly description = "Nationwide reverse door-step pickup and e-commerce returns";
   readonly cityHubs = ["Karachi", "Lahore", "Islamabad", "Sialkot", "Gujranwala", "Hyderabad", "Sukkur"];
-  readonly isLive = true;
+  readonly isLive = false;
 
   async testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
     if (!input.config.apiToken) {
       return { success: false, message: "Leopards API key/password is required.", isLive: false };
     }
-    return { success: true, message: "Leopards API connection configuration saved.", isLive: true };
+    return credentialsStored("Leopards");
   }
 
-  async createReverseShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
-    const trackingNumber = `LEO-${Date.now().toString().slice(-8)}-PK`;
-    return {
-      success: true,
-      trackingNumber,
-      labelUrl: `https://leopardscourier.pk/labels/${trackingNumber}.pdf`,
-      courierName: this.providerName,
-      estimatedDeliveryDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
-      costPKR: 220,
-      isLive: false,
-    };
+  async createReverseShipment(): Promise<LabelResult> {
+    return unconfirmedBooking(this.providerName);
   }
 
   async createForwardShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
@@ -278,25 +266,11 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
 
 
   async trackShipment(trackingNumber: string): Promise<TrackingStatusResult> {
-    return {
-      trackingNumber,
-      courierName: this.providerName,
-      status: "OUT_FOR_DELIVERY",
-      rawStatus: "Out For Delivery",
-      location: "Leopards Express Branch - Karachi South",
-      updatedAt: new Date(),
-      events: [
-        { timestamp: new Date(), status: "OUT_FOR_DELIVERY", description: "Rider dispatched for collection" },
-      ],
-    };
+    return unconfirmedTracking(this.providerName, trackingNumber);
   }
 
-  async cancelShipment(trackingNumber: string): Promise<{ success: boolean; message?: string }> {
-    return { success: true, message: `Voided Leopards CN ${trackingNumber}` };
-  }
-
-  async getLabel(trackingNumber: string): Promise<{ labelUrl: string }> {
-    return { labelUrl: `https://leopardscourier.pk/labels/${trackingNumber}.pdf` };
+  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+    return unconfirmedCancel(this.providerName);
   }
 }
 
@@ -309,26 +283,17 @@ export class TraxCourierAdapter implements ICourierAdapter {
   readonly displayName = "Trax Express Smart Returns";
   readonly description = "Tech-first Pakistani e-commerce reverse logistics & instant API booking";
   readonly cityHubs = ["Karachi", "Lahore", "Islamabad", "Faisalabad", "Multan", "Peshawar"];
-  readonly isLive = true;
+  readonly isLive = false;
 
   async testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
     if (!input.config.apiToken) {
       return { success: false, message: "Trax API token is required.", isLive: false };
     }
-    return { success: true, message: "Trax Express API connection verified.", isLive: true };
+    return credentialsStored("Trax");
   }
 
-  async createReverseShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
-    const trackingNumber = `TRX-${Date.now().toString().slice(-9)}`;
-    return {
-      success: true,
-      trackingNumber,
-      labelUrl: `https://trax.pk/labels/${trackingNumber}.pdf`,
-      courierName: this.providerName,
-      estimatedDeliveryDate: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000),
-      costPKR: 200,
-      isLive: false,
-    };
+  async createReverseShipment(): Promise<LabelResult> {
+    return unconfirmedBooking(this.providerName);
   }
 
   async createForwardShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
@@ -340,22 +305,11 @@ export class TraxCourierAdapter implements ICourierAdapter {
   }
 
   async trackShipment(trackingNumber: string): Promise<TrackingStatusResult> {
-    return {
-      trackingNumber,
-      courierName: this.providerName,
-      status: "IN_TRANSIT",
-      rawStatus: "Arrived at Hub",
-      location: "Trax Fulfilment Center - Shahrah-e-Faisal Karachi",
-      updatedAt: new Date(),
-    };
+    return unconfirmedTracking(this.providerName, trackingNumber);
   }
 
-  async cancelShipment(trackingNumber: string): Promise<{ success: boolean; message?: string }> {
-    return { success: true, message: `Cancelled Trax booking ${trackingNumber}` };
-  }
-
-  async getLabel(trackingNumber: string): Promise<{ labelUrl: string }> {
-    return { labelUrl: `https://trax.pk/labels/${trackingNumber}.pdf` };
+  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+    return unconfirmedCancel(this.providerName);
   }
 }
 
@@ -368,26 +322,17 @@ export class TCSCourierAdapter implements ICourierAdapter {
   readonly displayName = "TCS Express Reverse Logistics";
   readonly description = "Pakistan's largest reverse pickup & nationwide return network";
   readonly cityHubs = ["Karachi", "Lahore", "Islamabad", "Rawalpindi", "Faisalabad", "Multan", "Peshawar", "Quetta"];
-  readonly isLive = true;
+  readonly isLive = false;
 
   async testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
     if (!input.config.apiToken || !input.config.accountNumber) {
       return { success: false, message: "TCS API key and cost center code are both required.", isLive: false };
     }
-    return { success: true, message: "TCS Express API connection verified.", isLive: true };
+    return credentialsStored("TCS");
   }
 
-  async createReverseShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
-    const trackingNumber = `77${Math.floor(1000000000 + Math.random() * 9000000000)}`;
-    return {
-      success: true,
-      trackingNumber,
-      labelUrl: `https://tcs-express.pk/labels/${trackingNumber}.pdf`,
-      courierName: this.providerName,
-      estimatedDeliveryDate: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000),
-      costPKR: 250,
-      isLive: false,
-    };
+  async createReverseShipment(): Promise<LabelResult> {
+    return unconfirmedBooking(this.providerName);
   }
 
   async createForwardShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
@@ -399,22 +344,11 @@ export class TCSCourierAdapter implements ICourierAdapter {
   }
 
   async trackShipment(trackingNumber: string): Promise<TrackingStatusResult> {
-    return {
-      trackingNumber,
-      courierName: this.providerName,
-      status: "IN_TRANSIT",
-      rawStatus: "In Transit Hub",
-      location: "TCS Lahore Central Gateway Hub",
-      updatedAt: new Date(),
-    };
+    return unconfirmedTracking(this.providerName, trackingNumber);
   }
 
-  async cancelShipment(trackingNumber: string): Promise<{ success: boolean; message?: string }> {
-    return { success: true, message: `Cancelled TCS booking ${trackingNumber}` };
-  }
-
-  async getLabel(trackingNumber: string): Promise<{ labelUrl: string }> {
-    return { labelUrl: `https://tcs-express.pk/labels/${trackingNumber}.pdf` };
+  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+    return unconfirmedCancel(this.providerName);
   }
 }
 
@@ -426,26 +360,17 @@ export class MnPCourierAdapter implements ICourierAdapter {
   readonly displayName = "M&P Courier (Muller & Phipps)";
   readonly description = "Express reverse logistics & COD return management across Pakistan";
   readonly cityHubs = ["Karachi", "Lahore", "Islamabad", "Rawalpindi", "Faisalabad", "Sargodha"];
-  readonly isLive = true;
+  readonly isLive = false;
 
   async testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
     if (!input.config.apiToken) {
       return { success: false, message: "M&P Account credentials are required.", isLive: false };
     }
-    return { success: true, message: "M&P Courier connection configuration saved.", isLive: true };
+    return credentialsStored("M&P");
   }
 
-  async createReverseShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
-    const trackingNumber = `MNP-${Math.floor(100000000 + Math.random() * 900000000)}`;
-    return {
-      success: true,
-      trackingNumber,
-      labelUrl: `https://mulphico.pk/labels/${trackingNumber}.pdf`,
-      courierName: this.providerName,
-      estimatedDeliveryDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
-      costPKR: 240,
-      isLive: false,
-    };
+  async createReverseShipment(): Promise<LabelResult> {
+    return unconfirmedBooking(this.providerName);
   }
 
   async createForwardShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
@@ -457,22 +382,11 @@ export class MnPCourierAdapter implements ICourierAdapter {
   }
 
   async trackShipment(trackingNumber: string): Promise<TrackingStatusResult> {
-    return {
-      trackingNumber,
-      courierName: this.providerName,
-      status: "LABEL_CREATED",
-      rawStatus: "Booked",
-      location: "M&P Express Center - Lahore Cantt",
-      updatedAt: new Date(),
-    };
+    return unconfirmedTracking(this.providerName, trackingNumber);
   }
 
-  async cancelShipment(trackingNumber: string): Promise<{ success: boolean; message?: string }> {
-    return { success: true, message: `Cancelled M&P tracking ${trackingNumber}` };
-  }
-
-  async getLabel(trackingNumber: string): Promise<{ labelUrl: string }> {
-    return { labelUrl: `https://mulphico.pk/labels/${trackingNumber}.pdf` };
+  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+    return unconfirmedCancel(this.providerName);
   }
 }
 
@@ -484,26 +398,17 @@ export class CallCourierAdapter implements ICourierAdapter {
   readonly displayName = "CallCourier Express Returns";
   readonly description = "Doorstep reverse pickup & return parcel delivery across 500+ PK cities";
   readonly cityHubs = ["Lahore", "Karachi", "Rawalpindi", "Peshawar", "Quetta", "Bahawalpur"];
-  readonly isLive = true;
+  readonly isLive = false;
 
   async testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
     if (!input.config.apiToken) {
       return { success: false, message: "CallCourier login credentials are required.", isLive: false };
     }
-    return { success: true, message: "CallCourier API connection verified.", isLive: true };
+    return credentialsStored("CallCourier");
   }
 
-  async createReverseShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
-    const trackingNumber = `CC-${Math.floor(10000000 + Math.random() * 90000000)}`;
-    return {
-      success: true,
-      trackingNumber,
-      labelUrl: `https://callcourier.com.pk/labels/${trackingNumber}.pdf`,
-      courierName: this.providerName,
-      estimatedDeliveryDate: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
-      costPKR: 210,
-      isLive: false,
-    };
+  async createReverseShipment(): Promise<LabelResult> {
+    return unconfirmedBooking(this.providerName);
   }
 
   async createForwardShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
@@ -515,22 +420,11 @@ export class CallCourierAdapter implements ICourierAdapter {
   }
 
   async trackShipment(trackingNumber: string): Promise<TrackingStatusResult> {
-    return {
-      trackingNumber,
-      courierName: this.providerName,
-      status: "LABEL_CREATED",
-      rawStatus: "Parcel Registered",
-      location: "CallCourier Express Hub - Rawalpindi",
-      updatedAt: new Date(),
-    };
+    return unconfirmedTracking(this.providerName, trackingNumber);
   }
 
-  async cancelShipment(trackingNumber: string): Promise<{ success: boolean; message?: string }> {
-    return { success: true, message: `Voided CallCourier booking ${trackingNumber}` };
-  }
-
-  async getLabel(trackingNumber: string): Promise<{ labelUrl: string }> {
-    return { labelUrl: `https://callcourier.com.pk/labels/${trackingNumber}.pdf` };
+  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+    return unconfirmedCancel(this.providerName);
   }
 }
 
@@ -570,8 +464,12 @@ const COURIER_SETUP: Record<string, { instructions: string; fields: CourierSetup
     fields: [{ key: "apiToken", label: "API Token", placeholder: "M&P API token", required: true, secret: true }],
   },
   CALLCOURIER: {
-    instructions: "CallCourier needs the login or API credential from the CallCourier merchant account. No account number or user ID field is required.",
+    instructions: "CallCourier needs the login or API credential from the CallCourier merchant account. No account number or user ID field is required. Booking stays manual until a courier response is verified.",
     fields: [{ key: "apiToken", label: "Login / API Credential", placeholder: "CallCourier API credential", required: true, secret: true }],
+  },
+  RIDER: {
+    instructions: "Rider does not have a verified booking API in BYNDCART. Save the account reference if you have one, then enter airway bills manually.",
+    fields: [{ key: "apiToken", label: "Account reference", placeholder: "Rider account reference", required: false, secret: true }],
   },
 };
 
@@ -612,13 +510,49 @@ export class CourierRegistry {
   }
 }
 
-// Register all 6 Pakistani courier adapters
+export class RiderCourierAdapter implements ICourierAdapter {
+  readonly providerName = "RIDER";
+  readonly displayName = "Rider";
+  readonly description = "Manual reverse pickup. No verified Rider booking API is connected.";
+  readonly cityHubs = ["Karachi", "Lahore", "Islamabad"];
+  readonly isLive = false;
+
+  async testConnection(input: TestConnectionInput): Promise<TestConnectionResult> {
+    if (!input.config.apiToken) {
+      return { success: false, message: "A Rider account reference is required to save this courier.", isLive: false };
+    }
+    return credentialsStored("Rider");
+  }
+
+  async createReverseShipment(): Promise<LabelResult> {
+    return unconfirmedBooking(this.providerName);
+  }
+
+  async createForwardShipment(): Promise<LabelResult> {
+    return unconfirmedBooking(this.providerName);
+  }
+
+  async generateReturnLabel(): Promise<LabelResult> {
+    return unconfirmedBooking(this.providerName);
+  }
+
+  async trackShipment(trackingNumber: string): Promise<TrackingStatusResult> {
+    return unconfirmedTracking(this.providerName, trackingNumber);
+  }
+
+  async cancelShipment(): Promise<{ success: boolean; message?: string }> {
+    return unconfirmedCancel(this.providerName);
+  }
+}
+
+// Register Pakistani courier adapters. Only PostEx attempts a live booking call.
 CourierRegistry.register(new TCSCourierAdapter());
 CourierRegistry.register(new LeopardsCourierAdapter());
 CourierRegistry.register(new TraxCourierAdapter());
 CourierRegistry.register(new MnPCourierAdapter());
 CourierRegistry.register(new PostExCourierAdapter());
 CourierRegistry.register(new CallCourierAdapter());
+CourierRegistry.register(new RiderCourierAdapter());
 
 /**
  * Saves/updates tenant-scoped merchant courier configuration with encrypted credentials.
@@ -653,16 +587,7 @@ export async function saveMerchantCourierConfig(
     });
   }
 
-  const existing = await prisma.merchantCourierConfig.findUnique({
-    where: {
-      shopifyStoreId_providerName: {
-        shopifyStoreId,
-        providerName: normalizedProvider,
-      },
-    },
-  });
-
-  const isLive = !!data.apiToken || (existing ? !!existing.encryptedApiToken : false);
+  const isLive = false;
 
   const config = await prisma.merchantCourierConfig.upsert({
     where: {

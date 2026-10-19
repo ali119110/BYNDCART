@@ -153,13 +153,15 @@ test("Courier Integration - Neutral ICourierAdapter registry", async () => {
     orderNumber: "#1001",
   });
 
-  assert.strictEqual(label.success, true);
-  assert.ok(label.trackingNumber.startsWith("77"));
+  assert.strictEqual(label.success, false);
+  assert.strictEqual(label.isLive, false);
+  assert.strictEqual(label.trackingNumber, "");
 
   const shipment = await registerShipmentTrack({
     shopifyStoreId: "store-1",
     orderId: "gid://shopify/Order/1001",
     orderNumber: "#1001",
+    trackingNumber: "MANUAL-1001",
     type: "RETURN",
   });
 

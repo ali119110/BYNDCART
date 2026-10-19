@@ -59,41 +59,35 @@ test("Pakistani Logistics - Carrier Provider Adapters (TCS, Leopards, Trax, M&P,
     orderId: "gid://shopify/Order/1001",
     orderNumber: "#1001",
   });
-  assert.strictEqual(tcsLabel.success, true);
-  assert.ok(tcsLabel.trackingNumber.startsWith("77"));
-  assert.strictEqual(tcsLabel.costPKR, 250);
+  assert.strictEqual(tcsLabel.success, false);
+  assert.strictEqual(tcsLabel.isLive, false);
+  assert.strictEqual(tcsLabel.trackingNumber, "");
 
-  // Test Leopards Adapter
   const leopards = CourierRegistry.get("LEOPARDS");
   const leopardsLabel = await leopards.generateReturnLabel({
     shopifyStoreId: "store-1",
     orderId: "gid://shopify/Order/1002",
     orderNumber: "#1002",
   });
-  assert.strictEqual(leopardsLabel.success, true);
-  assert.ok(leopardsLabel.trackingNumber.startsWith("LEO-"));
-  assert.strictEqual(leopardsLabel.costPKR, 220);
+  assert.strictEqual(leopardsLabel.success, false);
+  assert.strictEqual(leopardsLabel.isLive, false);
 
-  // Test Trax Adapter
   const trax = CourierRegistry.get("TRAX");
   const traxLabel = await trax.generateReturnLabel({
     shopifyStoreId: "store-1",
     orderId: "gid://shopify/Order/1003",
     orderNumber: "#1003",
   });
-  assert.strictEqual(traxLabel.success, true);
-  assert.ok(traxLabel.trackingNumber.startsWith("TRX-"));
-  assert.strictEqual(traxLabel.costPKR, 200);
+  assert.strictEqual(traxLabel.success, false);
 
-  // Test PostEx Adapter
   const postex = CourierRegistry.get("POSTEX");
   const postexLabel = await postex.generateReturnLabel({
     shopifyStoreId: "store-1",
     orderId: "gid://shopify/Order/1004",
     orderNumber: "#1004",
   });
-  assert.strictEqual(postexLabel.success, true);
-  assert.ok(postexLabel.trackingNumber.startsWith("PEX-"));
+  assert.strictEqual(postexLabel.success, false);
+  assert.strictEqual(postexLabel.isLive, false);
 });
 
 test("Pakistani Logistics Service - Register & Query Tenant Shipments", async () => {
@@ -104,6 +98,7 @@ test("Pakistani Logistics Service - Register & Query Tenant Shipments", async ()
     orderId: "gid://shopify/Order/1001",
     orderNumber: "#1001",
     courier: "TCS",
+    trackingNumber: "771234567890",
     type: "RETURN",
   });
 

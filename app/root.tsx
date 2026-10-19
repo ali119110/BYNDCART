@@ -1,5 +1,6 @@
 import { Links, Meta, Outlet, Scripts, ScrollRestoration, useLoaderData } from "react-router";
 import type { LoaderFunction } from "react-router";
+import "./styles/byndcart.css";
 
 export const loader: LoaderFunction = async () => {
   return {

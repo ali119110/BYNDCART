@@ -65,7 +65,7 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
 
 
   // 2. Resolve Courier Adapter (Requested vs Default Merchant Inbound/Outbound)
-  let adapter = input.courier
+  const adapter = input.courier
     ? CourierRegistry.get(input.courier)
     : await getDefaultMerchantCourier(input.shopifyStoreId, shipmentType === "FORWARD" ? "FORWARD" : "REVERSE");
 
@@ -112,41 +112,57 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
         );
       }
 
+      if (!labelResult?.success || !labelResult.isLive || !labelResult.trackingNumber) {
+        const message = labelResult?.error || `${adapter.providerName} did not confirm a shipment. Enter the airway bill manually.`;
+        if (!labelResult?.isLive) {
+          const manualError = new Error(message) as Error & { manualFallback?: boolean };
+          manualError.manualFallback = true;
+          throw manualError;
+        }
+        throw new Error(message);
+      }
       trackingNumber = labelResult.trackingNumber;
       labelUrl = labelResult.labelUrl || "";
       estimatedDeliveryDate = labelResult.estimatedDeliveryDate;
     } catch (err: any) {
+      if (err?.manualFallback) throw err;
       console.error(`[Shipment Service] External Courier API failure for ${orderNumber}:`, err.message);
-
-      // Enqueue retryable BackgroundJob for external API timeout/failure
       await prisma.backgroundJob.create({
         data: {
           shopifyStoreId: input.shopifyStoreId,
           type: "COURIER_SHIPMENT_CREATE",
           payload: {
-            input: input as any,
             providerName: adapter.providerName,
+            orderNumber,
             error: err.message,
           },
-
           status: "PENDING",
         },
       });
-
       throw new Error(`Courier booking failed for ${adapter.providerName}: ${err.message}. Queued for retry.`);
     }
   }
 
-  // 4. Fetch normalized tracking status from Courier Adapter
-  const trackingInfo = await adapter.trackShipment(trackingNumber!, credentials);
-  const normalizedStatus = normalizeCourierStatus(trackingInfo.status);
+  // Manual airway bills and confirmed bookings start as LABEL_CREATED.
+  // A tracking poll only changes that status when the courier returns a real status.
+  let normalizedStatus: StandardShipmentStatus = "LABEL_CREATED";
+  let location: string | undefined;
+  let rawPayload: any;
+  if (!input.trackingNumber && labelResult?.isLive) {
+    const trackingInfo = await adapter.trackShipment(trackingNumber!, credentials);
+    rawPayload = trackingInfo.rawPayload;
+    if (trackingInfo.status !== "UNKNOWN") {
+      normalizedStatus = normalizeCourierStatus(trackingInfo.status);
+      location = trackingInfo.location;
+    }
+  }
 
   // 5. Persist shipment record in PostgreSQL
   const shipment = await prisma.shipmentTrack.upsert({
     where: { trackingNumber: trackingNumber! },
     update: {
       status: normalizedStatus,
-      location: trackingInfo.location || null,
+      location: location || null,
       updatedAt: new Date(),
     },
     create: {
@@ -158,7 +174,7 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
       trackingNumber: trackingNumber!,
       labelUrl,
       status: normalizedStatus,
-      location: trackingInfo.location || null,
+      location: location || null,
       estimatedDelivery: estimatedDeliveryDate || null,
       returnRequestId: input.returnRequestId || null,
       exchangeRequestId: input.exchangeRequestId || null,
@@ -171,9 +187,11 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
       data: {
         shipmentTrackId: shipment.id,
         status: normalizedStatus,
-        description: trackingInfo.events?.[0]?.description || `Shipment registered via ${adapter.displayName}`,
-        location: trackingInfo.location || null,
-        rawPayload: trackingInfo.rawPayload || (labelResult ? labelResult.rawResponse : null),
+        description: input.trackingNumber
+          ? `Manual airway bill recorded via ${adapter.displayName}`
+          : `Shipment registered via ${adapter.displayName}`,
+        location: location || null,
+        rawPayload: rawPayload || (labelResult ? labelResult.rawResponse : null),
       },
     });
   } catch {

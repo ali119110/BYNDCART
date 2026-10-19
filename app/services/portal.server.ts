@@ -178,7 +178,8 @@ export async function submitShopperReturn(input: SubmitShopperReturnInput) {
     customerName: input.customerName,
   });
 
-  const pickupFeePKR = labelResult.costPKR || (labelResult as any).cost || 200;
+  const bookingConfirmed = Boolean(labelResult.success && labelResult.isLive && labelResult.trackingNumber);
+  const pickupFeePKR = bookingConfirmed ? Number(labelResult.costPKR || 0) : 0;
   const netRefundAmountPKR = Math.max(0, totalItemValuePKR - restockingFeePKR - pickupFeePKR);
 
   // Create ReturnRequest in database
@@ -207,16 +208,17 @@ export async function submitShopperReturn(input: SubmitShopperReturnInput) {
     data: { refundAmount: netRefundAmountPKR },
   });
 
-  // Register reverse shipment in PostgreSQL
-  await registerShipmentTrack({
-    shopifyStoreId: input.shopifyStoreId,
-    orderId: input.shopifyOrderId,
-    orderNumber: input.orderNumber,
-    courier: selectedCourier,
-    trackingNumber: labelResult.trackingNumber,
-    type: "RETURN",
-    returnRequestId: returnRequest.id,
-  });
+  if (bookingConfirmed) {
+    await registerShipmentTrack({
+      shopifyStoreId: input.shopifyStoreId,
+      orderId: input.shopifyOrderId,
+      orderNumber: input.orderNumber,
+      courier: selectedCourier,
+      trackingNumber: labelResult.trackingNumber,
+      type: "RETURN",
+      returnRequestId: returnRequest.id,
+    });
+  }
 
   // Trigger non-blocking RETURN_SUBMITTED notification
   await triggerLifecycleNotification({
@@ -227,7 +229,7 @@ export async function submitShopperReturn(input: SubmitShopperReturnInput) {
     variables: {
       customer_name: input.customerName || "Customer",
       order_number: input.orderNumber,
-      tracking_number: labelResult.trackingNumber,
+      tracking_number: bookingConfirmed ? labelResult.trackingNumber : "Pending manual airway bill",
       carrier: adapter.displayName,
     },
   });
@@ -236,9 +238,11 @@ export async function submitShopperReturn(input: SubmitShopperReturnInput) {
     success: true,
     returnRequestId: returnRequest.id,
     orderNumber: input.orderNumber,
-    trackingNumber: labelResult.trackingNumber,
+    trackingNumber: bookingConfirmed ? labelResult.trackingNumber : "",
+    bookingConfirmed,
+    bookingMessage: bookingConfirmed ? "Courier confirmed the return shipment." : labelResult.error || "Courier booking was not confirmed. Add the airway bill manually.",
     courier: adapter.displayName,
-    labelUrl: labelResult.labelUrl,
+    labelUrl: bookingConfirmed ? labelResult.labelUrl : undefined,
     summaryPKR: {
       totalItemValue: totalItemValuePKR,
       restockingFeeDeduction: restockingFeePKR,

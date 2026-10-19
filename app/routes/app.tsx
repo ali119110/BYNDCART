@@ -32,6 +32,8 @@ const navLinks = (
     <s-link href="/app/warehouse">Warehouse</s-link>
     <s-link href="/app/couriers">Couriers</s-link>
     <s-link href="/app/notifications">Notifications</s-link>
+    <s-link href="/app/refunds">Refunds</s-link>
+    <s-link href="/app/reconciliation">COD</s-link>
     <s-link href="/app/billing">Billing</s-link>
   </s-app-nav>
 );
@@ -92,9 +94,7 @@ const styles = (
       transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
     }
     s-box:hover {
-      transform: translateY(-4px);
-      box-shadow: 0 16px 24px -4px rgba(0, 0, 0, 0.04), 0 8px 8px -4px rgba(0, 0, 0, 0.03) !important;
-      border-color: rgba(99, 102, 241, 0.3) !important;
+      border-color: rgba(31, 75, 153, 0.35) !important;
     }
     s-heading {
       font-weight: 700 !important;
@@ -150,9 +150,11 @@ const styles = (
       font-family: 'Plus Jakarta Sans', sans-serif !important;
     }
     s-button:hover, button[type="submit"]:hover, [slot="primary-action"] button:hover {
-      transform: translateY(-1px) !important;
-      box-shadow: 0 6px 14px 0 rgba(99, 102, 241, 0.4) !important;
-      background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%) !important;
+      background: #1d4ed8 !important;
+    }
+    @media (max-width: 760px) {
+      s-app-nav { margin: 8px !important; padding: 8px !important; }
+      s-page { padding: 12px 10px !important; }
     }
     button {
       background: white !important;

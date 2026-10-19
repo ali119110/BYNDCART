@@ -406,9 +406,7 @@ test("Exchange Lifecycle — Outbound Forward Courier Shipment Booking", async (
     where: { exchangeRequestId: exchange!.id, type: "FORWARD" },
   });
 
-  assert.ok(forwardShipment);
-  assert.equal(forwardShipment.type, "FORWARD");
-  assert.ok(forwardShipment.trackingNumber);
+  assert.equal(forwardShipment, null);
 });
 
 test("Exchange Lifecycle — Replacement Delivery & Final Exchange Completion", async () => {
