@@ -78,13 +78,12 @@ async function renderStorePage(request: Request) {
           courier: String(form.get("courier") || courierChoices.defaultCourier),
           customerPhone: String(form.get("customerPhone") || ""),
           pickupAddress: String(form.get("pickupAddress") || ""),
+          customerCity: String(form.get("customerCity") || ""),
           reason: items[0].reason,
           sessionToken,
-          items,
+          items: items.map((item) => ({ ...item, title: lookup.order.lineItems.find((line) => line.lineItemId === item.shopifyLineItemId)?.title })),
         });
-        notice = result.bookingConfirmed
-          ? `Return ${result.returnRequestId} was booked with ${result.courier}. Tracking ${result.trackingNumber}.`
-          : `Return request ${result.returnRequestId} was recorded. ${result.bookingMessage}`;
+        notice = `Return ${result.returnRequestId} was booked with ${result.courier}. Tracking ${result.trackingNumber}. ${result.bookingMessage}`;
         body = `<p>You can close this page.</p>`;
       }
     }
@@ -123,17 +122,19 @@ async function loadCourierChoices(shopifyStoreId: string) {
   const adapters = CourierRegistry.getRegisteredAdapters();
   const configs = await getStoreCourierConfigs(shopifyStoreId);
   const configured = new Map(configs.map((config) => [config.providerName, config]));
-  const defaultCourier = (await getDefaultMerchantCourier(shopifyStoreId, "REVERSE")).providerName;
+  const couriers = adapters.filter((adapter) => {
+    const config = configured.get(adapter.providerName);
+    const configuredKeys = new Set(config?.configuredFieldKeys || []);
+    const requiredFieldsPresent = adapter.fields.every((field) => !field.required || configuredKeys.has(field.key));
+    return Boolean(adapter.isLive && config?.enabled && config?.isLive && requiredFieldsPresent);
+  }).map((adapter) => ({
+    providerName: adapter.providerName,
+    displayName: adapter.displayName,
+  }));
+  const preferred = (await getDefaultMerchantCourier(shopifyStoreId, "REVERSE")).providerName;
   return {
-    defaultCourier,
-    couriers: adapters.map((adapter) => {
-      const config = configured.get(adapter.providerName);
-      return {
-        providerName: adapter.providerName,
-        displayName: adapter.displayName,
-        liveBookingConfigured: Boolean(adapter.isLive && config?.enabled && config?.hasToken),
-      };
-    }),
+    defaultCourier: couriers.some((courier) => courier.providerName === preferred) ? preferred : (couriers[0]?.providerName || ""),
+    couriers,
   };
 }
 
@@ -153,22 +154,22 @@ function orderForm(
       </select>
     </label>`).join("");
   const courierOptions = courierChoices.couriers.map((courier) => {
-    const note = courier.liveBookingConfigured ? "PostEx return API; pickup details required" : "Manual airway bill required";
     const selected = courier.providerName === courierChoices.defaultCourier ? " selected" : "";
-    return `<option value="${escapeHtml(courier.providerName)}"${selected}>${escapeHtml(courier.displayName)} — ${escapeHtml(note)}</option>`;
+    return `<option value="${escapeHtml(courier.providerName)}"${selected}>${escapeHtml(courier.displayName)}</option>`;
   }).join("");
-  const liveCourier = courierChoices.couriers.some((courier) => courier.liveBookingConfigured);
+  const canBook = courierChoices.couriers.length > 0 && lookup.eligible;
   return `<form method="post" action="/apps/returns">
     <h2>Order ${escapeHtml(lookup.order.orderNumber)}</h2>
     ${lookup.eligible ? "" : `<p class="warn">${escapeHtml(lookup.ineligibilityReason || "This order cannot be requested online.")}</p>`}
     <input type="hidden" name="intent" value="SUBMIT_RETURN">
     <input type="hidden" name="sessionToken" value="${escapeHtml(sessionToken)}">
     ${items}
-    <label>Pickup courier<select name="courier">${courierOptions}</select></label>
-    ${liveCourier ? `<label>Pickup phone<input name="customerPhone" type="tel" autocomplete="tel" placeholder="03XX XXXXXXX"></label>
-    <label>Pickup address<input name="pickupAddress" autocomplete="street-address" placeholder="Full address where the parcel will be collected"></label>
-    <p>PostEx booking needs both the phone number and the pickup address. Other couriers are recorded without a live shipment.</p>` : `<p>This store has no live courier booking. The request is recorded and the store adds the airway bill after booking with the carrier.</p>`}
-    <button type="submit" ${lookup.eligible ? "" : "disabled"}>Submit request</button>
+    ${canBook ? `<label>Pickup courier<select name="courier" required>${courierOptions}</select></label>
+    <label>Pickup phone<input name="customerPhone" type="tel" required autocomplete="tel" placeholder="03XX XXXXXXX"></label>
+    <label>Pickup city<input name="customerCity" required placeholder="Karachi"></label>
+    <label>Pickup address<input name="pickupAddress" required autocomplete="street-address" placeholder="House, street, area"></label>
+    <p>The return is created only after PostEx or Leopards confirms a tracking number.</p>` : `<p class="warn">This store has not verified a PostEx or Leopards connection, so a return cannot be booked yet.</p>`}
+    <button type="submit" ${canBook ? "" : "disabled"}>Submit request</button>
   </form>`;
 }
 

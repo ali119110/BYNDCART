@@ -1,70 +1,66 @@
-# BYNDCART Courier Integrations — Verified Source Status
+# BYNDCART Courier Integration Status
 
-> This document describes behavior visible in the courier routes and services in this code package. It does not claim that a carrier API is live merely because a merchant can save credentials. Vendor API schemas and production credentials must be independently tested before a carrier is described as production-ready.
+## Current capability matrix
 
-## Current integration status
+| Provider | Registered in app | Credential test | API booking | Tracking | Cancellation | Document/label | Status |
+|---|---:|---:|---:|---:|---:|---:|---|
+| PostEx | Yes | Operational Cities endpoint | Normal / Reverse / Replacement | `track-order` | `cancel-order` | Invoice PDF + load sheet PDF | Implemented from supplied PostEx guide; UAT required |
+| Leopards | Yes | `getAllCities` | `bookPacket` | `trackBookedPacket` | `cancelBookedPackets` | `slip_link` | Implemented from supplied eCom guide; reverse-booking mapping needs carrier UAT |
+| TRAX | No | No | No | No | No | No | Disabled pending current official docs |
+| TCS | No | No | No | No | No | No | Disabled pending current subscribed API contract |
+| M&P | No | No | No | No | No | No | Disabled pending current official docs |
+| Call Courier | No | No | No | No | No | No | Disabled pending current official docs |
+| Rider | No | No | No | No | No | No | Disabled pending current official docs |
 
-| Carrier | Credentials supported in Settings | Live booking implemented in BYNDCART | Live tracking | Live cancellation | Operational workflow |
-|---|---|---|---|---|---|
-| PostEx | API token | Return pickup only, when the store token and real pickup phone/address are supplied | Not implemented | Not implemented | Test the connection, submit a return through the customer portal, and confirm that a tracking number is returned. If it is not confirmed, book with PostEx and record the airway bill manually. |
-| Leopards | API key/password | No | No | No | Book directly with Leopards and record the airway bill manually. Saving credentials does not verify a connection. |
-| Trax | API token | No | No | No | Book directly with Trax and record the airway bill manually. Saving credentials does not verify a connection. |
-| TCS | API key and cost center code | No | No | No | Book directly with TCS and record the airway bill manually. Saving credentials does not verify a connection. |
-| M&P | API token | No | No | No | Book directly with M&P and record the airway bill manually. Saving credentials does not verify a connection. |
-| CallCourier | Login/API credential | No | No | No | Book directly with CallCourier and record the airway bill manually. Saving credentials does not verify a connection. |
-| Rider | Optional account reference | No | No | No | Manual airway-bill workflow only. |
+A provider appears in the courier UI only if it is registered. The dormant class definitions for other providers are not registered, so those names cannot be selected via `CourierRegistry`.
 
-`CourierRegistry.getRegisteredAdapters()` lists all seven carriers for merchant configuration and the customer courier selector. An entry in that list means the carrier is registered in BYNDCART; it does not mean booking, tracking, or cancellation APIs are implemented. Unknown provider names are rejected instead of silently falling back to TCS.
+## Credential flow
 
-## Merchant courier settings
+- PostEx uses the store's own API token in the `token` HTTP header.
+- Leopards uses `api_key` and `api_password` in JSON request bodies. The merchant can select production or staging; credentials must match that environment.
+- Credential fields are stored encrypted inside the existing `encryptedApiToken` column as a versioned JSON bundle, which also reads legacy single-token records.
+- Browser loaders receive only configured field names, non-secret settings, and masked credential previews. They never receive decrypted secrets.
+- Saving changes disables the integration. The merchant must test the connection again to mark the configuration enabled/verified.
+- Booking, tracking, cancellation and authenticated PostEx PDF routes enforce tenant-scoped records and verified credential configuration.
 
-The merchant-facing settings route is `app/routes/app.couriers.tsx`.
+## PostEx workflow
 
-- `SAVE_CONFIG` stores the merchant's token with encryption through `saveMerchantCourierConfig` and enables the config.
-- The API token is not read back into the browser. An empty token when editing an already-configured courier means “keep the saved token”; enter a new token to replace it.
-- `SET_DEFAULT_REVERSE` selects the default return/inbound courier.
-- `SET_DEFAULT_FORWARD` selects the default exchange/outbound courier.
-- If the requested default is absent, `getDefaultMerchantCourier` falls back to the first enabled config; if none exists, it falls back to TCS. For that reason, merchants should set both defaults explicitly.
-- A default can currently be set before a carrier has credentials, so a selected manual-only or unconfigured carrier may still require an airway bill.
-- The database config `isLive` flag is not proof that a carrier connection was tested. In this implementation it is not set to true by the save flow.
-- Only PostEx's `testConnection()` makes an HTTP request (to its operational-cities endpoint). For other carriers, a credential-input check is not a live connection test; the merchant UI must say so clearly.
+1. The merchant enters a PostEx token and optionally the documented pickup/store address codes.
+2. Test Connection calls the official Operational Cities endpoint.
+3. The return form requires the customer pickup phone/address/city. City availability is verified against the carrier endpoint.
+4. The server posts `orderType="Reverse"` to `/order/v3/create-order` and requires HTTP success, `statusCode=200`, and a carrier tracking number.
+5. The documented create response may be `UnBooked`. BYNDCART records the API-created order/tracking reference but does not falsely announce that pickup is complete. Tracking can later be refreshed.
+6. Shipment management offers tracking refresh, carrier cancellation, PostEx invoice PDF download, and load sheet PDF generation through the official APIs.
 
-## Return request flow
+## Leopards workflow
 
-1. `app/routes/portal.tsx` resolves the store and displays the registered courier options. Its default selection comes from `getDefaultMerchantCourier(storeId, "REVERSE")`.
-2. After OTP verification, the customer selects return items and a courier.
-3. `app/services/portal.server.ts` checks the customer session, plan gate, and return policy before creating a return request.
-4. It loads the courier credentials for the **same `shopifyStoreId`** using `getDecryptedCourierCredentials` and passes them to `generateReturnLabel`.
-5. PostEx live return booking requires an API token plus a real pickup phone number and full pickup address. BYNDCART must not substitute placeholder phone numbers, addresses, or an app-wide token.
-6. A booking is considered confirmed only when the adapter returns success, `isLive: true`, and a non-empty tracking number. Only a confirmed booking is immediately registered in `ShipmentTrack`.
-7. If booking is not confirmed, the return request can still be submitted, but the customer must be told that the request was recorded and that the airway bill is pending. Do not present that outcome as a confirmed shipment.
-8. The current PostEx response parser does not populate `LabelResult.costPKR`. As a result, the current refund calculation does not deduct a PostEx pickup fee from the displayed estimate. The UI must describe the amount as an estimate before any unquoted courier fee; do not document the current value as a final courier-cost-adjusted refund.
+1. The merchant enters API key/password, selects the matching environment, and configures warehouse city/address/contact/phone and a default weight in grams.
+2. Test Connection posts credentials to `/getAllCities/format/json/` and enables the integration only after `status=1` and a city list are returned.
+3. At booking time, BYNDCART resolves the sender and recipient city IDs from the live city list and checks origin/destination permissions.
+4. `/bookPacket/format/json/` must return `status=1` and `track_number` before BYNDCART creates the shipment record. A provider `slip_link` is saved as the label URL.
+5. Tracking and cancellation use `/trackBookedPacket/format/json/` and `/cancelBookedPackets/format/json/`.
+6. For returns, the code reverses shipper/consignee and origin/destination. The supplied document describes generic packet booking and not a dedicated reverse-booking operation. This mapping must be verified with Leopards on staging before production returns are enabled.
 
-## Forward and exchange shipment behavior
+## API safety & data rules
 
-The current PostEx endpoint used by this code is the return-order endpoint. BYNDCART must not call that endpoint for a forward or replacement shipment. Until a verified PostEx forward API workflow is implemented, forward/exchange shipment creation returns an unconfirmed result and requires a manual airway bill.
+- Do not save a manually typed tracking number as a booking confirmation.
+- Do not create a shipment if the carrier has not returned its own tracking/CN number with its documented success status.
+- Never fall back to a global PostEx token or another merchant's credentials.
+- Pakistani mobile numbers are normalized and validated; no dummy phone number or address is substituted.
+- City IDs are not guessed. Leopards city IDs are read from `getAllCities`; PostEx city names are checked against its Operational Cities endpoint.
+- COD/PKR amounts must come from the caller's authoritative Shopify/payment data. The adapter defaults missing COD to zero rather than fabricating a value.
+- Keep API failures visible to merchants; do not label a connection check as a confirmed shipment.
 
-`app/services/shipments.server.ts` resolves the `FORWARD` default for `FORWARD` and `EXCHANGE` shipment types; `RETURN` uses the reverse/return default.
+## Required release verification
 
-## Shipment records and manual airway bills
+1. Run the full app's type check, lint, tests and production build.
+2. Test PostEx valid/invalid token; supported/unsupported cities; Normal, Reverse and Replacement order types; API error; `UnBooked` state; later delivered/returned tracking; cancellation; invoice and load sheet PDFs.
+3. Test Leopards production and staging separately with matching credentials; city permission rejection; booking success/failure; CN tracking; cancellation; slip URL; default weight; COD zero/non-zero; and reverse-direction shipment with Leopards' written confirmation.
+4. Confirm the new `app.shipments-label.tsx` route is registered by the project's route configuration.
+5. Verify the app proxy/customer route used by the storefront is the one being deployed; `app/routes/apps.returns.tsx` was not supplied in the upload and has not been modified by this patch.
+6. Confirm in the app UI that only PostEx and Leopards are offered; there must be no manual airway-bill form or fallback path.
 
-- `app/routes/app.shipments.tsx` is a record-entry screen, not a booking screen.
-- A manual entry requires a real synced order, a courier, shipment type, and the confirmed airway bill/tracking number. A label URL is optional and must be an HTTP(S) URL.
-- The route must use the real `shopifyOrderId` stored against the merchant's order; it must never generate a fake Shopify Order GID.
-- Manual records start at `LABEL_CREATED`. That status means a label/airway bill is recorded; it does not mean a carrier event was independently verified.
-- `ShipmentTrack` records are stored by `registerShipmentTrack` and listed by `getStoreShipments`.
-- All current adapters return `UNKNOWN` for live tracking. PostEx booking is live, but this is not a live tracking integration.
-- Current manual entry associates the shipment with the order. The route does not currently accept a related return-request or exchange-request ID, so it should not be documented as linking a manually entered airway bill to a specific request record unless that linkage is added separately.
+## Source material
 
-## Files involved
-
-- `app/routes/app.couriers.tsx` — merchant credential configuration, default selection, PostEx connection test UI.
-- `app/services/courier.server.ts` — adapter registry, credential persistence, and carrier adapter behaviors.
-- `app/routes/portal.tsx` — customer return portal and courier selection.
-- `app/services/portal.server.ts` — policy/session checks, return submission, and return-label request.
-- `app/routes/app.shipments.tsx` — manual airway-bill entry and shipment list.
-- `app/services/shipments.server.ts` — shipment record persistence and status sync.
-
-## Before calling a carrier integration production-ready
-
-For each provider, verify the carrier's current official documentation, required payload fields, authentication method, sandbox/production endpoints, booking response schema, label format, tracking API, cancellation API, and idempotency behavior. Then add integration tests using test credentials and test addresses. The code status table above should only be updated after those steps are proven.
+- *PostEx COD API Integration Guide*, version 4.1.9, supplied PDF: Operational Cities (p. 6), Order Creation (pp. 12–13), Tracking (pp. 17–19), Load Sheet (p. 16), Airway Bill / Invoice (p. 23), Cancel Order (p. 26).
+- *Leopards eCom Merchant APIs*, version 2.0, supplied PDF: production/staging URL and auth (p. 3), City List (pp. 4–6), Tracking (pp. 8–16), Book a Packet (pp. 17–20), Cancel Booked Packets (pp. 31–32).

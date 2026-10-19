@@ -123,30 +123,25 @@ test("Portal Service - Submit Shopper Return with PKR Restocking Fee Math & Veri
     customerEmail: "shopper@example.pk",
   });
 
-  const res = await submitShopperReturn({
-    shopifyStoreId: "store-1",
-    shopifyOrderId: "gid://shopify/Order/1001",
-    orderNumber: "#1001",
-    customerEmail: "shopper@example.pk",
-    customerName: "Tariq Mahmood",
-    courier: "TCS",
-    reason: "Size Mismatch",
-    sessionToken,
-    items: [
-      {
-        shopifyLineItemId: "gid://shopify/LineItem/1",
-        quantity: 1,
-        reason: "Size Mismatch",
-        price: 3000,
-      },
-    ],
-  });
-
-  assert.strictEqual(res.success, true);
-  assert.strictEqual(res.bookingConfirmed, false);
-  assert.strictEqual(res.trackingNumber, "");
-  assert.strictEqual(res.summaryPKR.totalItemValue, 3000);
-  assert.strictEqual(res.summaryPKR.restockingFeeDeduction, 300); // 10% of 3000
-  assert.strictEqual(res.summaryPKR.pickupFeeDeduction, 0);
-  assert.strictEqual(res.summaryPKR.netRefundAmount, 2700); // 3000 - 300, no invented courier fee
+  await assert.rejects(
+    () => submitShopperReturn({
+      shopifyStoreId: "store-1",
+      shopifyOrderId: "gid://shopify/Order/1001",
+      orderNumber: "#1001",
+      customerEmail: "shopper@example.pk",
+      customerName: "Tariq Mahmood",
+      courier: "TCS",
+      reason: "Size Mismatch",
+      sessionToken,
+      items: [
+        {
+          shopifyLineItemId: "gid://shopify/LineItem/1",
+          quantity: 1,
+          reason: "Size Mismatch",
+          price: 3000,
+        },
+      ],
+    }),
+    /supported courier/,
+  );
 });

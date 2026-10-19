@@ -12,19 +12,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const adapters = CourierRegistry.getRegisteredAdapters();
   const storeCourierConfigs = await getStoreCourierConfigs(shopifyStoreId);
   const configuredByProvider = new Map(storeCourierConfigs.map((config) => [config.providerName, config]));
-  const availableCouriers = adapters.map((adapter) => {
-    const config = configuredByProvider.get(adapter.providerName);
-    return {
-      ...adapter,
-      liveBookingConfigured: Boolean(adapter.isLive && config?.enabled && config?.hasToken),
-    };
-  });
-  const defaultReturnCourier = await getDefaultMerchantCourier(shopifyStoreId, "REVERSE");
+  const availableCouriers = adapters
+    .filter((adapter) => {
+      const config = configuredByProvider.get(adapter.providerName);
+      const configuredKeys = new Set(config?.configuredFieldKeys || []);
+      const requiredFieldsPresent = adapter.fields.length > 0 && adapter.fields.every((field) => !field.required || configuredKeys.has(field.key));
+      return Boolean(adapter.isLive && config?.enabled && config?.isLive && requiredFieldsPresent);
+    })
+    .map((adapter) => ({ ...adapter, liveBookingConfigured: true }));
+  const merchantDefault = await getDefaultMerchantCourier(shopifyStoreId, "REVERSE");
+  const defaultReturnCourier = availableCouriers.find((courier) => courier.providerName === merchantDefault.providerName)?.providerName
+    || availableCouriers[0]?.providerName
+    || "";
   return {
     shop,
     shopifyStoreId,
     availableCouriers,
-    defaultReturnCourier: defaultReturnCourier.providerName,
+    defaultReturnCourier,
     embedded: url.searchParams.get("embedded") === "1",
     storefrontUrl: `https://${shop}/apps/returns`,
   };
@@ -88,6 +92,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const courier = formData.get("courier") as string;
     const customerPhone = String(formData.get("customerPhone") || "");
     const pickupAddress = String(formData.get("pickupAddress") || "");
+    const customerCity = String(formData.get("customerCity") || "");
     const reason = formData.get("reason") as string;
     const itemsJson = formData.get("items") as string;
 
@@ -102,6 +107,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         courier,
         customerPhone,
         pickupAddress,
+        customerCity,
         reason,
         sessionToken,
         items,
@@ -127,9 +133,10 @@ export default function ShopperPortal() {
 
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [selectedItems, setSelectedItems] = useState<Record<string, { quantity: number; reason: string }>>({});
-  const [selectedCourier, setSelectedCourier] = useState(defaultReturnCourier || "TCS");
+  const [selectedCourier, setSelectedCourier] = useState(defaultReturnCourier);
   const [pickupPhoneInput, setPickupPhoneInput] = useState("");
   const [pickupAddressInput, setPickupAddressInput] = useState("");
+  const [pickupCityInput, setPickupCityInput] = useState("");
   const [pickupDetailsError, setPickupDetailsError] = useState("");
   const [generalReason, setGeneralReason] = useState("Size Mismatch");
 
@@ -194,8 +201,12 @@ export default function ShopperPortal() {
 
   const handleSubmitReturn = () => {
     if (!lookupData || !sessionToken) return;
-    if (selectedCourierHasLiveBooking && (!pickupPhoneInput.trim() || !pickupAddressInput.trim())) {
-      setPickupDetailsError("PostEx needs a pickup phone number and a full pickup address before it can book the return.");
+    if (!selectedCourierHasLiveBooking) {
+      setPickupDetailsError("This store has no verified courier API yet. A return cannot be booked until PostEx or Leopards is connected.");
+      return;
+    }
+    if (!pickupPhoneInput.trim() || !pickupAddressInput.trim() || !pickupCityInput.trim()) {
+      setPickupDetailsError("Enter a Pakistani mobile number, the pickup city, and the full pickup address.");
       return;
     }
     setPickupDetailsError("");
@@ -207,6 +218,7 @@ export default function ShopperPortal() {
         quantity: data.quantity,
         reason: data.reason,
         price: original?.price || 0,
+        title: original?.title || "Return item",
       };
     });
 
@@ -222,6 +234,7 @@ export default function ShopperPortal() {
         courier: selectedCourier,
         customerPhone: pickupPhoneInput,
         pickupAddress: pickupAddressInput,
+        customerCity: pickupCityInput,
         reason: generalReason,
         items: JSON.stringify(payloadItems),
       },
@@ -264,14 +277,12 @@ export default function ShopperPortal() {
 
       {/* SUCCESS CONFIRMATION SCREEN */}
       {returnResult ? (
-        <div style={{ backgroundColor: returnResult.bookingConfirmed ? "#f1f8f5" : "#fff8eb", border: `1px solid ${returnResult.bookingConfirmed ? "#008060" : "#e08c00"}`, borderRadius: "8px", padding: "32px", textAlign: "center" }}>
-          <h2 style={{ color: returnResult.bookingConfirmed ? "#008060" : "#8a6116", margin: "0 0 12px 0" }}>
-            {returnResult.bookingConfirmed ? "Return booking confirmed" : "Return request recorded"}
+        <div style={{ backgroundColor: String(returnResult.carrierStatus || "").toUpperCase().includes("UNBOOKED") ? "#fff8eb" : "#f1f8f5", border: "1px solid #008060", borderRadius: "8px", padding: "32px", textAlign: "center" }}>
+          <h2 style={{ color: "#008060", margin: "0 0 12px 0" }}>
+            {String(returnResult.carrierStatus || "").toUpperCase().includes("UNBOOKED") ? "Courier accepted the return order" : "Return booking confirmed"}
           </h2>
           <p style={{ fontSize: "16px", margin: "0 0 24px 0" }}>
-            {returnResult.bookingConfirmed
-              ? <>The courier confirmed the pickup for order <strong>{returnResult.orderNumber}</strong>.</>
-              : <>Your return request for order <strong>{returnResult.orderNumber}</strong> was recorded. The airway bill is still pending. {returnResult.bookingMessage}</>}
+            {returnResult.bookingMessage || <>The courier confirmed the return for order <strong>{returnResult.orderNumber}</strong>.</>}
           </p>
 
           <div style={{ backgroundColor: "#fff", padding: "20px", borderRadius: "6px", textAlign: "left", marginBottom: "24px" }}>
@@ -281,7 +292,7 @@ export default function ShopperPortal() {
             <div style={{ marginBottom: "8px" }}>
               <strong>Pickup Courier:</strong> {returnResult.courier}
             </div>
-            {returnResult.bookingConfirmed && returnResult.trackingNumber && (
+            {returnResult.trackingNumber && (
               <div style={{ marginBottom: "8px" }}>
                 <strong>Consignment Tracking CN:</strong> <span style={{ fontFamily: "monospace", color: "#2c6ecb" }}>{returnResult.trackingNumber}</span>
               </div>
@@ -540,14 +551,21 @@ export default function ShopperPortal() {
                       onChange={(e) => setSelectedCourier(e.target.value)}
                       style={{ width: "100%", padding: "10px", border: "1px solid #c9cccf", borderRadius: "4px", fontSize: "14px" }}
                     >
-                      {availableCouriers.map((c) => (
+                      {availableCouriers.length === 0 ? (
+                        <option value="">No verified courier</option>
+                      ) : availableCouriers.map((c) => (
                         <option key={c.providerName} value={c.providerName}>
-                          {c.displayName} — {c.liveBookingConfigured ? "PostEx return API; pickup details required" : "Manual airway bill required"}
+                          {c.displayName} — API booking
                         </option>
                       ))}
                     </select>
+                    {availableCouriers.length === 0 && (
+                      <p role="alert" style={{ fontSize: "13px", color: "#b42318", margin: "10px 0 0" }}>
+                        Returns cannot be booked until the store connects PostEx or Leopards and verifies the credentials.
+                      </p>
+                    )}
                     {selectedCourierHasLiveBooking && (
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1.5fr", gap: "12px", marginTop: "14px" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "12px", marginTop: "14px" }}>
                         <div>
                           <label htmlFor="pickup-phone" style={{ display: "block", marginBottom: "5px", fontSize: "13px", fontWeight: 600 }}>
                             Pickup phone number
@@ -564,6 +582,21 @@ export default function ShopperPortal() {
                           />
                         </div>
                         <div>
+                          <label htmlFor="pickup-city" style={{ display: "block", marginBottom: "5px", fontSize: "13px", fontWeight: 600 }}>
+                            Pickup city
+                          </label>
+                          <input
+                            id="pickup-city"
+                            type="text"
+                            autoComplete="address-level2"
+                            value={pickupCityInput}
+                            onChange={(e) => { setPickupCityInput(e.target.value); setPickupDetailsError(""); }}
+                            placeholder="Karachi"
+                            required
+                            style={{ width: "100%", padding: "10px", border: "1px solid #c9cccf", borderRadius: "4px", fontSize: "14px", boxSizing: "border-box" }}
+                          />
+                        </div>
+                        <div style={{ gridColumn: "1 / -1" }}>
                           <label htmlFor="pickup-address" style={{ display: "block", marginBottom: "5px", fontSize: "13px", fontWeight: 600 }}>
                             Pickup address
                           </label>
@@ -573,17 +606,12 @@ export default function ShopperPortal() {
                             autoComplete="street-address"
                             value={pickupAddressInput}
                             onChange={(e) => { setPickupAddressInput(e.target.value); setPickupDetailsError(""); }}
-                            placeholder="Full address where the parcel will be collected"
+                            placeholder="House, street, area"
                             required
                             style={{ width: "100%", padding: "10px", border: "1px solid #c9cccf", borderRadius: "4px", fontSize: "14px", boxSizing: "border-box" }}
                           />
                         </div>
                       </div>
-                    )}
-                    {!selectedCourierHasLiveBooking && (
-                      <p style={{ fontSize: "12px", color: "#6d7175", margin: "10px 0 0" }}>
-                        BYNDCART will not create a live shipment for this selection. The store will book it with the carrier and add the airway bill manually.
-                      </p>
                     )}
                     {pickupDetailsError && (
                       <p role="alert" style={{ fontSize: "12px", color: "#b42318", margin: "10px 0 0" }}>{pickupDetailsError}</p>
@@ -611,7 +639,7 @@ export default function ShopperPortal() {
 
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "8px", color: "#6d7175", fontSize: "13px" }}>
                     <span>Courier pickup charge:</span>
-                    <span>{selectedCourierHasLiveBooking ? "Not quoted by the current integration" : "Not quoted; airway bill entered manually"}</span>
+                    <span>Shown only if the courier API returns a charge</span>
                   </div>
 
                   <div style={{ display: "flex", justifyContent: "space-between", marginTop: "16px", paddingTop: "12px", borderTop: "1px solid #e1e3e5", fontSize: "18px", fontWeight: "bold" }}>
@@ -621,7 +649,7 @@ export default function ShopperPortal() {
 
                   <button
                     onClick={handleSubmitReturn}
-                    disabled={isSubmitting || !lookupData.eligible}
+                    disabled={isSubmitting || !lookupData.eligible || !selectedCourierHasLiveBooking}
                     style={{
                       width: "100%",
                       marginTop: "20px",

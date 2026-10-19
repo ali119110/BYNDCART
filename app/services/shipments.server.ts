@@ -14,7 +14,13 @@ export interface RegisterShipmentInput {
   orderId: string;
   orderNumber?: string;
   courier?: string;
+  /** Carrier-generated tracking number returned by a successful booking API response. */
+  /** Carrier-generated tracking number returned by a successful booking API response. */
   trackingNumber?: string;
+  /** Required when persisting a tracking number already confirmed by a carrier API response. */
+  carrierResponseConfirmed?: boolean;
+  /** Skip a "pickup booked" notification when the carrier accepted an order but has not yet booked pickup. */
+  notifyPickupBooked?: boolean;
   labelUrl?: string;
   type?: "FORWARD" | "RETURN" | "EXCHANGE";
   returnRequestId?: string;
@@ -22,6 +28,10 @@ export interface RegisterShipmentInput {
   customerName?: string;
   customerPhone?: string;
   customerEmail?: string;
+  cityName?: string;
+  weightKg?: number;
+  codAmountPKR?: number;
+  remarks?: string;
   originAddress?: any;
   destinationAddress?: any;
   items?: Array<{ title: string; quantity: number }>;
@@ -34,19 +44,13 @@ export interface RegisterShipmentInput {
 export async function registerShipmentTrack(input: RegisterShipmentInput) {
   const shipmentType = input.type || "RETURN";
   const orderNumber = input.orderNumber || input.orderId;
+  if (input.trackingNumber && input.carrierResponseConfirmed !== true) {
+    throw new Error("A shipment tracking number can only be saved after a carrier API confirms the booking.");
+  }
 
   // Prevent a tracking number from being reused to mutate a shipment owned by another tenant
   // or a different order/type within this tenant. trackingNumber is unique in the current schema.
-  let existingByTrackingNumber: {
-    id: string;
-    shopifyStoreId: string;
-    shopifyOrderId: string;
-    type: string;
-    courier: string;
-    status: string;
-    labelUrl: string | null;
-    location: string | null;
-  } | null = null;
+  let existingByTrackingNumber: any = null;
   if (input.trackingNumber) {
     existingByTrackingNumber = await prisma.shipmentTrack.findUnique({
       where: { trackingNumber: input.trackingNumber },
@@ -64,14 +68,14 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
 
     if (existingByTrackingNumber) {
       if (existingByTrackingNumber.shopifyStoreId !== input.shopifyStoreId) {
-        throw new Error("This airway bill is already assigned to another shipment.");
+        throw new Error("This tracking number is already assigned to another shipment.");
       }
       if (
         existingByTrackingNumber.shopifyOrderId !== input.orderId ||
         existingByTrackingNumber.type !== shipmentType ||
         (Boolean(input.courier) && existingByTrackingNumber.courier !== input.courier!.trim().toUpperCase())
       ) {
-        throw new Error("This airway bill is already assigned to a different order or shipment type.");
+        throw new Error("This tracking number is already assigned to a different order or shipment type.");
       }
     }
   }
@@ -117,6 +121,13 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
 
   // Load merchant's decrypted API credentials
   const credentials = await getDecryptedCourierCredentials(input.shopifyStoreId, adapter.providerName);
+  if (!adapter.isLive) throw new Error(`${adapter.displayName} API booking is disabled in BYNDCART.`);
+  if (!credentials || credentials.isLive !== true) {
+    throw new Error(`${adapter.displayName} credentials are missing, disabled, or not verified for this store.`);
+  }
+  const adapterSetup = CourierRegistry.getRegisteredAdapters().find((item) => item.providerName === adapter.providerName);
+  const missingRequiredCredential = (adapterSetup?.fields || []).find((field) => field.required && !String(credentials.credentials?.[field.key] || "").trim());
+  if (missingRequiredCredential) throw new Error(`Configure ${missingRequiredCredential.label} for ${adapter.displayName} before booking.`);
 
   let trackingNumber = input.trackingNumber;
   let labelUrl = input.labelUrl?.trim() || existingByTrackingNumber?.labelUrl || "";
@@ -126,7 +137,7 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
   // 3. Generate Reverse or Forward Shipping Label via Courier Adapter if tracking number not provided
   if (!trackingNumber) {
     try {
-      if (usesForwardCourier) {
+      if (shipmentType === "FORWARD" || shipmentType === "EXCHANGE") {
         labelResult = await adapter.createForwardShipment(
           {
             shopifyStoreId: input.shopifyStoreId,
@@ -135,6 +146,11 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
             customerName: input.customerName,
             customerPhone: input.customerPhone,
             customerEmail: input.customerEmail,
+            cityName: input.cityName || input.destinationAddress?.city,
+            shipmentType,
+            weightKg: input.weightKg,
+            codAmountPKR: input.codAmountPKR,
+            remarks: input.remarks,
             originAddress: input.originAddress,
             destinationAddress: input.destinationAddress,
             items: input.items,
@@ -150,6 +166,11 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
             customerName: input.customerName,
             customerPhone: input.customerPhone,
             customerEmail: input.customerEmail,
+            cityName: input.cityName || input.originAddress?.city,
+            shipmentType,
+            weightKg: input.weightKg,
+            codAmountPKR: input.codAmountPKR,
+            remarks: input.remarks,
             originAddress: input.originAddress,
             destinationAddress: input.destinationAddress,
             items: input.items,
@@ -159,11 +180,11 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
       }
 
       if (!labelResult?.success || !labelResult.isLive || !labelResult.trackingNumber) {
-        const message = labelResult?.error || `${adapter.providerName} did not confirm a shipment. Enter the airway bill manually.`;
+        const message = labelResult?.error || `${adapter.providerName} did not confirm a shipment through its API.`;
         if (!labelResult?.isLive) {
-          const manualError = new Error(message) as Error & { manualFallback?: boolean };
-          manualError.manualFallback = true;
-          throw manualError;
+          const unsupportedError = new Error(message) as Error & { unsupportedBooking?: boolean };
+          unsupportedError.unsupportedBooking = true;
+          throw unsupportedError;
         }
         throw new Error(message);
       }
@@ -171,7 +192,7 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
       labelUrl = labelResult.labelUrl || "";
       estimatedDeliveryDate = labelResult.estimatedDeliveryDate;
     } catch (err: any) {
-      if (err?.manualFallback) throw err;
+      if (err?.unsupportedBooking) throw err;
       console.error(`[Shipment Service] External Courier API failure for ${orderNumber}:`, err.message);
       await prisma.backgroundJob.create({
         data: {
@@ -189,7 +210,7 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
     }
   }
 
-  // Manual airway bills and confirmed bookings start as LABEL_CREATED.
+  // Carrier-confirmed API bookings start as LABEL_CREATED until real tracking reports a status.
   // A tracking poll only changes that status when the courier returns a real status.
   let normalizedStatus: StandardShipmentStatus = existingByTrackingNumber
     ? existingByTrackingNumber.status as StandardShipmentStatus
@@ -197,11 +218,17 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
   let location: string | undefined = existingByTrackingNumber?.location || undefined;
   let rawPayload: any;
   if (!input.trackingNumber && labelResult?.isLive) {
-    const trackingInfo = await adapter.trackShipment(trackingNumber!, credentials);
-    rawPayload = trackingInfo.rawPayload;
-    if (trackingInfo.status !== "UNKNOWN") {
-      normalizedStatus = normalizeCourierStatus(trackingInfo.status);
-      location = trackingInfo.location;
+    try {
+      const trackingInfo = await adapter.trackShipment(trackingNumber!, credentials);
+      rawPayload = trackingInfo.rawPayload;
+      if (trackingInfo.status !== "UNKNOWN") {
+        normalizedStatus = normalizeCourierStatus(trackingInfo.status);
+        location = trackingInfo.location;
+      }
+    } catch (trackingError) {
+      // Booking already returned a carrier tracking number. Keep that confirmed shipment record
+      // even if the first tracking call is temporarily unavailable; it can be refreshed later.
+      console.warn(`[Shipment Service] Initial tracking lookup failed for ${trackingNumber}:`, trackingError instanceof Error ? trackingError.message : trackingError);
     }
   }
 
@@ -237,7 +264,7 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
         shipmentTrackId: shipment.id,
         status: normalizedStatus,
         description: input.trackingNumber
-          ? `Manual airway bill recorded via ${adapter.displayName}`
+          ? `Carrier API booking recorded via ${adapter.displayName}`
           : `Shipment registered via ${adapter.displayName}`,
         location: location || null,
         rawPayload: rawPayload || (labelResult ? labelResult.rawResponse : null),
@@ -248,7 +275,7 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
   }
 
   // Trigger non-blocking COURIER_PICKUP_BOOKED notification
-  if (input.customerEmail) {
+  if (input.customerEmail && input.notifyPickupBooked !== false) {
     await triggerLifecycleNotification({
       shopifyStoreId: input.shopifyStoreId,
       eventType: "COURIER_PICKUP_BOOKED",
@@ -301,9 +328,9 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
 /**
  * Syncs and updates tracking events for an existing shipment. Prevents duplicate webhook event logging.
  */
-export async function syncShipmentTrackingStatus(trackingNumber: string) {
-  const shipment = await prisma.shipmentTrack.findUnique({
-    where: { trackingNumber },
+export async function syncShipmentTrackingStatus(trackingNumber: string, shopifyStoreId?: string) {
+  const shipment = await prisma.shipmentTrack.findFirst({
+    where: { trackingNumber, ...(shopifyStoreId ? { shopifyStoreId } : {}) },
     include: { events: true },
   });
 
@@ -312,15 +339,20 @@ export async function syncShipmentTrackingStatus(trackingNumber: string) {
   }
 
   const adapter = CourierRegistry.get(shipment.courier);
+  if (!adapter.isLive) throw new Error(`${adapter.displayName} tracking is disabled in BYNDCART.`);
   const credentials = await getDecryptedCourierCredentials(shipment.shopifyStoreId, adapter.providerName);
+  if (!credentials || credentials.isLive !== true) throw new Error(`${adapter.displayName} credentials are disabled or unverified for this store.`);
   const trackingInfo = await adapter.trackShipment(trackingNumber, credentials);
-  const normalizedStatus = normalizeCourierStatus(trackingInfo.status);
+  const carrierNormalizedStatus = normalizeCourierStatus(trackingInfo.status);
+  const normalizedStatus = carrierNormalizedStatus === "UNKNOWN"
+    ? shipment.status as StandardShipmentStatus
+    : carrierNormalizedStatus;
 
-  // Update shipment status
+  // Keep the last known useful state when the carrier returns an unrecognized status.
   const updatedShipment = await prisma.shipmentTrack.update({
     where: { trackingNumber },
     data: {
-      status: normalizedStatus,
+      ...(carrierNormalizedStatus === "UNKNOWN" ? {} : { status: normalizedStatus }),
       location: trackingInfo.location || shipment.location,
     },
   });
@@ -347,6 +379,55 @@ export async function syncShipmentTrackingStatus(trackingNumber: string) {
     status: normalizedStatus,
     location: updatedShipment.location,
   };
+}
+
+/** Cancel a shipment only when the current tenant owns it and the carrier API confirms cancellation. */
+export async function cancelShipmentTrack(shopifyStoreId: string, shipmentId: string) {
+  const shipment = await prisma.shipmentTrack.findFirst({
+    where: { id: shipmentId, shopifyStoreId },
+    select: { id: true, shopifyStoreId: true, trackingNumber: true, courier: true, status: true, orderNumber: true },
+  });
+  if (!shipment) throw new Error("Shipment not found for this store.");
+  if (["DELIVERED", "CANCELLED"].includes(String(shipment.status))) {
+    throw new Error(`A shipment with status ${shipment.status} cannot be cancelled from BYNDCART.`);
+  }
+  if (!CourierRegistry.has(shipment.courier)) {
+    throw new Error(`${shipment.courier} is disabled in BYNDCART. Cancellation is unavailable for this carrier.`);
+  }
+  const adapter = CourierRegistry.get(shipment.courier);
+  if (!adapter.isLive) throw new Error(`${adapter.displayName} cancellation is disabled in BYNDCART.`);
+  const credentials = await getDecryptedCourierCredentials(shopifyStoreId, adapter.providerName);
+  if (!credentials || credentials.isLive !== true) throw new Error(`${adapter.displayName} credentials are missing, disabled, or unverified.`);
+  const result = await adapter.cancelShipment(shipment.trackingNumber, credentials);
+  if (!result.success) throw new Error(result.message || `${adapter.displayName} did not confirm cancellation.`);
+
+  await prisma.shipmentTrack.update({ where: { id: shipment.id }, data: { status: "CANCELLED", updatedAt: new Date() } });
+  try {
+    await prisma.shipmentEvent.create({
+      data: {
+        shipmentTrackId: shipment.id,
+        status: "CANCELLED",
+        description: `Cancellation confirmed by ${adapter.displayName} API`,
+        rawPayload: { message: result.message || "Cancellation confirmed" },
+      },
+    });
+  } catch {
+    // Keep successful cancellation even when the optional event table write fails.
+  }
+  try {
+    await prisma.auditLog.create({
+      data: {
+        shopifyStoreId,
+        action: "SHIPMENT_CANCELLED",
+        entityType: "ShipmentTrack",
+        entityId: shipment.id,
+        metadata: { courier: adapter.providerName, trackingNumber: shipment.trackingNumber, orderNumber: shipment.orderNumber },
+      },
+    });
+  } catch {
+    // Audit logging should not reverse a successful carrier cancellation.
+  }
+  return { success: true, message: result.message || `${adapter.displayName} confirmed cancellation.`, trackingNumber: shipment.trackingNumber };
 }
 
 export interface GetShipmentsOptions {

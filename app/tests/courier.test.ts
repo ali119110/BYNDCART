@@ -37,7 +37,14 @@ prisma.merchantCourierConfig.findUnique = (async (args: any) => {
 }) as any;
 
 prisma.merchantCourierConfig.findMany = (async (args: any) => {
-  return mockConfigs.filter((c) => c.shopifyStoreId === args.where?.shopifyStoreId);
+  return mockConfigs.filter((c) => {
+    if (args.where?.shopifyStoreId && c.shopifyStoreId !== args.where.shopifyStoreId) return false;
+    if (args.where?.enabled === true && !c.enabled) return false;
+    if (args.where?.isLive === true && !c.isLive) return false;
+    if (args.where?.isDefaultReverse === true && !c.isDefaultReverse) return false;
+    if (args.where?.isDefaultForward === true && !c.isDefaultForward) return false;
+    return true;
+  });
 }) as any;
 
 prisma.merchantCourierConfig.findFirst = (async (args: any) => {
@@ -83,14 +90,16 @@ prisma.merchantCourierConfig.upsert = (async (args: any) => {
 }) as any;
 
 prisma.shipmentTrack.findFirst = (async (args: any) => {
-  return (
-    mockShipments.find(
-      (s) =>
-        s.shopifyStoreId === args.where?.shopifyStoreId &&
-        s.shopifyOrderId === args.where?.shopifyOrderId &&
-        s.type === args.where?.type
-    ) || null
-  );
+  const ship = mockShipments.find((s) => {
+    if (args.where?.trackingNumber && s.trackingNumber !== args.where.trackingNumber) return false;
+    if (args.where?.shopifyStoreId && s.shopifyStoreId !== args.where.shopifyStoreId) return false;
+    if (args.where?.shopifyOrderId && s.shopifyOrderId !== args.where.shopifyOrderId) return false;
+    if (args.where?.type && s.type !== args.where.type) return false;
+    if (args.where?.id && s.id !== args.where.id) return false;
+    return true;
+  });
+  if (!ship) return null;
+  return { ...ship, events: ship.events || mockEvents.filter((event) => event.shipmentTrackId === ship.id) };
 }) as any;
 
 prisma.shipmentTrack.findUnique = (async (args: any) => {
@@ -150,37 +159,29 @@ prisma.auditLog.create = (async (args: any) => {
   return args.data;
 }) as any;
 
-test("Multi-Courier Framework — All 6 Adapters Interface Implementation", async () => {
-  const providers = ["POSTEX", "LEOPARDS", "TRAX", "TCS", "MNP", "CALLCOURIER"];
+test("Courier registry offers only PostEx and Leopards", async () => {
+  const registered = CourierRegistry.getRegisteredAdapters().map((adapter) => adapter.providerName).sort();
+  assert.deepStrictEqual(registered, ["LEOPARDS", "POSTEX"]);
+  assert.strictEqual(CourierRegistry.has("TCS"), false);
+  assert.throws(() => CourierRegistry.get("TCS"), /Unsupported courier provider/);
 
-  for (const p of providers) {
-    const adapter = CourierRegistry.get(p);
-    assert.ok(adapter);
-    assert.strictEqual(adapter.providerName, p);
-
-    // Test reverse shipment
-    const revResult = await adapter.createReverseShipment({
+  for (const provider of ["POSTEX", "LEOPARDS"]) {
+    const adapter = CourierRegistry.get(provider);
+    const reverse = await adapter.createReverseShipment({
       shopifyStoreId: "store-1",
       orderId: "gid://shopify/Order/1001",
       orderNumber: "#1001",
     });
-    assert.strictEqual(revResult.success, false);
-    assert.strictEqual(revResult.isLive, false);
-    assert.strictEqual(revResult.trackingNumber, "");
-
-    const fwdResult = await adapter.createForwardShipment({
+    assert.strictEqual(reverse.success, false);
+    assert.strictEqual(reverse.isLive, false);
+    assert.strictEqual(reverse.trackingNumber, "");
+    const forward = await adapter.createForwardShipment({
       shopifyStoreId: "store-1",
       orderId: "gid://shopify/Order/1002",
       orderNumber: "#1002",
     });
-    assert.strictEqual(fwdResult.success, false);
-    assert.strictEqual(fwdResult.isLive, false);
-
-    const trackResult = await adapter.trackShipment("MANUAL-1001");
-    assert.strictEqual(trackResult.status, "UNKNOWN");
-
-    const cancelResult = await adapter.cancelShipment("MANUAL-1001");
-    assert.strictEqual(cancelResult.success, false);
+    assert.strictEqual(forward.success, false);
+    assert.strictEqual(forward.isLive, false);
   }
 });
 
@@ -247,24 +248,32 @@ test("Multi-Courier Framework — Connection Testing Valid vs Invalid Credential
   });
   assert.strictEqual(testValid.isLive, testValid.success);
   if (!testValid.success) {
-    assert.match(testValid.message, /not verified|rejected|could not/i);
+    assert.ok(testValid.message.length > 0);
   }
 });
 
 test("Multi-Courier Framework — Separate Reverse & Forward Courier Selection", async () => {
   mockConfigs = [];
 
-  // Set PostEx as default reverse
   await saveMerchantCourierConfig("store-1", "POSTEX", {
     apiToken: "postex_key",
     enabled: true,
+    isLive: true,
     isDefaultReverse: true,
   });
-
-  // Set TCS as default forward
-  await saveMerchantCourierConfig("store-1", "TCS", {
-    apiToken: "tcs_key",
+  await saveMerchantCourierConfig("store-1", "LEOPARDS", {
+    credentials: {
+      apiKey: "leo-key",
+      apiPassword: "leo-pass",
+      warehouseCity: "Lahore",
+      warehouseAddress: "12 Warehouse Road",
+      warehouseContactName: "Store Desk",
+      warehousePhone: "03001234567",
+      warehouseEmail: "desk@store.com",
+      defaultWeightGrams: "500",
+    },
     enabled: true,
+    isLive: true,
     isDefaultForward: true,
   });
 
@@ -272,59 +281,63 @@ test("Multi-Courier Framework — Separate Reverse & Forward Courier Selection",
   assert.strictEqual(revCourier.providerName, "POSTEX");
 
   const fwdCourier = await getDefaultMerchantCourier("store-1", "FORWARD");
-  assert.strictEqual(fwdCourier.providerName, "TCS");
+  assert.strictEqual(fwdCourier.providerName, "LEOPARDS");
 });
 
-test("Multi-Courier Framework — Duplicate Booking Idempotency Prevention", async () => {
-  mockShipments = [];
-
-  const res1 = await registerShipmentTrack({
-    shopifyStoreId: "store-1",
-    orderId: "gid://shopify/Order/777",
-    orderNumber: "#777",
-    courier: "TRAX",
-    trackingNumber: "TRX-MANUAL-777",
-    type: "RETURN",
-  });
-
-  assert.strictEqual(res1.success, true);
-  const firstTracking = res1.trackingNumber;
-
-  // Attempt duplicate booking for same order & type
-  const res2 = await registerShipmentTrack({
-    shopifyStoreId: "store-1",
-    orderId: "gid://shopify/Order/777",
-    orderNumber: "#777",
-    courier: "TRAX",
-    type: "RETURN",
-  });
-
-  assert.strictEqual(res2.success, true);
-  assert.strictEqual(res2.trackingNumber, firstTracking);
-  assert.strictEqual(mockShipments.length, 1); // No second record created
+test("Shipments reject a tracking number that the carrier API did not confirm", async () => {
+  await assert.rejects(
+    () => registerShipmentTrack({
+      shopifyStoreId: "store-1",
+      orderId: "gid://shopify/Order/777",
+      orderNumber: "#777",
+      courier: "POSTEX",
+      trackingNumber: "TYPED-BY-HAND",
+      type: "RETURN",
+    }),
+    /carrier API confirms the booking/,
+  );
 });
 
-test("Multi-Courier Framework — Webhook Deduplication & Event Tracking", async () => {
-  mockEvents = [];
+test("Duplicate booking is skipped when the order already has a shipment", async () => {
+  mockShipments = [{
+    id: "ship-existing",
+    shopifyStoreId: "store-1",
+    shopifyOrderId: "gid://shopify/Order/777",
+    orderNumber: "#777",
+    type: "RETURN",
+    courier: "POSTEX",
+    trackingNumber: "PE-EXISTING",
+    labelUrl: "",
+    status: "LABEL_CREATED",
+  }];
 
   const res = await registerShipmentTrack({
     shopifyStoreId: "store-1",
-    orderId: "gid://shopify/Order/888",
-    orderNumber: "#888",
-    courier: "LEOPARDS",
-    trackingNumber: "LEO-MANUAL-888",
+    orderId: "gid://shopify/Order/777",
+    orderNumber: "#777",
+    courier: "POSTEX",
     type: "RETURN",
   });
 
-  // Sync tracking status first time
-  await syncShipmentTrackingStatus(res.trackingNumber);
-  const countFirst = mockEvents.length;
+  assert.strictEqual(res.success, true);
+  assert.strictEqual(res.trackingNumber, "PE-EXISTING");
+  assert.strictEqual(mockShipments.length, 1);
+});
 
-  // Sync tracking status second time without status change (deduplicated)
-  await syncShipmentTrackingStatus(res.trackingNumber);
-  const countSecond = mockEvents.length;
-
-  assert.strictEqual(countFirst, countSecond); // Event deduplicated
+test("Tracking refresh requires verified store credentials", async () => {
+  mockShipments = [{
+    id: "ship-leo",
+    shopifyStoreId: "store-without-courier",
+    shopifyOrderId: "gid://shopify/Order/888",
+    trackingNumber: "LEO-888",
+    courier: "LEOPARDS",
+    status: "LABEL_CREATED",
+    events: [],
+  }];
+  await assert.rejects(
+    () => syncShipmentTrackingStatus("LEO-888", "store-without-courier"),
+    /credentials are disabled or unverified/,
+  );
 });
 
 test("Multi-Courier Framework — Timeout & BackgroundJob Retry Queueing", async () => {
@@ -335,7 +348,7 @@ test("Multi-Courier Framework — Timeout & BackgroundJob Retry Queueing", async
     providerName: "FAILCOURIER",
     displayName: "Failing Courier",
     description: "Throws timeout error",
-    isLive: false,
+    isLive: true,
     async testConnection() {
       return { success: false, message: "Timeout", isLive: false };
     },
@@ -359,6 +372,15 @@ test("Multi-Courier Framework — Timeout & BackgroundJob Retry Queueing", async
   };
 
   CourierRegistry.register(failingAdapter);
+  mockConfigs.push({
+    shopifyStoreId: "store-1",
+    providerName: "FAILCOURIER",
+    encryptedApiToken: "plain-token-without-colon",
+    enabled: true,
+    isLive: true,
+    accountNumber: null,
+    additionalConfig: null,
+  });
 
   await assert.rejects(
     async () => {

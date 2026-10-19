@@ -47,22 +47,12 @@ prisma.shipmentEvent.create = (async () => ({})) as any;
 prisma.auditLog.create = (async () => ({})) as any;
 
 
-test("Pakistani Logistics - Carrier Provider Adapters (TCS, Leopards, Trax, M&P, PostEx, CallCourier)", async () => {
+test("Registered couriers are PostEx and Leopards, and incomplete bookings stay unconfirmed", async () => {
   const { CourierRegistry } = await import("../services/courier.server");
 
-  const registered = CourierRegistry.getRegisteredAdapters();
-  assert.ok(registered.length >= 6);
-
-  // Test TCS Express Adapter
-  const tcs = CourierRegistry.get("TCS");
-  const tcsLabel = await tcs.generateReturnLabel({
-    shopifyStoreId: "store-1",
-    orderId: "gid://shopify/Order/1001",
-    orderNumber: "#1001",
-  });
-  assert.strictEqual(tcsLabel.success, false);
-  assert.strictEqual(tcsLabel.isLive, false);
-  assert.strictEqual(tcsLabel.trackingNumber, "");
+  const registered = CourierRegistry.getRegisteredAdapters().map((adapter) => adapter.providerName).sort();
+  assert.deepStrictEqual(registered, ["LEOPARDS", "POSTEX"]);
+  assert.throws(() => CourierRegistry.get("TRAX"), /Unsupported courier provider/);
 
   const leopards = CourierRegistry.get("LEOPARDS");
   const leopardsLabel = await leopards.generateReturnLabel({
@@ -72,14 +62,6 @@ test("Pakistani Logistics - Carrier Provider Adapters (TCS, Leopards, Trax, M&P,
   });
   assert.strictEqual(leopardsLabel.success, false);
   assert.strictEqual(leopardsLabel.isLive, false);
-
-  const trax = CourierRegistry.get("TRAX");
-  const traxLabel = await trax.generateReturnLabel({
-    shopifyStoreId: "store-1",
-    orderId: "gid://shopify/Order/1003",
-    orderNumber: "#1003",
-  });
-  assert.strictEqual(traxLabel.success, false);
 
   const postex = CourierRegistry.get("POSTEX");
   const postexLabel = await postex.generateReturnLabel({
@@ -94,20 +76,20 @@ test("Pakistani Logistics - Carrier Provider Adapters (TCS, Leopards, Trax, M&P,
 test("Pakistani Logistics Service - Register & Query Tenant Shipments", async () => {
   const { registerShipmentTrack, getStoreShipments } = await import("../services/shipments.server");
 
-  const shipment = await registerShipmentTrack({
-    shopifyStoreId: "store-1",
-    orderId: "gid://shopify/Order/1001",
-    orderNumber: "#1001",
-    courier: "TCS",
-    trackingNumber: "771234567890",
-    type: "RETURN",
-  });
-
-  assert.strictEqual(shipment.success, true);
-  assert.strictEqual(shipment.courier, "TCS");
+  await assert.rejects(
+    () => registerShipmentTrack({
+      shopifyStoreId: "store-1",
+      orderId: "gid://shopify/Order/1001",
+      orderNumber: "#1001",
+      courier: "POSTEX",
+      trackingNumber: "771234567890",
+      type: "RETURN",
+    }),
+    /carrier API confirms the booking/,
+  );
 
   const list = await getStoreShipments("store-1");
   assert.strictEqual(list.length, 1);
   assert.strictEqual(list[0].orderNumber, "#1001");
-  assert.strictEqual(list[0].courier, "TCS");
+  assert.strictEqual(list[0].courier, "TCS"); // fixture row, not a live booking
 });

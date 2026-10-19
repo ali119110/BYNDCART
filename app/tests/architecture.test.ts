@@ -145,8 +145,9 @@ test("Courier Integration - Neutral ICourierAdapter registry", async () => {
   const { CourierRegistry } = await import("../services/courier.server");
   const { registerShipmentTrack } = await import("../services/shipments.server");
 
-  const adapter = CourierRegistry.get("TCS");
-  assert.strictEqual(adapter.providerName, "TCS");
+  const adapter = CourierRegistry.get("POSTEX");
+  assert.strictEqual(adapter.providerName, "POSTEX");
+  assert.throws(() => CourierRegistry.get("TCS"), /Unsupported courier provider/);
 
   const label = await adapter.generateReturnLabel({
     shopifyStoreId: "store-1",
@@ -158,16 +159,16 @@ test("Courier Integration - Neutral ICourierAdapter registry", async () => {
   assert.strictEqual(label.isLive, false);
   assert.strictEqual(label.trackingNumber, "");
 
-  const shipment = await registerShipmentTrack({
-    shopifyStoreId: "store-1",
-    orderId: "gid://shopify/Order/1001",
-    orderNumber: "#1001",
-    trackingNumber: "MANUAL-1001",
-    type: "RETURN",
-  });
-
-  assert.strictEqual(shipment.success, true);
-  assert.strictEqual(shipment.courier, "TCS");
+  await assert.rejects(
+    () => registerShipmentTrack({
+      shopifyStoreId: "store-1",
+      orderId: "gid://shopify/Order/1001",
+      orderNumber: "#1001",
+      trackingNumber: "MANUAL-1001",
+      type: "RETURN",
+    }),
+    /carrier API confirms the booking/,
+  );
 });
 
 test("State Machine - Return status transitions & graph enforcement", async () => {

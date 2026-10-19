@@ -1931,3 +1931,14 @@ a.bc-btn svg {
     width: 100%;
   }
 }
+
+.bc-shipment-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.bc-shipment-row-actions form {
+  margin: 0;
+}

@@ -114,6 +114,7 @@ export interface SubmitShopperReturnInput {
   courier?: string;
   customerPhone?: string;
   pickupAddress?: string;
+  customerCity?: string;
   reason: string;
   customerNote?: string;
   sessionToken: string;
@@ -122,6 +123,7 @@ export interface SubmitShopperReturnInput {
     quantity: number;
     reason: string;
     price: number;
+    title?: string;
     sku?: string;
     category?: string;
   }>;
@@ -169,28 +171,46 @@ export async function submitShopperReturn(input: SubmitShopperReturnInput) {
   const restockingFeePercent = Number(settings.restockingFeePercent) || 0;
   const restockingFeePKR = Math.round((totalItemValuePKR * restockingFeePercent) / 100);
 
-  const selectedCourier = (input.courier || "TCS").trim().toUpperCase();
-  if (!CourierRegistry.has(selectedCourier)) {
+  const selectedCourier = String(input.courier || "").trim().toUpperCase();
+  if (!selectedCourier || !CourierRegistry.has(selectedCourier)) {
     throw new Error("Please select a supported courier.");
   }
   const adapter = CourierRegistry.get(selectedCourier);
 
-  // Fetch credentials for this merchant only. Never use another store's or a global app credential.
+  // Fetch credentials for this merchant only. Never use another store's/global app credential.
   const credentials = await getDecryptedCourierCredentials(input.shopifyStoreId, adapter.providerName);
 
-  // PostEx live return booking requires real pickup details. Other adapters return an
-  // unconfirmed result until a live booking API has been implemented.
+  // API-only rule: do not create a return request unless the selected provider has a
+  // live adapter and the carrier confirms booking with a tracking/consignment number.
+  if (!adapter.isLive) {
+    throw new Error(`${adapter.displayName} API booking is not enabled in BYNDCART yet. No return request was created.`);
+  }
+  if (!credentials || credentials.isLive !== true) {
+    throw new Error(`${adapter.displayName} credentials are missing, disabled, or not verified for this store. No return request was created.`);
+  }
+  const adapterSetup = CourierRegistry.getRegisteredAdapters().find((item) => item.providerName === adapter.providerName);
+  const missingRequiredCredential = (adapterSetup?.fields || []).find((field) => field.required && !String(credentials.credentials?.[field.key] || "").trim());
+  if (missingRequiredCredential) {
+    throw new Error(`The store has not configured ${missingRequiredCredential.label} for ${adapter.displayName}. No return request was created.`);
+  }
   const labelResult = await adapter.generateReturnLabel({
     shopifyStoreId: input.shopifyStoreId,
     orderId: input.shopifyOrderId,
     orderNumber: input.orderNumber,
     customerName: input.customerName,
     customerPhone: input.customerPhone?.trim(),
-    originAddress: input.pickupAddress?.trim() ? { address1: input.pickupAddress.trim() } : undefined,
-  }, credentials || undefined);
+    customerEmail: input.customerEmail,
+    cityName: input.customerCity?.trim(),
+    shipmentType: "RETURN",
+    items: input.items.map((item) => ({ title: item.title || item.shopifyLineItemId, quantity: item.quantity, price: item.price })),
+    originAddress: input.pickupAddress?.trim() ? { address1: input.pickupAddress.trim(), city: input.customerCity?.trim() } : undefined,
+  }, credentials);
 
-  const bookingConfirmed = Boolean(labelResult.success && labelResult.isLive && labelResult.trackingNumber);
-  const pickupFeePKR = bookingConfirmed ? Number(labelResult.costPKR || 0) : 0;
+  const apiOrderAccepted = Boolean(labelResult.success && labelResult.isLive && labelResult.trackingNumber?.trim());
+  if (!apiOrderAccepted) {
+    throw new Error(labelResult.error || `${adapter.displayName} did not confirm the booking. No return request was created. Please check the carrier setup and try again.`);
+  }
+  const pickupFeePKR = Number(labelResult.costPKR || 0);
   const netRefundAmountPKR = Math.max(0, totalItemValuePKR - restockingFeePKR - pickupFeePKR);
 
   // Create ReturnRequest in database
@@ -219,13 +239,16 @@ export async function submitShopperReturn(input: SubmitShopperReturnInput) {
     data: { refundAmount: netRefundAmountPKR },
   });
 
-  if (bookingConfirmed) {
+  if (apiOrderAccepted) {
     await registerShipmentTrack({
       shopifyStoreId: input.shopifyStoreId,
       orderId: input.shopifyOrderId,
       orderNumber: input.orderNumber,
       courier: selectedCourier,
       trackingNumber: labelResult.trackingNumber,
+      carrierResponseConfirmed: true,
+      notifyPickupBooked: !(selectedCourier === "POSTEX" && String(labelResult.carrierStatus || "").toUpperCase().includes("UNBOOKED")),
+      labelUrl: labelResult.labelUrl,
       type: "RETURN",
       returnRequestId: returnRequest.id,
     });
@@ -240,7 +263,7 @@ export async function submitShopperReturn(input: SubmitShopperReturnInput) {
     variables: {
       customer_name: input.customerName || "Customer",
       order_number: input.orderNumber,
-      tracking_number: bookingConfirmed ? labelResult.trackingNumber : "Pending manual airway bill",
+      tracking_number: labelResult.trackingNumber,
       carrier: adapter.displayName,
     },
   });
@@ -249,11 +272,14 @@ export async function submitShopperReturn(input: SubmitShopperReturnInput) {
     success: true,
     returnRequestId: returnRequest.id,
     orderNumber: input.orderNumber,
-    trackingNumber: bookingConfirmed ? labelResult.trackingNumber : "",
-    bookingConfirmed,
-    bookingMessage: bookingConfirmed ? "Courier confirmed the return shipment." : labelResult.error || "Courier booking was not confirmed. Add the airway bill manually.",
+    trackingNumber: apiOrderAccepted ? labelResult.trackingNumber : "",
+    apiOrderAccepted,
+    carrierStatus: labelResult.carrierStatus || (selectedCourier === "LEOPARDS" ? "BOOKED" : ""),
+    bookingMessage: selectedCourier === "POSTEX"
+      ? `PostEx accepted the return order and assigned a tracking number${labelResult.carrierStatus ? ` (initial status: ${labelResult.carrierStatus})` : ""}. The carrier may need to process the order before pickup.`
+      : "Leopards accepted the packet booking and returned a consignment number.",
     courier: adapter.displayName,
-    labelUrl: bookingConfirmed ? labelResult.labelUrl : undefined,
+    labelUrl: apiOrderAccepted ? labelResult.labelUrl : undefined,
     summaryPKR: {
       totalItemValue: totalItemValuePKR,
       restockingFeeDeduction: restockingFeePKR,
