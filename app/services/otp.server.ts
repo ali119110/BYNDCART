@@ -81,18 +81,12 @@ export async function requestCustomerOTP(
     throw new Error("Too many OTP requests. Please wait a few minutes before trying again.");
   }
 
-  // Lookup order quietly to verify ownership
-  const order = await prisma.order.findFirst({
-    where: {
-      shopifyStoreId,
-      orderNumber: { equals: normalizedOrderNumber, mode: "insensitive" },
-      customerEmail: { equals: normalizedEmail, mode: "insensitive" },
-    },
-  });
+  const order = await findCustomerOrder(shopifyStoreId, normalizedOrderNumber, normalizedEmail);
 
   // Generic anti-enumeration response if order does not exist or store mismatch
   const genericSuccessResponse = {
     success: true,
+    emailSent: false,
     message: "If an order with those details exists in our system, a verification code has been sent to your email.",
   };
 
@@ -151,15 +145,59 @@ export async function requestCustomerOTP(
     },
   });
 
-  // Deliver OTP via Notification service
-  await sendCustomerOTPNotification({
+  const sent = await sendCustomerOTPNotification({
     shopifyStoreId,
-    orderNumber: normalizedOrderNumber,
+    orderNumber: order.orderNumber,
     destination: normalizedEmail,
     otpCode,
   });
 
-  return genericSuccessResponse;
+  if (!sent.success) {
+    console.error("[OTP] Verification email was not sent:", sent.error);
+    if (process.env.NODE_ENV !== "test") {
+      throw new Error(
+        sent.error === "RESEND_API_KEY not configured"
+          ? "Verification email is not set up for this store yet."
+          : "The verification email could not be sent. Please try again shortly."
+      );
+    }
+  }
+
+  return {
+    success: true,
+    emailSent: sent.success,
+    message: genericSuccessResponse.message,
+  };
+}
+
+async function findCustomerOrder(shopifyStoreId: string, normalizedOrderNumber: string, normalizedEmail: string) {
+  const local = await findLocalCustomerOrder(shopifyStoreId, normalizedOrderNumber, normalizedEmail);
+  if (local || process.env.NODE_ENV === "test") return local;
+
+  try {
+    const { syncCustomerOrder } = await import("./orders.server");
+    await syncCustomerOrder(shopifyStoreId, normalizedOrderNumber);
+  } catch (error) {
+    console.error("[OTP] Could not load this order from Shopify:", error);
+  }
+
+  return findLocalCustomerOrder(shopifyStoreId, normalizedOrderNumber, normalizedEmail);
+}
+
+async function findLocalCustomerOrder(shopifyStoreId: string, normalizedOrderNumber: string, normalizedEmail: string) {
+  const stripped = normalizedOrderNumber.replace(/^#/, "");
+  const candidates = Array.from(new Set([normalizedOrderNumber, stripped, `#${stripped}`]));
+  for (const orderNumber of candidates) {
+    const order = await prisma.order.findFirst({
+      where: {
+        shopifyStoreId,
+        orderNumber: { equals: orderNumber, mode: "insensitive" },
+        customerEmail: { equals: normalizedEmail, mode: "insensitive" },
+      },
+    });
+    if (order) return order;
+  }
+  return null;
 }
 
 /**

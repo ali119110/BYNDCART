@@ -8,9 +8,8 @@ import { getReturnPolicyRule, saveReturnPolicyRule } from "../services/policyEng
 // ===== LOADER: Fetch settings & policy rules from database =====
 export async function loader({ request }: Route.LoaderArgs) {
   const { shop, shopifyStoreId, admin } = await requireTenantContext(request);
-  const appUrl = (process.env.SHOPIFY_APP_URL || "https://byndcart-production-23f7.up.railway.app").replace(/\/$/, "");
   const portal = {
-    storefrontUrl: `${appUrl}/portal?shop=${encodeURIComponent(shop)}`,
+    storefrontUrl: `https://${shop}/apps/returns`,
   };
 
   try {
@@ -142,7 +141,7 @@ export default function Settings() {
         <div>
           <p className="bc-kicker">Store footer</p>
           <h2 className="bc-title">Let customers request a return or exchange</h2>
-          <p className="bc-muted">Paste the customer link into the footer menu. A link like yourstore.com/apps/returns is not a theme page, so the store shows a 404 until you publish the store proxy yourself.</p>
+          <p className="bc-muted">Customers open this on your store website. Do not send them into the Shopify admin app.</p>
         </div>
 
         <div className="bc-method">
@@ -170,7 +169,7 @@ export default function Settings() {
         </div>
 
         <div className="bc-note">
-          A customer clicks the footer link, enters the order number and the email on that order, then enters the verification code. After that they choose the items and submit a return or an exchange.
+          A customer clicks the footer link, enters the order number and the email on that order, then enters the verification code. After that they choose the items and submit a return or an exchange. The page stays on your store address. Publish the app proxy in the Shopify Partner dashboard so this link opens the form instead of a store 404.
         </div>
       </section>
 

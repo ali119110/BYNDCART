@@ -10,7 +10,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const { shop, shopifyStoreId } = await resolvePortalStore(url.searchParams.get("shop"));
   const availableCouriers = CourierRegistry.getRegisteredAdapters();
-  return { shop, shopifyStoreId, availableCouriers };
+  return {
+    shop,
+    shopifyStoreId,
+    availableCouriers,
+    embedded: url.searchParams.get("embedded") === "1",
+    storefrontUrl: `https://${shop}/apps/returns`,
+  };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -26,8 +32,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const otpReqResult = await requestCustomerOTP(shopifyStoreId, orderNumber, customerEmail);
       return {
         success: true,
-        step: "OTP_SENT",
+        step: otpReqResult.emailSent ? "OTP_SENT" : "REQUEST",
         message: otpReqResult.message,
+        emailSent: Boolean(otpReqResult.emailSent),
         orderNumber,
         customerEmail,
       };
@@ -95,7 +102,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function ShopperPortal() {
-  const { shop, availableCouriers } = useLoaderData<typeof loader>();
+  const { shop, availableCouriers, embedded, storefrontUrl } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<any>();
 
   // State management
@@ -204,6 +211,21 @@ export default function ShopperPortal() {
     window.location.reload();
   };
 
+  if (embedded) {
+    return (
+      <div style={{ maxWidth: "640px", margin: "40px auto", padding: "0 16px", fontFamily: "system-ui, sans-serif" }}>
+        <div style={{ background: "#fff", border: "1px solid #e1e3e5", borderRadius: "8px", padding: "24px" }}>
+          <h1 style={{ fontSize: "22px", margin: "0 0 8px" }}>Customer returns stay on your store</h1>
+          <p style={{ color: "#5c5f62", marginTop: 0 }}>
+            Shoppers should not use this admin screen. Add the store link to the footer. It opens on the store website.
+          </p>
+          <p style={{ fontFamily: "monospace", wordBreak: "break-all" }}>{storefrontUrl}</p>
+          <a href={storefrontUrl} target="_top">Open the store page</a>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ maxWidth: "760px", margin: "40px auto", padding: "0 16px", fontFamily: "system-ui, sans-serif" }}>
       <div style={{ textAlign: "center", marginBottom: "32px" }}>
@@ -271,7 +293,7 @@ export default function ShopperPortal() {
           )}
 
           {/* STEP 1: ORDER NUMBER & EMAIL INPUT (REQUEST OTP) */}
-          {currentStep === "REQUEST" && !actionData?.step && (
+          {currentStep === "REQUEST" && (
             <div style={{ backgroundColor: "#fff", border: "1px solid #e1e3e5", borderRadius: "8px", padding: "24px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
               <h3 style={{ margin: "0 0 8px 0", fontSize: "18px" }}>Step 1: Access Your Order</h3>
               <p style={{ fontSize: "13px", color: "#6d7175", marginBottom: "20px" }}>
@@ -336,7 +358,9 @@ export default function ShopperPortal() {
             <div style={{ backgroundColor: "#fff", border: "1px solid #e1e3e5", borderRadius: "8px", padding: "24px", boxShadow: "0 1px 3px rgba(0,0,0,0.05)" }}>
               <h3 style={{ margin: "0 0 8px 0", fontSize: "18px" }}>Step 2: Enter Verification Code</h3>
               <p style={{ fontSize: "13px", color: "#6d7175", marginBottom: "20px" }}>
-                We sent a 6-digit verification code to <strong>{actionData?.customerEmail || emailInput}</strong> for order <strong>{actionData?.orderNumber || orderNumberInput}</strong>.
+                {actionData?.emailSent
+                  ? <>We sent a 6-digit verification code to <strong>{actionData?.customerEmail || emailInput}</strong> for order <strong>{actionData?.orderNumber || orderNumberInput}</strong>.</>
+                  : actionData?.message || "If an order with those details exists, a verification code has been sent to your email."}
               </p>
 
               <fetcher.Form method="post">

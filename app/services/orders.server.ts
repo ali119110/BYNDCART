@@ -204,6 +204,17 @@ export async function syncShopifyOrders({ shopifyStoreId, admin }: SyncOrdersInp
   return { success: true, synchronizedCount };
 }
 
+/** Loads one order from Shopify so a customer can request a verification code before the webhook arrives. */
+export async function syncCustomerOrder(shopifyStoreId: string, orderNumber: string) {
+  const { getShopifyAdminClient } = await import("./shopifySync.server");
+  const admin = await getShopifyAdminClient(shopifyStoreId);
+  if (!admin) return null;
+
+  const stripped = orderNumber.trim().replace(/^#/, "");
+  if (!stripped) return null;
+  return searchOrSyncOrders({ shopifyStoreId, admin, query: `name:${stripped}` });
+}
+
 /** Search Shopify directly when the local order snapshot does not contain a match. */
 export async function searchOrSyncOrders({ shopifyStoreId, admin, query }: SyncOrdersInput & { query: string }) {
   const normalizedQuery = query.trim();

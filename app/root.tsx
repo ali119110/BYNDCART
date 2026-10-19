@@ -2,10 +2,12 @@ import { Links, Meta, Outlet, Scripts, ScrollRestoration, useLoaderData } from "
 import type { LoaderFunction } from "react-router";
 import "./styles/byndcart.css";
 
-export const loader: LoaderFunction = async () => {
+export const loader: LoaderFunction = async ({ request }) => {
+  const path = new URL(request.url).pathname;
+  const customerPage = path === "/portal" || path.startsWith("/apps/returns");
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "mock-api-key",
-    isOffline: process.env.SKIP_AUTH === "true",
+    isOffline: customerPage || process.env.SKIP_AUTH === "true",
   };
 };
 
