@@ -1,6 +1,6 @@
 # Mobile responsiveness audit
 
-Checked in code and with the shared stylesheet. A full browser pass at 320, 375, 390, 430, 768, 1024, and 1280 pixels was not completed in this session because the embedded Shopify admin was not opened against a store.
+Checked in code and with the shared stylesheet. After deployment, a browser opened the production portal and the refunds screen. The portal form and the refund forms were readable, and the navigation wrapped onto two rows. A full pass at 320, 375, 390, 430, 768, 1024, and 1280 pixels was not completed. A 390px emulation was requested, but the captured image remained a wide canvas, so those widths are not marked as verified.
 
 ## Layout rules in the app
 
