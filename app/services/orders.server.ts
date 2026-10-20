@@ -336,6 +336,15 @@ async function annotateOrders(shopifyStoreId: string, orders: any[]) {
     }),
   ]);
 
+  const variantIds = Array.from(new Set(orders.flatMap((order: any) =>
+    Array.isArray(order.lineItems) ? order.lineItems.map((line: any) => String(line.variantId || "")).filter(Boolean) : []
+  )));
+  const productRows = variantIds.length ? await prisma.productCache.findMany({
+    where: { shopifyStoreId, shopifyVariantId: { in: variantIds } },
+    select: { shopifyVariantId: true, title: true, variantTitle: true, imageUrl: true, sku: true },
+  }) : [];
+  const productByVariant = new Map(productRows.map((product: any) => [product.shopifyVariantId, product]));
+
   const returnStatusByOrder = new Map<string, string>();
   const exchangeStatusByOrder = new Map<string, string>();
   for (const record of returns) if (!returnStatusByOrder.has(record.shopifyOrderId)) returnStatusByOrder.set(record.shopifyOrderId, record.status);
@@ -344,6 +353,15 @@ async function annotateOrders(shopifyStoreId: string, orders: any[]) {
   return orders.map((order) => ({
     ...order,
     totalPrice: Number(order.totalPrice),
+    lineItems: Array.isArray(order.lineItems) ? order.lineItems.map((line: any) => {
+      const product: any = productByVariant.get(String(line.variantId || ""));
+      return {
+        ...line,
+        variantTitle: line.variantTitle || product?.variantTitle || null,
+        imageUrl: line.imageUrl || product?.imageUrl || null,
+        sku: line.sku || product?.sku || null,
+      };
+    }) : [],
     returnStatus: returnStatusByOrder.get(order.shopifyOrderId) ?? "None",
     exchangeStatus: exchangeStatusByOrder.get(order.shopifyOrderId) ?? "None",
   }));

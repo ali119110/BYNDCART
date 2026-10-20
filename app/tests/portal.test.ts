@@ -50,6 +50,7 @@ prisma.storeSettings.findUnique = (async () => ({
   fraudFlagWindowCount: 3,
 })) as any;
 
+prisma.order.findMany = (async () => []) as any;
 prisma.order.findFirst = (async (args: any) => {
   if (args.where.shopifyStoreId === "store-1") {
     return {

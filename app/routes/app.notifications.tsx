@@ -1,6 +1,6 @@
 import React from "react";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
-import { useLoaderData, useFetcher } from "react-router";
+import { useLoaderData, useFetcher, useRouteError } from "react-router";
 import { authenticate } from "../shopify.server";
 import { getStoreByShop } from "../services/store.server";
 import {
@@ -279,6 +279,21 @@ export default function Notifications() {
               </div>
             )}
         </section>
+    </div>
+  );
+}
+
+/** Keep route/runtime failures visible instead of leaving the embedded page blank. */
+export function ErrorBoundary() {
+  const error = useRouteError();
+  const message = error instanceof Error ? error.message : "Unknown route error";
+  console.error("[Notifications] Route rendering failed:", error);
+  return (
+    <div className="bc-page" role="alert" style={{ maxWidth: 860, margin: "32px auto", padding: 24, background: "#fff", border: "1px solid #e1e3e5", borderRadius: 14 }}>
+      <p className="bc-eyebrow">MESSAGES</p>
+      <h1>Notifications could not load</h1>
+      <p>BYNDCART could not render this page. Reload it once. If the problem continues, share the server log entry with support.</p>
+      <details><summary>Technical details</summary><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{message}</pre></details>
     </div>
   );
 }

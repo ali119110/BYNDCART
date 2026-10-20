@@ -354,7 +354,7 @@ test("OTP & Security — Cross-Merchant Access Prevention", async () => {
     async () => {
       await lookupShopperOrder("store-2", store1Token);
     },
-    /Unauthorized access/
+    /session is invalid or has expired/
   );
 });
 
@@ -408,6 +408,6 @@ test("OTP & Security — Unauthorized Return & Exchange Submission Prevention", 
     async () => {
       await lookupShopperOrder("store-1", "");
     },
-    /Unauthorized access/
+    /session is invalid or has expired/
   );
 });

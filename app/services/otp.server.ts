@@ -185,8 +185,7 @@ async function findCustomerOrder(shopifyStoreId: string, normalizedOrderNumber: 
 }
 
 async function findLocalCustomerOrder(shopifyStoreId: string, normalizedOrderNumber: string, normalizedEmail: string) {
-  const stripped = normalizedOrderNumber.replace(/^#/, "");
-  const candidates = Array.from(new Set([normalizedOrderNumber, stripped, `#${stripped}`]));
+  const candidates = getCustomerOrderNumberCandidates(normalizedOrderNumber);
   for (const orderNumber of candidates) {
     const order = await prisma.order.findFirst({
       where: {
@@ -324,10 +323,30 @@ export interface CustomerSessionPayload {
   exp: number;
 }
 
+/** Canonical comparison form. Letter prefixes such as FR-/FR are equivalent to the trailing Shopify number. */
 export function normalizeCustomerOrderNumber(value: string): string {
-  const trimmed = String(value || "").trim();
-  if (!trimmed || trimmed.startsWith("#")) return trimmed;
-  return /^\d+$/.test(trimmed) ? "#" + trimmed : trimmed;
+  const trimmed = String(value || "").trim().replace(/\s+/g, "");
+  if (!trimmed) return "";
+  const compact = trimmed.replace(/^#+/, "").replace(/-/g, "");
+  const numericTail = compact.match(/^(?:[A-Z]+)?(\d+)$/i);
+  return numericTail ? `#${numericTail[1]}` : compact.toUpperCase();
+}
+
+/** Candidate spellings let FR4609, FR-4609, #4609 and 4609 identify the same order. */
+export function getCustomerOrderNumberCandidates(value: string): string[] {
+  const rawInput = String(value || "").trim().replace(/\s+/g, "");
+  if (!rawInput) return [];
+  const raw = rawInput.replace(/^#+/, "");
+  const compact = raw.replace(/-/g, "");
+  const candidates = [rawInput, raw, compact, `#${raw}`, `#${compact}`];
+  const prefixAndNumber = compact.match(/^([A-Z]+)(\d+)$/i);
+  if (prefixAndNumber) {
+    const digits = prefixAndNumber[2];
+    const prefix = prefixAndNumber[1];
+    candidates.push(digits, `#${digits}`, `${prefix}-${digits}`, `#${prefix}-${digits}`);
+  }
+  if (/^\d+$/.test(compact)) candidates.push(compact, `#${compact}`);
+  return [...new Set(candidates.filter(Boolean))];
 }
 
 function normalizeSessionPhone(value: string | null | undefined): string | undefined {
@@ -351,7 +370,8 @@ export function createCustomerSessionToken(params: {
   const exp = Math.floor(Date.now() / 1000) + duration * 60;
   const payload: CustomerSessionPayload = {
     shopifyStoreId: params.shopifyStoreId,
-    orderNumber: normalizeCustomerOrderNumber(params.orderNumber),
+    // Preserve the stored Shopify name for lookups; verification compares canonical forms.
+    orderNumber: String(params.orderNumber || "").trim(),
     customerEmail: String(params.customerEmail || "").trim().toLowerCase(),
     customerPhone: normalizeSessionPhone(params.customerPhone),
     exp,
@@ -404,7 +424,7 @@ export function verifyCustomerSessionToken(
 
     if (expectedOrderNumber) {
       const normExpected = normalizeCustomerOrderNumber(expectedOrderNumber);
-      if (payload.orderNumber.toLowerCase() !== normExpected.toLowerCase()) {
+      if (normalizeCustomerOrderNumber(payload.orderNumber).toLowerCase() !== normExpected.toLowerCase()) {
         return null; // Order tampering attempt
       }
     }

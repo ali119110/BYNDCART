@@ -152,9 +152,9 @@ const styles = (
     }
 
     s-link[aria-current="page"] {
-      border-color: #e0e7ff;
-      background: var(--bc-shell-brand-soft);
-      color: var(--bc-shell-brand);
+      border-color: #d5d8dc;
+      background: #f4f5f6;
+      color: var(--bc-shell-ink);
       font-weight: 700;
     }
 

@@ -622,9 +622,11 @@ export default function Returns() {
                                 onChange={() => handleItemToggle(li)}
                                 style={{ width: "18px", height: "18px", cursor: "pointer" }}
                               />
-                              <label htmlFor={`ret-item-${li.lineItemId}`} style={{ flex: 1, cursor: "pointer" }}>
-                                <div style={{ fontWeight: 600, fontSize: "14px", color: "#0f172a" }}>{li.title}</div>
-                                <div style={{ fontSize: "12px", color: "#64748b" }}>
+                              {li.imageUrl ? <img src={li.imageUrl} alt={li.title || "Product"} loading="lazy" style={{ width: "64px", height: "72px", objectFit: "cover", borderRadius: "8px", background: "#f1f2f3", flex: "0 0 auto" }} /> : <span aria-label="Product image unavailable" style={{ width: "64px", height: "72px", borderRadius: "8px", background: "#f1f2f3", flex: "0 0 auto" }} />}
+                              <label htmlFor={`ret-item-${li.lineItemId}`} style={{ flex: 1, cursor: "pointer", minWidth: 0 }}>
+                                <div style={{ fontWeight: 650, fontSize: "14px", color: "#0f172a" }}>{li.title}</div>
+                                <div style={{ fontSize: "12px", color: "#475569", marginTop: "3px" }}>{li.variantTitle && li.variantTitle !== "Default Title" ? `Variant / size: ${li.variantTitle}` : "Variant / size: not available"}{li.sku ? ` · SKU ${li.sku}` : ""}</div>
+                                <div style={{ fontSize: "12px", color: "#64748b", marginTop: "3px" }}>
                                   Unit Price: {selectedOrder.currency || "USD"} {Number(li.price).toFixed(2)} | Max Qty: {li.quantity}
                                 </div>
                               </label>

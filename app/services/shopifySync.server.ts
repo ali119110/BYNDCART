@@ -349,12 +349,15 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
   const exchangeRequest = await prisma.exchangeRequest.findFirst({ where: { id: entityId, shopifyStoreId }, include: { items: true } });
   if (!exchangeRequest) throw new Error(`Exchange request ${entityId} not found for store ${shopifyStoreId}`);
 
-  // If an older app version already stored a draftOrder ID, finish that draft
-  // instead of returning it as though it were a normal Shopify order.
-  if (exchangeRequest.newOrderId && exchangeRequest.newOrderId.startsWith("gid://shopify/Order/")) {
-    return { success: true, replacementOrderId: exchangeRequest.newOrderId, replacementOrderNumber: exchangeRequest.newOrderNumber, idempotent: true };
-  }
+  // Keep the existing-order path available for settlement retries. Credit/invoice
+  // status fields below make those retries safe and prevent repeated credits.
+  const alreadyCreatedOrderId = exchangeRequest.newOrderId && exchangeRequest.newOrderId.startsWith("gid://shopify/Order/")
+    ? exchangeRequest.newOrderId : null;
+  const alreadyCreatedOrderNumber = alreadyCreatedOrderId ? exchangeRequest.newOrderNumber : null;
   const client = await getShopifyAdminClient(shopifyStoreId, admin);
+  if (!client && alreadyCreatedOrderId) {
+    return { success: true, replacementOrderId: alreadyCreatedOrderId, replacementOrderNumber: alreadyCreatedOrderNumber, idempotent: true };
+  }
   if (!client) return { success: false, skipped: true, reason: "No admin client available" };
 
   const orderSnapshot = await prisma.order.findFirst({ where: { shopifyStoreId, shopifyOrderId: exchangeRequest.shopifyOrderId } });
@@ -389,6 +392,14 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
 
   const netDifference = Number((replacementTotal - returnedGoodsValue).toFixed(2));
   const credit = Math.min(replacementTotal, returnedGoodsValue);
+
+  if (alreadyCreatedOrderId) {
+    const settlement = await settleExchangeFinancialBalance({
+      client, shopifyStoreId, exchangeRequest, originalOrderId: exchangeRequest.shopifyOrderId,
+      replacementOrderId: alreadyCreatedOrderId, netDifference, currency: orderSnapshot.currency || "USD",
+    });
+    return { success: true, replacementOrderId: alreadyCreatedOrderId, replacementOrderNumber: alreadyCreatedOrderNumber, idempotent: true, netDifference, settlement };
+  }
   const input: any = {
     email: exchangeRequest.customerEmail || undefined,
     note: `BYNDCART exchange replacement for original order ${exchangeRequest.orderNumber} (request ${exchangeRequest.id}). Net difference: ${netDifference.toFixed(2)} ${orderSnapshot.currency}. A positive balance remains unpaid until collected by the merchant.`,
@@ -446,14 +457,202 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
   await prisma.exchangeRequest.update({ where: { id: entityId }, data: { newOrderId: replacementOrder.id, newOrderNumber: replacementOrder.name || completedDraft.name || draftOrderName } });
   await prisma.auditLog.create({ data: { shopifyStoreId, action: "SHOPIFY_REPLACEMENT_ORDER_CREATED", entityType: "ExchangeRequest", entityId, metadata: { originalOrderId: exchangeRequest.shopifyOrderId, draftOrderId, replacementOrderId: replacementOrder.id, replacementOrderNumber: replacementOrder.name, netDifference, currency: orderSnapshot.currency, financialStatus: replacementOrder.displayFinancialStatus } } });
 
-  // If replacement is cheaper, record the amount owed by the merchant for a
-  // manual decision; never automatically send a courier or invent store credit.
+  const settlement = await settleExchangeFinancialBalance({
+    client, shopifyStoreId, exchangeRequest, originalOrderId: exchangeRequest.shopifyOrderId,
+    replacementOrderId: replacementOrder.id, netDifference, currency: orderSnapshot.currency || "USD",
+  });
+
+  return { success: true, draftOrderId, draftOrderName: completedDraft.name || draftOrderName, replacementOrderId: replacementOrder.id, replacementOrderNumber: replacementOrder.name || completedDraft.name || draftOrderName, idempotent: false, netDifference, settlement };
+}
+
+
+
+/**
+ * Settle the exchange price difference only after Shopify has created the replacement
+ * order. A PENDING status is a durable claim: if the process crashes after Shopify
+ * accepts a mutation but before persistence, automatic retries must not double-credit.
+ */
+async function settleExchangeFinancialBalance(input: {
+  client: any;
+  shopifyStoreId: string;
+  exchangeRequest: any;
+  originalOrderId: string;
+  replacementOrderId: string;
+  netDifference: number;
+  currency: string;
+}) {
+  const { client, shopifyStoreId, exchangeRequest, originalOrderId, replacementOrderId } = input;
+  const netDifference = Number(input.netDifference.toFixed(2));
+  const currency = input.currency || "USD";
+  const result: any = { difference: netDifference, currency };
+
   if (netDifference < 0) {
-    const existingCredit = await prisma.refundRecord.findFirst({ where: { shopifyStoreId, exchangeRequestId: entityId, status: "PENDING" } });
-    if (!existingCredit) await prisma.refundRecord.create({ data: { shopifyStoreId, exchangeRequestId: entityId, method: "MANUAL", amount: Math.abs(netDifference), currency: orderSnapshot.currency || "USD", status: "PENDING", reason: "Replacement is cheaper than returned items; merchant must issue the difference manually" } });
+    const amount = Number(Math.abs(netDifference).toFixed(2));
+    const exchangeId = exchangeRequest.id;
+    const existing = await prisma.exchangeRequest.findFirst({ where: { id: exchangeId, shopifyStoreId }, select: { storeCreditStatus: true, storeCreditTransactionId: true } });
+    if (existing?.storeCreditStatus === "ISSUED") {
+      result.storeCredit = { status: "ISSUED", transactionId: existing.storeCreditTransactionId };
+    } else if (existing?.storeCreditStatus === "PENDING") {
+      result.storeCredit = { status: "PENDING_RECONCILIATION", message: "A previous credit attempt is still marked pending; it was not repeated to avoid double-crediting." };
+    } else {
+      const claim = await prisma.exchangeRequest.updateMany({
+        where: { id: exchangeId, shopifyStoreId, OR: [{ storeCreditStatus: null }, { storeCreditStatus: "FAILED" }] },
+        data: { storeCreditStatus: "PENDING", storeCreditAmount: amount, storeCreditCurrency: currency },
+      });
+      if (!claim.count) {
+        const latest = await prisma.exchangeRequest.findFirst({ where: { id: exchangeId, shopifyStoreId }, select: { storeCreditStatus: true, storeCreditTransactionId: true } });
+        result.storeCredit = { status: latest?.storeCreditStatus || "PENDING", transactionId: latest?.storeCreditTransactionId || null };
+      } else {
+        let transactionCreated = false;
+        let creditMutationStarted = false;
+        let creditMutationResponseReceived = false;
+        let creditMutationOutcomeUnknown = false;
+        let transactionId: string | null = null;
+        try {
+          const orderResponse = await client.graphql(
+            `#graphql
+            query exchangeCreditCustomer($id: ID!) { order(id: $id) { id customer { id email } } }`,
+            { variables: { id: originalOrderId } },
+          );
+          const orderPayload = await orderResponse.json();
+          const customer = orderPayload?.data?.order?.customer;
+          if (orderPayload?.errors?.length) throw new Error(orderPayload.errors.map((error: any) => error.message).join("; "));
+          if (!customer?.id) throw new Error("Shopify did not return a customer for the original order; store credit was not issued.");
+
+          creditMutationStarted = true;
+          const creditResponse = await client.graphql(
+            `#graphql
+            mutation exchangeStoreCredit($id: ID!, $creditInput: StoreCreditAccountCreditInput!) {
+              storeCreditAccountCredit(id: $id, creditInput: $creditInput) {
+                storeCreditAccountTransaction { id amount { amount currencyCode } account { id balance { amount currencyCode } } }
+                userErrors { field message }
+              }
+            }`,
+            { variables: { id: customer.id, creditInput: { creditAmount: { amount: amount.toFixed(2), currencyCode: currency }, notify: true } } },
+          );
+          const creditPayload = await creditResponse.json();
+          creditMutationResponseReceived = true;
+          if (creditPayload?.errors?.length) {
+            creditMutationOutcomeUnknown = true;
+            throw new Error(creditPayload.errors.map((error: any) => error.message).join("; "));
+          }
+          const payload = creditPayload?.data?.storeCreditAccountCredit;
+          const userErrors = payload?.userErrors || [];
+          if (userErrors.length || !payload?.storeCreditAccountTransaction?.id) {
+            throw new Error(userErrors.map((error: any) => error.message).join("; ") || "Shopify did not confirm a store-credit transaction.");
+          }
+          const transaction = payload.storeCreditAccountTransaction;
+          transactionCreated = true;
+          transactionId = transaction.id;
+          await prisma.exchangeRequest.update({ where: { id: exchangeId }, data: {
+            storeCreditStatus: "ISSUED", storeCreditTransactionId: transaction.id,
+            storeCreditAmount: amount, storeCreditCurrency: currency, storeCreditIssuedAt: new Date(),
+          } });
+          await prisma.refundRecord.create({ data: {
+            shopifyStoreId, exchangeRequestId: exchangeId, method: "STORE_CREDIT", amount, currency,
+            status: "CONFIRMED", reference: transaction.id, reason: `Shopify store credit issued for cheaper exchange ${exchangeRequest.orderNumber}`, confirmedAt: new Date(),
+          } });
+          await prisma.auditLog.create({ data: {
+            shopifyStoreId, action: "EXCHANGE_STORE_CREDIT_ISSUED", entityType: "ExchangeRequest", entityId: exchangeId,
+            metadata: { originalOrderId, replacementOrderId, amount, currency, transactionId: transaction.id, accountId: transaction.account?.id || null },
+          } });
+          result.storeCredit = { status: "ISSUED", amount, currency, transactionId: transaction.id };
+        } catch (error: any) {
+          const reason = String(error?.message || error).slice(0, 1000);
+          if (transactionCreated || (creditMutationStarted && (!creditMutationResponseReceived || creditMutationOutcomeUnknown))) {
+            // The mutation is confirmed, or its network outcome is unknown. Never
+            // downgrade it to retryable FAILED: that could create duplicate credit.
+            const latest = await prisma.exchangeRequest.findFirst({ where: { id: exchangeId, shopifyStoreId }, select: { storeCreditStatus: true, storeCreditTransactionId: true } }).catch(() => null);
+            const status = latest?.storeCreditStatus === "ISSUED" ? "ISSUED" : "PENDING_RECONCILIATION";
+            await prisma.auditLog.create({ data: {
+              shopifyStoreId, action: "EXCHANGE_STORE_CREDIT_RECONCILIATION_REQUIRED", entityType: "ExchangeRequest", entityId: exchangeId,
+              metadata: { originalOrderId, replacementOrderId, amount, currency, transactionId, error: reason, mutationOutcomeUnknown: creditMutationStarted && !creditMutationResponseReceived },
+            } }).catch(() => undefined);
+            result.storeCredit = { status, amount, currency, transactionId, message: reason };
+          } else {
+            await prisma.exchangeRequest.update({ where: { id: exchangeId }, data: { storeCreditStatus: "FAILED" } });
+            const existingPending = await prisma.refundRecord.findFirst({ where: { shopifyStoreId, exchangeRequestId: exchangeId, status: "PENDING" } });
+            if (!existingPending) await prisma.refundRecord.create({ data: {
+              shopifyStoreId, exchangeRequestId: exchangeId, method: "MANUAL", amount, currency, status: "PENDING",
+              reason: "Shopify store credit failed; merchant action is required: " + reason,
+            } });
+            await prisma.auditLog.create({ data: {
+              shopifyStoreId, action: "EXCHANGE_STORE_CREDIT_FAILED", entityType: "ExchangeRequest", entityId: exchangeId,
+              metadata: { originalOrderId, replacementOrderId, amount, currency, error: reason },
+            } });
+            result.storeCredit = { status: "FAILED", amount, currency, message: reason };
+          }
+        }
+      }
+    }
+  } else if (netDifference > 0) {
+    const exchangeId = exchangeRequest.id;
+    const existing = await prisma.exchangeRequest.findFirst({ where: { id: exchangeId, shopifyStoreId }, select: { paymentInvoiceStatus: true } });
+    if (existing?.paymentInvoiceStatus === "SENT") {
+      result.paymentInvoice = { status: "SENT" };
+    } else if (existing?.paymentInvoiceStatus === "PENDING") {
+      result.paymentInvoice = { status: "PENDING_RECONCILIATION", message: "A previous invoice attempt is still marked pending; it was not sent again automatically." };
+    } else {
+      const claim = await prisma.exchangeRequest.updateMany({
+        where: { id: exchangeId, shopifyStoreId, OR: [{ paymentInvoiceStatus: null }, { paymentInvoiceStatus: "FAILED" }] },
+        data: { paymentInvoiceStatus: "PENDING", paymentInvoiceError: null },
+      });
+      if (!claim.count) {
+        result.paymentInvoice = { status: "PENDING" };
+      } else {
+        let invoiceSent = false;
+        let invoiceMutationStarted = false;
+        let invoiceResponseReceived = false;
+        try {
+          if (!String(exchangeRequest.customerEmail || "").includes("@")) throw new Error("The customer email on the exchange is missing or invalid; payment invoice was not sent.");
+          invoiceMutationStarted = true;
+          const invoiceResponse = await client.graphql(
+            `#graphql
+            mutation exchangePaymentInvoice($id: ID!, $email: EmailInput) {
+              orderInvoiceSend(id: $id, email: $email) { order { id } userErrors { field message } }
+            }`,
+            { variables: { id: replacementOrderId, email: {
+              to: exchangeRequest.customerEmail,
+              subject: `Payment required for exchange replacement ${exchangeRequest.orderNumber}`,
+              customMessage: `Your replacement order requires an additional payment of ${netDifference.toFixed(2)} ${currency}. Use the secure checkout link in this email to complete payment.`,
+            } } },
+          );
+          const invoicePayload = await invoiceResponse.json();
+          invoiceResponseReceived = true;
+          if (invoicePayload?.errors?.length) throw new Error(invoicePayload.errors.map((error: any) => error.message).join("; "));
+          const payload = invoicePayload?.data?.orderInvoiceSend;
+          const userErrors = payload?.userErrors || [];
+          if (userErrors.length || !payload?.order?.id) throw new Error(userErrors.map((error: any) => error.message).join("; ") || "Shopify did not confirm invoice delivery.");
+          invoiceSent = true;
+          await prisma.exchangeRequest.update({ where: { id: exchangeId }, data: { paymentInvoiceStatus: "SENT", paymentInvoiceSentAt: new Date(), paymentInvoiceError: null } });
+          await prisma.auditLog.create({ data: {
+            shopifyStoreId, action: "EXCHANGE_PAYMENT_INVOICE_SENT", entityType: "ExchangeRequest", entityId: exchangeId,
+            metadata: { originalOrderId, replacementOrderId, amount: netDifference, currency, recipient: exchangeRequest.customerEmail },
+          } });
+          result.paymentInvoice = { status: "SENT", amount: netDifference, currency };
+        } catch (error: any) {
+          const reason = String(error?.message || error).slice(0, 1000);
+          if (invoiceSent || (invoiceMutationStarted && !invoiceResponseReceived)) {
+            const latest = await prisma.exchangeRequest.findFirst({ where: { id: exchangeId, shopifyStoreId }, select: { paymentInvoiceStatus: true } }).catch(() => null);
+            await prisma.auditLog.create({ data: {
+              shopifyStoreId, action: "EXCHANGE_PAYMENT_INVOICE_PERSISTENCE_WARNING", entityType: "ExchangeRequest", entityId: exchangeId,
+              metadata: { originalOrderId, replacementOrderId, amount: netDifference, currency, error: reason, mutationOutcomeUnknown: invoiceMutationStarted && !invoiceResponseReceived },
+            } }).catch(() => undefined);
+            result.paymentInvoice = { status: latest?.paymentInvoiceStatus === "SENT" ? "SENT" : "PENDING_RECONCILIATION", amount: netDifference, currency, message: reason };
+          } else {
+            await prisma.exchangeRequest.update({ where: { id: exchangeId }, data: { paymentInvoiceStatus: "FAILED", paymentInvoiceError: reason } });
+            await prisma.auditLog.create({ data: {
+              shopifyStoreId, action: "EXCHANGE_PAYMENT_INVOICE_FAILED", entityType: "ExchangeRequest", entityId: exchangeId,
+              metadata: { originalOrderId, replacementOrderId, amount: netDifference, currency, error: reason },
+            } });
+            result.paymentInvoice = { status: "FAILED", amount: netDifference, currency, message: reason };
+          }
+        }
+      }
+    }
   }
 
-  return { success: true, draftOrderId, draftOrderName: completedDraft.name || draftOrderName, replacementOrderId: replacementOrder.id, replacementOrderNumber: replacementOrder.name || completedDraft.name || draftOrderName, idempotent: false, netDifference };
+  return result;
 }
 
 /**

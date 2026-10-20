@@ -2,7 +2,7 @@ import prisma from "../db.server";
 import { getSettings } from "./settings.server";
 import { createReturnRequest } from "./returns.server";
 import { createExchangeRequest } from "./exchanges.server";
-import { createCustomerSessionToken, normalizeCustomerOrderNumber, verifyCustomerSessionToken } from "./otp.server";
+import { createCustomerSessionToken, getCustomerOrderNumberCandidates, normalizeCustomerOrderNumber, verifyCustomerSessionToken } from "./otp.server";
 import type { CustomerSessionPayload } from "./otp.server";
 import { syncCustomerOrder } from "./orders.server";
 import { rateLimit } from "../utils/rateLimit.server";
@@ -28,12 +28,14 @@ export interface ShopperOrderLookupResult {
       variantId: string | null;
       productId?: string | null;
       title: string;
+      variantTitle?: string | null;
+      imageUrl?: string | null;
       quantity: number;
       price: number;
       sku?: string | null;
     }>;
   };
-  replacementVariants: Array<{ variantId: string; title: string; price: number; sku: string | null }>;
+  replacementVariants: Array<{ variantId: string; title: string; price: number; sku: string | null; imageUrl?: string | null }>;
   requestHistory: Array<{
     id: string;
     type: "RETURN" | "EXCHANGE";
@@ -42,6 +44,17 @@ export interface ShopperOrderLookupResult {
     createdAt: Date;
     trackingNumber?: string;
     courier?: string;
+  }>;
+  orderHistory: Array<{
+    orderNumber: string;
+    createdAt: Date;
+    totalPrice: number;
+    currency: string;
+    itemCount: number;
+    returnEligible: boolean;
+    returnMessage: string;
+    exchangeEligible: boolean;
+    exchangeMessage: string;
   }>;
   settings: {
     returnWindowDays: number;
@@ -59,26 +72,21 @@ function normalizePortalPhone(value: unknown): string {
 }
 
 async function findOrderForCustomerSession(shopifyStoreId: string, session: CustomerSessionPayload, orderNumber = session.orderNumber) {
-  const normalizedOrderNumber = normalizeCustomerOrderNumber(orderNumber);
+  const candidates = getCustomerOrderNumberCandidates(orderNumber);
   const filters: any[] = [];
   const email = String(session.customerEmail || "").trim().toLowerCase();
   const phone = normalizePortalPhone(session.customerPhone);
   if (email) filters.push({ customerEmail: { equals: email, mode: "insensitive" } });
   if (phone) filters.push({ customerPhone: phone });
-  if (!filters.length || !normalizedOrderNumber) return null;
+  if (!filters.length || !candidates.length) return null;
 
-  const baseWhere: any = {
-    shopifyStoreId,
-    orderNumber: { equals: normalizedOrderNumber, mode: "insensitive" },
-    OR: filters,
-  };
-  let order = await prisma.order.findFirst({ where: baseWhere });
-  if (!order && normalizedOrderNumber.startsWith("#")) {
-    order = await prisma.order.findFirst({
-      where: { ...baseWhere, orderNumber: { equals: normalizedOrderNumber.slice(1), mode: "insensitive" } },
+  for (const candidateNumber of candidates) {
+    const order = await prisma.order.findFirst({
+      where: { shopifyStoreId, orderNumber: { equals: candidateNumber, mode: "insensitive" }, OR: filters },
     });
+    if (order) return order;
   }
-  return order;
+  return null;
 }
 
 export async function authenticateShopperOrder(
@@ -106,15 +114,24 @@ export async function authenticateShopperOrder(
   if (!attempts.allowed) throw new Error("Too many attempts. Please wait a few minutes before trying again.");
 
   const findOrder = async () => {
-    let result = await prisma.order.findFirst({
-      where: { shopifyStoreId, orderNumber: { equals: orderNumber, mode: "insensitive" } },
-    });
-    if (!result && orderNumber.startsWith("#")) {
-      result = await prisma.order.findFirst({
-        where: { shopifyStoreId, orderNumber: { equals: orderNumber.slice(1), mode: "insensitive" } },
+    for (const candidateNumber of getCustomerOrderNumberCandidates(rawOrderNumber)) {
+      const result = await prisma.order.findFirst({
+        where: { shopifyStoreId, orderNumber: { equals: candidateNumber, mode: "insensitive" } },
       });
+      if (result) return result;
     }
-    return result;
+    const numericTail = String(rawOrderNumber).match(/(\d+)\s*$/)?.[1];
+    if (numericTail) {
+      const suffixMatches = await prisma.order.findMany({
+        where: { shopifyStoreId, orderNumber: { endsWith: numericTail, mode: "insensitive" } },
+        orderBy: { shopifyCreatedAt: "desc" },
+        take: 50,
+      });
+      const canonicalInput = normalizeCustomerOrderNumber(rawOrderNumber);
+      const match = suffixMatches.find((candidate: any) => normalizeCustomerOrderNumber(candidate.orderNumber) === canonicalInput);
+      if (match) return match;
+    }
+    return null;
   };
 
   const matchesIdentifier = async (candidate: any): Promise<boolean> => {
@@ -154,8 +171,11 @@ export async function authenticateShopperOrder(
     matched = await matchesIdentifier(order);
   }
 
-  if (!order || !matched) {
-    throw new Error("We could not find an order matching those details. Check the order number and the email or phone used at checkout.");
+  if (!order) {
+    throw new Error("We couldn't find an order with that number. Check the order number, including any letters, and try again.");
+  }
+  if (!matched) {
+    throw new Error(`Order ${order.orderNumber} was found, but the ${identifierType === "EMAIL" ? "email address" : "phone number"} doesn't match the contact details used at checkout. Check the selected contact type and use the original checkout details.`);
   }
 
   const sessionEmail = String(order.customerEmail || (identifierType === "EMAIL" ? identifier : "")).trim().toLowerCase();
@@ -187,18 +207,22 @@ export async function authenticateShopperOrder(
 export async function lookupShopperOrder(shopifyStoreId: string, sessionToken: string): Promise<ShopperOrderLookupResult> {
   const session = verifyCustomerSessionToken(sessionToken, shopifyStoreId);
   if (!session) throw new Error("Your customer portal session is invalid or has expired. Find your order again to continue.");
-  const normalizedOrderNumber = normalizeCustomerOrderNumber(session.orderNumber);
-  const order = await findOrderForCustomerSession(shopifyStoreId, session, normalizedOrderNumber);
+  const order = await findOrderForCustomerSession(shopifyStoreId, session, session.orderNumber);
   if (!order) throw new Error("We could not reload this order. Return to the portal and try again.");
   const normalizedEmail = String(order.customerEmail || session.customerEmail || "").trim().toLowerCase();
 
-  const [settings, returnEligibility, exchangeEligibility, productRows, returns, exchanges] = await Promise.all([
+  const historyContactFilters: any[] = [];
+  if (normalizedEmail) historyContactFilters.push({ customerEmail: { equals: normalizedEmail, mode: "insensitive" } });
+  const sessionPhone = normalizePortalPhone(session.customerPhone);
+  if (sessionPhone) historyContactFilters.push({ customerPhone: sessionPhone });
+  const [settings, returnEligibility, exchangeEligibility, productRows, returns, exchanges, customerOrders] = await Promise.all([
     getSettings(shopifyStoreId),
     checkReturnEligibility({ shopifyStoreId, orderId: order.shopifyOrderId, orderNumber: order.orderNumber, customerEmail: order.customerEmail || normalizedEmail, requestType: "RETURN" }),
     checkReturnEligibility({ shopifyStoreId, orderId: order.shopifyOrderId, orderNumber: order.orderNumber, customerEmail: order.customerEmail || normalizedEmail, requestType: "EXCHANGE" }),
     prisma.productCache.findMany({ where: { shopifyStoreId }, orderBy: [{ title: "asc" }, { variantTitle: "asc" }], take: 1000 }),
     prisma.returnRequest.findMany({ where: { shopifyStoreId, shopifyOrderId: order.shopifyOrderId, customerEmail: { equals: normalizedEmail, mode: "insensitive" } }, orderBy: { createdAt: "desc" } }),
     prisma.exchangeRequest.findMany({ where: { shopifyStoreId, shopifyOrderId: order.shopifyOrderId, customerEmail: { equals: normalizedEmail, mode: "insensitive" } }, orderBy: { createdAt: "desc" } }),
+    historyContactFilters.length ? prisma.order.findMany({ where: { shopifyStoreId, OR: historyContactFilters }, orderBy: { shopifyCreatedAt: "desc" }, take: 20 }) : Promise.resolve([]),
   ]);
 
   const requests = [
@@ -220,17 +244,40 @@ export async function lookupShopperOrder(shopifyStoreId: string, sessionToken: s
   }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   const rawLines = Array.isArray(order.lineItems) ? order.lineItems as any[] : [];
-  const skuByVariant = new Map(productRows.map((product: any) => [product.shopifyVariantId, product.sku]));
-  const lineItems = rawLines.map((line: any) => ({
-    lineItemId: String(line.lineItemId), variantId: line.variantId || null, productId: line.productId || null,
-    title: String(line.title || "Product"), quantity: Number(line.quantity || 0), price: Number(line.price || 0),
-    sku: line.sku || skuByVariant.get(String(line.variantId || "")) || null,
+  const productByVariant = new Map(productRows.map((product: any) => [product.shopifyVariantId, product]));
+  const lineItems = rawLines.map((line: any) => {
+    const product: any = productByVariant.get(String(line.variantId || ""));
+    return {
+      lineItemId: String(line.lineItemId), variantId: line.variantId || null, productId: line.productId || null,
+      title: String(line.title || "Product"), variantTitle: line.variantTitle || product?.variantTitle || null,
+      imageUrl: line.imageUrl || product?.imageUrl || null,
+      quantity: Number(line.quantity || 0), price: Number(line.price || 0),
+      sku: line.sku || product?.sku || null,
+    };
+  });
+  const orderHistory = await Promise.all(customerOrders.map(async (historyOrder: any) => {
+    const [returnResult, exchangeResult] = await Promise.all([
+      checkReturnEligibility({ shopifyStoreId, orderId: historyOrder.shopifyOrderId, orderNumber: historyOrder.orderNumber, customerEmail: historyOrder.customerEmail || normalizedEmail, requestType: "RETURN" }),
+      checkReturnEligibility({ shopifyStoreId, orderId: historyOrder.shopifyOrderId, orderNumber: historyOrder.orderNumber, customerEmail: historyOrder.customerEmail || normalizedEmail, requestType: "EXCHANGE" }),
+    ]);
+    return {
+      orderNumber: historyOrder.orderNumber,
+      createdAt: historyOrder.shopifyCreatedAt,
+      totalPrice: Number(historyOrder.totalPrice),
+      currency: historyOrder.currency || "USD",
+      itemCount: Array.isArray(historyOrder.lineItems) ? historyOrder.lineItems.reduce((sum: number, item: any) => sum + Number(item.quantity || 0), 0) : 0,
+      returnEligible: returnResult.eligible,
+      returnMessage: returnResult.message,
+      exchangeEligible: exchangeResult.eligible,
+      exchangeMessage: exchangeResult.message,
+    };
   }));
   const eligible = returnEligibility.eligible || exchangeEligibility.eligible;
   return {
     eligible,
     ineligibilityReason: eligible ? undefined : `Returns: ${returnEligibility.message} Exchanges: ${exchangeEligibility.message}`,
     eligibilityByType: { RETURN: returnEligibility, EXCHANGE: exchangeEligibility },
+    orderHistory,
     order: {
       id: order.id, shopifyOrderId: order.shopifyOrderId, orderNumber: order.orderNumber,
       customerEmail: order.customerEmail || normalizedEmail, customerName: order.customerName || "Customer",
@@ -239,7 +286,7 @@ export async function lookupShopperOrder(shopifyStoreId: string, sessionToken: s
     replacementVariants: productRows.map((product: any) => ({
       variantId: product.shopifyVariantId,
       title: [product.title, product.variantTitle].filter(Boolean).join(" - "),
-      price: Number(product.price), sku: product.sku,
+      price: Number(product.price), sku: product.sku, imageUrl: product.imageUrl || null,
     })),
     requestHistory,
     settings: {
