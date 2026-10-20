@@ -186,7 +186,7 @@ export async function authenticateShopperOrder(
 
 export async function lookupShopperOrder(shopifyStoreId: string, sessionToken: string): Promise<ShopperOrderLookupResult> {
   const session = verifyCustomerSessionToken(sessionToken, shopifyStoreId);
-  if (!session) throw new Error("Unauthorized access. Please authenticate with a valid OTP code.");
+  if (!session) throw new Error("Your customer portal session is invalid or has expired. Find your order again to continue.");
   const normalizedOrderNumber = normalizeCustomerOrderNumber(session.orderNumber);
   const order = await findOrderForCustomerSession(shopifyStoreId, session, normalizedOrderNumber);
   if (!order) throw new Error("We could not reload this order. Return to the portal and try again.");
