@@ -42,7 +42,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       prisma.exchangeRequest.count({ where: { shopifyStoreId } }),
       prisma.customerCache.count({ where: { shopifyStoreId } }),
       prisma.exchangeItem.findMany({
-        where: { exchangeRequest: { shopifyStoreId } },
+        where: { exchangeRequest: { shopifyStoreId, status: "COMPLETED" } },
         select: { priceDifference: true },
       }),
       prisma.returnRequest.findMany({
@@ -67,8 +67,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     // Calculate revenue retained from exchanges
     const revenueRetained = exchangeItems.reduce((acc, item) => {
-      const val = item.priceDifference ? parseFloat(item.priceDifference.toString()) : 0;
-      return acc + (isNaN(val) ? 0 : val);
+      const val = item.priceDifference ? Number(item.priceDifference) : 0;
+      return acc + (Number.isFinite(val) ? Math.max(0, val) : 0);
     }, 0);
 
     // If customerCacheCount is 0, count unique customer emails from Orders

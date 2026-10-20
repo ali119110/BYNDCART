@@ -19,18 +19,30 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     throw new Response("Store not found", { status: 404 });
   }
 
-  const templates = await getStoreNotificationTemplates(store.id);
-  const logs = await getNotificationLogs(store.id, 20);
-
-  return {
-    storeId: store.id,
-    templates,
-    logs: logs.map((l) => ({
-      ...l,
-      createdAt: l.createdAt.toISOString(),
-      sentAt: l.sentAt ? l.sentAt.toISOString() : null,
-    })),
-  };
+  try {
+    const [templates, logs] = await Promise.all([
+      getStoreNotificationTemplates(store.id),
+      getNotificationLogs(store.id, 20),
+    ]);
+    return {
+      storeId: store.id,
+      templates,
+      logs: logs.map((l) => ({
+        ...l,
+        createdAt: l.createdAt.toISOString(),
+        sentAt: l.sentAt ? l.sentAt.toISOString() : null,
+      })),
+      loadError: null as string | null,
+    };
+  } catch (error) {
+    console.error("[Notifications] Panel loader failed:", error);
+    return {
+      storeId: store.id,
+      templates: [],
+      logs: [],
+      loadError: "Notification settings could not be loaded. Check that the latest database migrations have run. Details: " + (error instanceof Error ? error.message : String(error)),
+    };
+  }
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -59,8 +71,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (actionType === "retryLog") {
     const logId = formData.get("logId") as string;
-    const log = await prisma.notificationLog.findUnique({
-      where: { id: logId },
+    const log = await prisma.notificationLog.findFirst({
+      where: { id: logId, shopifyStoreId: store.id },
     });
 
     if (!log) {
@@ -86,7 +98,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Notifications() {
-  const { templates, logs } = useLoaderData<typeof loader>();
+  const { templates, logs, loadError } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
 
   const isSubmitting = fetcher.state !== "idle";
@@ -120,6 +132,7 @@ export default function Notifications() {
           <p>Edit the emails sent to shoppers during a return or exchange, and review what was sent.</p>
         </div>
       </header>
+        {loadError && <div role="alert" className="bc-note bad">{loadError}</div>}
         {actionData?.error && <div className="bc-note bad">{actionData.error}</div>}
         {actionData?.message && <div className="bc-note ok">{actionData.message}</div>}
 
