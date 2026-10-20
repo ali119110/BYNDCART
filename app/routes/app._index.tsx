@@ -35,6 +35,29 @@ export async function loader({ request }: LoaderFunctionArgs) {
       }
     }
 
+    let historicalOrdersAccess = { checked: false, hasReadAllOrders: false };
+    if (admin) {
+      try {
+        const scopeResponse = await admin.graphql(`
+          query DashboardAccessScopes {
+            currentAppInstallation { accessScopes { handle } }
+          }
+        `);
+        const scopePayload = await scopeResponse.json();
+        if (scopePayload?.errors?.length) {
+          throw new Error(scopePayload.errors.map((entry: any) => entry.message).join("; "));
+        }
+        const scopes = scopePayload?.data?.currentAppInstallation?.accessScopes;
+        if (Array.isArray(scopes)) {
+          historicalOrdersAccess = {
+            checked: true,
+            hasReadAllOrders: scopes.some((scope: any) => scope.handle === "read_all_orders"),
+          };
+        }
+      } catch (scopeError) {
+        console.warn("[Dashboard Loader] Could not determine historical-order access:", scopeError);
+      }
+    }
     // Query real counts from Database
     const [ordersCount, returnsCount, exchangesCount, customerCacheCount, exchangeItems, recentReturnsDb, recentExchangesDb, pendingReturns, pendingExchanges, inTransit, awaitingInspection, pendingRefunds, unreconciledCod, failedShipments] = await Promise.all([
       prisma.order.count({ where: { shopifyStoreId } }),
@@ -42,7 +65,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       prisma.exchangeRequest.count({ where: { shopifyStoreId } }),
       prisma.customerCache.count({ where: { shopifyStoreId } }),
       prisma.exchangeItem.findMany({
-        where: { exchangeRequest: { shopifyStoreId } },
+        where: { exchangeRequest: { shopifyStoreId, status: "COMPLETED" } },
         select: { priceDifference: true },
       }),
       prisma.returnRequest.findMany({
@@ -67,8 +90,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     // Calculate revenue retained from exchanges
     const revenueRetained = exchangeItems.reduce((acc, item) => {
-      const val = item.priceDifference ? parseFloat(item.priceDifference.toString()) : 0;
-      return acc + (isNaN(val) ? 0 : val);
+      const val = item.priceDifference ? Number(item.priceDifference) : 0;
+      return acc + (Number.isFinite(val) ? Math.max(0, val) : 0);
     }, 0);
 
     // If customerCacheCount is 0, count unique customer emails from Orders
@@ -84,6 +107,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     return {
       shop: store?.shop ?? "Connected Store",
+      historicalOrdersAccess,
       metrics: {
         ordersCount,
         returnsCount,
@@ -120,6 +144,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     console.error("[Dashboard Loader] Error:", error);
     return {
       shop: "Connected Store",
+      historicalOrdersAccess: { checked: false, hasReadAllOrders: false },
       metrics: {
         ordersCount: 0,
         returnsCount: 0,
@@ -161,6 +186,7 @@ export default function Dashboard() {
   const loaderData = useLoaderData<typeof loader>();
 
   const shop = loaderData?.shop ?? "Connected Store";
+  const historicalOrdersAccess = loaderData?.historicalOrdersAccess ?? { checked: false, hasReadAllOrders: false };
   const metrics = loaderData?.metrics ?? {
     ordersCount: 0,
     returnsCount: 0,
@@ -205,6 +231,13 @@ export default function Dashboard() {
         </div>
       </header>
 
+      {historicalOrdersAccess.checked && !historicalOrdersAccess.hasReadAllOrders && (
+        <section role="status" aria-label="Historical order access notice" style={{ margin: "18px 0", padding: "16px 18px", borderRadius: "12px", border: "1px solid #f6d28b", background: "#fffbeb", color: "#78350f" }}>
+          <strong>Historical order access is not enabled</strong>
+          <p style={{ margin: "6px 0 0", lineHeight: 1.5 }}>Shopify currently grants BYNDCART order access without the read_all_orders permission. Older orders may be missing from dashboard totals and manual return/exchange search. Request read_all_orders access in the Shopify Partner Dashboard; after Shopify approves it, enable the scope for this app and run a full store sync.</p>
+        </section>
+      )}
+
       <section className="bc-dashboard-section" aria-labelledby="bc-overview-title">
         <div className="bc-dashboard-section-heading">
           <div>
@@ -217,7 +250,7 @@ export default function Dashboard() {
         <div className="bc-kpi-grid">
           <article className="bc-kpi-card bc-kpi-orders">
             <div className="bc-kpi-card-top">
-              <span className="bc-kpi-label">Total store orders</span>
+              <span className="bc-kpi-label">{historicalOrdersAccess.checked && !historicalOrdersAccess.hasReadAllOrders ? "Orders synced / available" : "Total store orders"}</span>
               <span className="bc-kpi-marker" aria-hidden="true">#</span>
             </div>
             <p className="bc-kpi-value">{metrics.ordersCount.toLocaleString("en-PK")}</p>

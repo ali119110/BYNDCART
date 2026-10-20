@@ -320,7 +320,21 @@ export interface CustomerSessionPayload {
   shopifyStoreId: string;
   orderNumber: string;
   customerEmail: string;
+  customerPhone?: string;
   exp: number;
+}
+
+export function normalizeCustomerOrderNumber(value: string): string {
+  const trimmed = String(value || "").trim();
+  if (!trimmed || trimmed.startsWith("#")) return trimmed;
+  return /^\d+$/.test(trimmed) ? "#" + trimmed : trimmed;
+}
+
+function normalizeSessionPhone(value: string | null | undefined): string | undefined {
+  let digits = String(value || "").replace(/\D/g, "");
+  if (digits.startsWith("0092")) digits = digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("0")) digits = "92" + digits.slice(1);
+  return digits || undefined;
 }
 
 /**
@@ -329,15 +343,17 @@ export interface CustomerSessionPayload {
 export function createCustomerSessionToken(params: {
   shopifyStoreId: string;
   orderNumber: string;
-  customerEmail: string;
+  customerEmail?: string | null;
+  customerPhone?: string | null;
   durationMinutes?: number;
 }): string {
   const duration = params.durationMinutes || 15;
   const exp = Math.floor(Date.now() / 1000) + duration * 60;
   const payload: CustomerSessionPayload = {
     shopifyStoreId: params.shopifyStoreId,
-    orderNumber: params.orderNumber,
-    customerEmail: params.customerEmail,
+    orderNumber: normalizeCustomerOrderNumber(params.orderNumber),
+    customerEmail: String(params.customerEmail || "").trim().toLowerCase(),
+    customerPhone: normalizeSessionPhone(params.customerPhone),
     exp,
   };
 
@@ -387,9 +403,7 @@ export function verifyCustomerSessionToken(
     }
 
     if (expectedOrderNumber) {
-      const normExpected = expectedOrderNumber.trim().startsWith("#")
-        ? expectedOrderNumber.trim()
-        : `#${expectedOrderNumber.trim()}`;
+      const normExpected = normalizeCustomerOrderNumber(expectedOrderNumber);
       if (payload.orderNumber.toLowerCase() !== normExpected.toLowerCase()) {
         return null; // Order tampering attempt
       }

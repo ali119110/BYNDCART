@@ -38,14 +38,23 @@ export async function sendEmail(input: SendEmailInput) {
       }),
     });
 
-    if (!response.ok) {
-      const body = await response.text();
-      console.error(`[Notifications] Resend API error ${response.status}: ${body}`);
-      return { success: false, error: `Resend API error ${response.status}` };
+    const responseBody = await response.text();
+    let data: any = null;
+    if (responseBody) {
+      try {
+        data = JSON.parse(responseBody);
+      } catch {
+        // A successful provider response can have an empty or non-JSON body.
+      }
     }
 
-    const data = await response.json();
-    return { success: true, messageId: data.id as string };
+    if (!response.ok) {
+      console.error(`[Notifications] Resend API error ${response.status}: ${responseBody.slice(0, 1000)}`);
+      return { success: false, error: `Resend API error ${response.status}${responseBody ? `: ${responseBody.slice(0, 300)}` : ""}` };
+    }
+
+    const messageId = typeof data?.id === "string" ? data.id : response.headers.get("x-message-id") || undefined;
+    return { success: true, messageId };
   } catch (error) {
     console.error("[Notifications] Failed to send email:", error);
     return { success: false, error: String(error) };
