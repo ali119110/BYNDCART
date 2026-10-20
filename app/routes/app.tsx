@@ -114,6 +114,12 @@ const styles = (
       border-radius: 14px;
       background: var(--bc-shell-surface);
       box-shadow: 0 2px 8px rgba(31, 33, 36, 0.035);
+      --s-link-color-f4125: #202223;
+      --s-link-color-hover-f4125: #202223;
+      --s-link-color-active-f4125: #202223;
+      --p-color-text-link-f4125: #202223;
+      --p-color-text-link-hover-f4125: #202223;
+      --p-color-text-link-active-f4125: #202223;
       scrollbar-width: thin;
       scrollbar-color: #c9cccf transparent;
     }
@@ -136,7 +142,7 @@ const styles = (
       padding: 0 12px;
       border: 1px solid transparent;
       border-radius: 9px;
-      color: #50575c;
+      color: #202223 !important;
       font-size: 13px;
       font-weight: 600;
       line-height: 1.2;
@@ -146,16 +152,22 @@ const styles = (
       transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
     }
 
-    s-link:hover {
+    s-link:hover,
+    s-link:focus-visible {
       background: #f6f7f8;
-      color: var(--bc-shell-ink);
+      color: #202223 !important;
     }
 
     s-link[aria-current="page"] {
       border-color: #d5d8dc;
       background: #f4f5f6;
-      color: var(--bc-shell-ink);
+      color: #202223 !important;
       font-weight: 700;
+    }
+
+    s-link::part(link) {
+      color: #202223 !important;
+      text-decoration: none;
     }
 
     s-heading,
