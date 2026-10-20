@@ -369,19 +369,35 @@ export async function transitionExchangeStatus({
       ? settings?.exchangeReplacementTiming === "AFTER_APPROVAL"
       : targetStatus === "INSPECTED" && (settings?.exchangeReplacementTiming === "AFTER_INSPECTION" || hasIncompleteReplacementDraft);
 
+    let replacementError: string | null = null;
     if (shouldCreateReplacement && !hasActualReplacementOrder) {
       try {
         const replacement = await executeShopifyDraftOrderCreate({ shopifyStoreId, entityId: id, admin });
-        if (replacement?.success && !replacement?.skipped) {
-          result.updated.newOrderId = replacement.replacementOrderId || replacement.draftOrderId || null;
+        const createdOrderId = String(replacement?.replacementOrderId || "");
+        if (replacement?.success && !replacement?.skipped && createdOrderId.startsWith("gid://shopify/Order/")) {
+          result.updated.newOrderId = createdOrderId;
           result.updated.newOrderNumber = replacement.replacementOrderNumber || replacement.draftOrderName || null;
+        } else {
+          replacementError = replacement?.reason || "Shopify did not return a replacement order.";
         }
       } catch (err: any) {
-        console.error(`[StateMachine] Exchange ${id} replacement order creation failed:`, err?.message || err);
-        if (err?.message?.includes("userErrors")) throw err;
-        await enqueueJob({ shopifyStoreId, type: "SHOPIFY_DRAFT_ORDER_CREATE", payload: { exchangeRequestId: id } });
+        replacementError = err?.message || "Replacement order creation failed.";
+        console.error(`[StateMachine] Exchange ${id} replacement order creation failed:`, replacementError);
+        await enqueueJob({ shopifyStoreId, type: "SHOPIFY_DRAFT_ORDER_CREATE", payload: { exchangeRequestId: id } }).catch(() => undefined);
+      }
+      if (replacementError) {
+        await prisma.auditLog.create({
+          data: {
+            shopifyStoreId,
+            action: "SHOPIFY_REPLACEMENT_ORDER_FAILED",
+            entityType: "ExchangeRequest",
+            entityId: id,
+            metadata: { error: replacementError.slice(0, 500), timing: settings?.exchangeReplacementTiming || null },
+          },
+        });
       }
     }
+    (result.updated as any).replacementError = replacementError;
 
     // Once inspection is complete, an already-created (AFTER_APPROVAL) or new
     // (AFTER_INSPECTION) replacement enters FULFILLED processing.

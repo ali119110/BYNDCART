@@ -17,10 +17,19 @@ export default function Customers() {
   const { customers, search } = useLoaderData<typeof loader>();
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerMetrics | null>(null);
   const [riskFilter, setRiskFilter] = useState("ALL");
+  const [page, setPage] = useState(1);
+  const pageSize = 10;
   const visibleCustomers = customers.filter((customer) => {
     if (riskFilter === "HIGH") return customer.riskFlag?.flagged;
     if (riskFilter === "LOW") return !customer.riskFlag?.flagged;
     return true;
+  });
+  const pageCount = Math.max(1, Math.ceil(visibleCustomers.length / pageSize));
+  const currentPage = Math.min(page, pageCount);
+  const pagedCustomers = visibleCustomers.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const pageNumbers = Array.from({ length: pageCount }, (_, index) => index + 1).filter((number) => {
+    if (pageCount <= 4) return true;
+    return Math.abs(number - currentPage) <= 1 || number === 1 || number === pageCount;
   });
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -43,27 +52,28 @@ export default function Customers() {
           <p>See order history, refund totals, and which shoppers are flagged for review.</p>
         </div>
       </header>
-      <section className="bc-card bc-toolbar">
+      <section className="bc-card bc-customers-toolbar">
         <label className="bc-field-label">
           Risk
-          <select value={riskFilter} onChange={(event) => setRiskFilter(event.target.value)}>
+          <select value={riskFilter} onChange={(event) => { setRiskFilter(event.target.value); setPage(1); }}>
             <option value="ALL">All customers</option>
             <option value="HIGH">High risk</option>
             <option value="LOW">Low risk</option>
           </select>
         </label>
-        <div className="bc-grow">
+        <label className="bc-field-label bc-customers-search">
+          Search
           <input
             type="text"
             placeholder="Search by customer name or email"
             defaultValue={search}
-            onChange={(e) => handleSearchChange(e.target.value)}
+            onChange={(e) => { setPage(1); handleSearchChange(e.target.value); }}
           />
-        </div>
+        </label>
       </section>
 
       <section className="bc-table-wrap">
-        {visibleCustomers.length === 0 ? (
+        {pagedCustomers.length === 0 ? (
           <div className="bc-empty-state">
             <strong>No customers yet</strong>
             <p>Profiles appear after orders and return requests are recorded.</p>
@@ -83,7 +93,7 @@ export default function Customers() {
               </tr>
             </thead>
             <tbody>
-              {visibleCustomers.map((c: CustomerMetrics) => (
+              {pagedCustomers.map((c: CustomerMetrics) => (
                 <tr
                   key={c.id}
                   onClick={() => setSelectedCustomer(c)}
@@ -119,6 +129,16 @@ export default function Customers() {
             </tbody>
           </table>
         )}
+        {visibleCustomers.length > 0 ? (
+          <nav className="bc-pager" aria-label="Customer pages">
+            <button type="button" className="bc-btn" disabled={currentPage === 1} onClick={() => setPage(1)}>First</button>
+            {pageNumbers.map((number) => (
+              <button type="button" key={number} className="bc-btn" aria-current={number === currentPage ? "page" : undefined} onClick={() => setPage(number)}>{number}</button>
+            ))}
+            <button type="button" className="bc-btn" disabled={currentPage === pageCount} onClick={() => setPage(pageCount)}>Last</button>
+            <span className="bc-muted">{visibleCustomers.length} customers</span>
+          </nav>
+        ) : null}
       </section>
 
       {/* Customer Detail Drawer */}

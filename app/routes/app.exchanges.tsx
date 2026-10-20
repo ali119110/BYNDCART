@@ -3,6 +3,7 @@ import { useLoaderData, useFetcher } from "react-router";
 import type { Route } from "./+types/app.exchanges";
 import { requireTenantContext } from "../utils/tenant.server";
 import { getExchangeRequests, updateExchangeStatus, approveExchangeWithDraftOrder, createExchangeRequest } from "../services/exchanges.server";
+import { executeShopifyDraftOrderCreate } from "../services/shopifySync.server";
 import { getCustomerRiskFlagsForEmails } from "../services/fraud.server";
 import { assertRateLimit } from "../utils/rateLimit.server";
 import { searchOrSyncOrders } from "../services/orders.server";
@@ -103,6 +104,28 @@ export async function action({ request }: Route.ActionArgs) {
     }
   }
 
+  if (String(formData.get("actionType") || "") === "CREATE_REPLACEMENT_ORDER") {
+    const exchangeId = String(formData.get("exchangeId") || "");
+    const exchange = await prisma.exchangeRequest.findFirst({ where: { id: exchangeId, shopifyStoreId } });
+    if (!exchange) return { error: "Exchange request not found for this store." };
+    if (exchange.status === "PENDING" || exchange.status === "REJECTED" || exchange.status === "CANCELLED") {
+      return { error: "Approve the exchange before creating the replacement order." };
+    }
+    if (String(exchange.newOrderId || "").startsWith("gid://shopify/Order/")) {
+      return { error: "A replacement Shopify order is already linked to this exchange." };
+    }
+    try {
+      const replacement = await executeShopifyDraftOrderCreate({ shopifyStoreId, entityId: exchange.id, admin });
+      const createdOrderId = String(replacement?.replacementOrderId || "");
+      if (!replacement?.success || replacement.skipped || !createdOrderId.startsWith("gid://shopify/Order/")) {
+        return { error: replacement?.reason || "Shopify did not create the replacement order." };
+      }
+      return { success: true, message: `Replacement order ${replacement.replacementOrderNumber || createdOrderId} was created in Shopify.` };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : "Shopify did not create the replacement order." };
+    }
+  }
+
   // Handle Status Updates
   const exchangeId = formData.get("exchangeId") as string;
   const newStatus = formData.get("status") as string;
@@ -132,6 +155,13 @@ export async function action({ request }: Route.ActionArgs) {
             adminNote || undefined
           );
 
+    const replacementError = (updated as { replacementError?: string | null }).replacementError;
+    if (newStatus === "APPROVED" && replacementError) {
+      return { success: true, exchange: updated, warning: `The exchange was approved, but Shopify did not create the replacement order: ${replacementError}` };
+    }
+    if (newStatus === "APPROVED" && updated.newOrderNumber) {
+      return { success: true, exchange: updated, message: `Exchange approved. Replacement order ${updated.newOrderNumber} was created.` };
+    }
     return { success: true, exchange: updated };
   } catch (error) {
     console.error("Failed to update exchange:", error);
@@ -349,6 +379,9 @@ export default function Exchanges() {
           </button>
         </div>
       </header>
+      {fetcher.data?.warning ? <p role="alert" className="bc-note bad">{fetcher.data.warning}</p> : null}
+      {fetcher.data?.error && fetcher.formData?.get("actionType") !== "CREATE_MANUAL_EXCHANGE" ? <p role="alert" className="bc-note bad">{fetcher.data.error}</p> : null}
+      {fetcher.data?.success && fetcher.data?.message && !selectedExchange ? <p role="status" className="bc-note ok">{fetcher.data.message}</p> : null}
 
       <section className="bc-card bc-toolbar">
           <div className="bc-grow">
@@ -827,6 +860,15 @@ export default function Exchanges() {
               <div style={{ background: "#f8fafc", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0", fontSize: "13.5px" }}>
                 <div><strong>Replacement order:</strong> {selectedExchange.newOrderNumber || "Not created yet"}</div>
                 <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>{selectedExchange.newOrderId ? "Linked to Shopify Admin" : selectedExchange.pendingReplacementDraft ? "Draft exists; finalization is pending" : "Creation follows merchant approval / inspection settings"}</div>
+                {!selectedExchange.newOrderId && !["PENDING", "REJECTED", "CANCELLED"].includes(selectedExchange.status) ? (
+                  <fetcher.Form method="post" style={{ marginTop: 10 }}>
+                    <input type="hidden" name="actionType" value="CREATE_REPLACEMENT_ORDER" />
+                    <input type="hidden" name="exchangeId" value={selectedExchange.id} />
+                    <button type="submit" className="bc-btn primary" disabled={fetcher.state !== "idle"}>
+                      {fetcher.state !== "idle" && fetcher.formData?.get("actionType") === "CREATE_REPLACEMENT_ORDER" ? "Creating order…" : "Create order"}
+                    </button>
+                  </fetcher.Form>
+                ) : null}
               </div>
             </div>
             <div>

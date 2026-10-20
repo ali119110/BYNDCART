@@ -1601,8 +1601,47 @@ a.bc-btn svg {
   min-width: 0;
 }
 
+.bc-customers-toolbar {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  align-items: end;
+  gap: 12px;
+}
+
+.bc-customers-toolbar .bc-field-label {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.bc-customers-search {
+  min-width: 0;
+}
+
+.bc-pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 14px;
+}
+
+.bc-pager .bc-btn[aria-current="page"] {
+  background: #202223;
+  color: #fff;
+  border-color: #202223;
+}
+
+@media (max-width: 720px) {
+  .bc-customers-toolbar {
+    grid-template-columns: 1fr;
+  }
+}
+
 .bc-toolbar input,
 .bc-toolbar select,
+.bc-customers-toolbar input,
+.bc-customers-toolbar select,
 .bc-inline-form input,
 .bc-inline-form select {
   width: 100%;

@@ -9,6 +9,7 @@ import { rateLimit } from "../utils/rateLimit.server";
 import { checkReturnEligibility, EligibilityResult } from "./policyEngine.server";
 import { assertCanCreateReturn } from "./planGate.server";
 import { notifyStatusChange, triggerLifecycleNotification } from "./notifications.server";
+import { syncShipmentTrackingStatus } from "./shipments.server";
 
 export interface ShopperOrderLookupResult {
   eligible: boolean;
@@ -46,6 +47,7 @@ export interface ShopperOrderLookupResult {
     courier?: string;
   }>;
   orderHistory: Array<{
+    shopifyOrderId: string;
     orderNumber: string;
     createdAt: Date;
     totalPrice: number;
@@ -56,11 +58,23 @@ export interface ShopperOrderLookupResult {
     exchangeEligible: boolean;
     exchangeMessage: string;
   }>;
+  accountRequests: Array<{
+    id: string;
+    type: "RETURN" | "EXCHANGE";
+    orderNumber: string;
+    status: string;
+    createdAt: Date;
+    trackingNumber?: string;
+    courier?: string;
+    trackingStatus?: string;
+    newOrderNumber?: string | null;
+  }>;
   settings: {
     returnWindowDays: number;
     restockingFeePercent: number;
     exchangeWindowDays: number;
     exchangeShippingCost: number;
+    exchangeReplacementTiming: "AFTER_APPROVAL" | "AFTER_INSPECTION";
   };
 }
 
@@ -204,11 +218,11 @@ export async function authenticateShopperOrder(
   return { success: true as const, sessionToken, orderNumber: order.orderNumber };
 }
 
-export async function lookupShopperOrder(shopifyStoreId: string, sessionToken: string): Promise<ShopperOrderLookupResult> {
+export async function lookupShopperOrder(shopifyStoreId: string, sessionToken: string, focusOrderNumber?: string): Promise<ShopperOrderLookupResult> {
   const session = verifyCustomerSessionToken(sessionToken, shopifyStoreId);
   if (!session) throw new Error("Your customer portal session is invalid or has expired. Find your order again to continue.");
-  const order = await findOrderForCustomerSession(shopifyStoreId, session, session.orderNumber);
-  if (!order) throw new Error("We could not reload this order. Return to the portal and try again.");
+  const order = await findOrderForCustomerSession(shopifyStoreId, session, focusOrderNumber || session.orderNumber);
+  if (!order) throw new Error(focusOrderNumber ? "That order is not linked to this login." : "We could not reload this order. Return to the portal and try again.");
   const normalizedEmail = String(order.customerEmail || session.customerEmail || "").trim().toLowerCase();
 
   const historyContactFilters: any[] = [];
@@ -261,6 +275,7 @@ export async function lookupShopperOrder(shopifyStoreId: string, sessionToken: s
       checkReturnEligibility({ shopifyStoreId, orderId: historyOrder.shopifyOrderId, orderNumber: historyOrder.orderNumber, customerEmail: historyOrder.customerEmail || normalizedEmail, requestType: "EXCHANGE" }),
     ]);
     return {
+      shopifyOrderId: historyOrder.shopifyOrderId,
       orderNumber: historyOrder.orderNumber,
       createdAt: historyOrder.shopifyCreatedAt,
       totalPrice: Number(historyOrder.totalPrice),
@@ -272,6 +287,24 @@ export async function lookupShopperOrder(shopifyStoreId: string, sessionToken: s
       exchangeMessage: exchangeResult.message,
     };
   }));
+  const accountFilter: any[] = [];
+  if (normalizedEmail) accountFilter.push({ customerEmail: { equals: normalizedEmail, mode: "insensitive" } });
+  const historyOrderIds = customerOrders.map((row: any) => row.shopifyOrderId).filter(Boolean);
+  if (historyOrderIds.length) accountFilter.push({ shopifyOrderId: { in: historyOrderIds } });
+  const [accountReturns, accountExchanges] = accountFilter.length ? await Promise.all([
+    prisma.returnRequest.findMany({ where: { shopifyStoreId, OR: accountFilter }, orderBy: { createdAt: "desc" }, take: 30 }),
+    prisma.exchangeRequest.findMany({ where: { shopifyStoreId, OR: accountFilter }, orderBy: { createdAt: "desc" }, take: 30 }),
+  ]) : [[], []];
+  const accountRows = [
+    ...accountReturns.map((row: any) => ({ id: row.id, type: "RETURN" as const, orderNumber: row.orderNumber, status: row.status, createdAt: row.createdAt, newOrderNumber: null })),
+    ...accountExchanges.map((row: any) => ({ id: row.id, type: "EXCHANGE" as const, orderNumber: row.orderNumber, status: row.status, createdAt: row.createdAt, newOrderNumber: String(row.newOrderId || "").startsWith("gid://shopify/Order/") ? row.newOrderNumber : null })),
+  ];
+  const accountTrackFilters = accountRows.map((row) => row.type === "RETURN" ? { returnRequestId: row.id } : { exchangeRequestId: row.id });
+  const accountShipments = accountTrackFilters.length ? await prisma.shipmentTrack.findMany({ where: { shopifyStoreId, OR: accountTrackFilters }, orderBy: { createdAt: "desc" } }) : [];
+  const accountRequests = accountRows.map((row) => {
+    const shipment = accountShipments.find((item: any) => row.type === "RETURN" ? item.returnRequestId === row.id : item.exchangeRequestId === row.id);
+    return { ...row, trackingNumber: shipment?.trackingNumber || undefined, courier: shipment?.courier || undefined, trackingStatus: shipment?.status || undefined };
+  }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   const eligible = returnEligibility.eligible || exchangeEligibility.eligible;
   return {
     eligible,
@@ -289,11 +322,13 @@ export async function lookupShopperOrder(shopifyStoreId: string, sessionToken: s
       price: Number(product.price), sku: product.sku, imageUrl: product.imageUrl || null,
     })),
     requestHistory,
+    accountRequests,
     settings: {
       returnWindowDays: returnEligibility.policy.returnWindowDays || settings.returnWindowDays,
       restockingFeePercent: Number(settings.restockingFeePercent),
       exchangeWindowDays: exchangeEligibility.policy.exchangeWindowDays || settings.exchangeWindowDays,
       exchangeShippingCost: Number(settings.exchangeShippingCost),
+      exchangeReplacementTiming: settings.exchangeReplacementTiming === "AFTER_APPROVAL" ? "AFTER_APPROVAL" : "AFTER_INSPECTION",
     },
   };
 }
@@ -384,6 +419,7 @@ export async function submitCustomerTracking(input: {
   requestType: "RETURN" | "EXCHANGE";
   carrier: string;
   trackingNumber: string;
+  proof: { fileName: string; mimeType: string; contentBase64: string };
 }) {
   const session = verifyCustomerSessionToken(input.sessionToken, input.shopifyStoreId);
   if (!session) throw new Error("Your verification session expired. Verify the order again to submit tracking.");
@@ -391,15 +427,22 @@ export async function submitCustomerTracking(input: {
   const trackingNumber = String(input.trackingNumber || "").trim().slice(0, 120);
   if (carrier.length < 2) throw new Error("Enter the carrier or courier name.");
   if (!/^[A-Za-z0-9][A-Za-z0-9 ./_-]{2,119}$/.test(trackingNumber)) throw new Error("Enter a valid carrier tracking number or airway bill.");
+  const proof = input.proof;
+  if (!proof || !["image/jpeg", "image/png", "image/webp"].includes(proof.mimeType) || !proof.contentBase64) {
+    throw new Error("Upload a JPEG, PNG, or WebP photo of the shipping receipt or parcel.");
+  }
+  if (proof.contentBase64.length > 1_400_000) throw new Error("The proof image must be smaller than 900 KB.");
 
-  const order = await findOrderForCustomerSession(input.shopifyStoreId, session);
-  if (!order) throw new Error("Verified order was not found.");
-  const sessionEmail = String(order.customerEmail || session.customerEmail || "").trim().toLowerCase();
-
+  const sessionEmail = String(session.customerEmail || "").trim().toLowerCase();
   const request = input.requestType === "RETURN"
-    ? await prisma.returnRequest.findFirst({ where: { id: input.requestId, shopifyStoreId: input.shopifyStoreId, shopifyOrderId: order.shopifyOrderId, status: "APPROVED", customerEmail: { equals: sessionEmail, mode: "insensitive" } } })
-    : await prisma.exchangeRequest.findFirst({ where: { id: input.requestId, shopifyStoreId: input.shopifyStoreId, shopifyOrderId: order.shopifyOrderId, status: "APPROVED", customerEmail: { equals: sessionEmail, mode: "insensitive" } } });
-  if (!request) throw new Error("Tracking can only be submitted for an approved request belonging to this verified order.");
+    ? await prisma.returnRequest.findFirst({ where: { id: input.requestId, shopifyStoreId: input.shopifyStoreId, status: "APPROVED" } })
+    : await prisma.exchangeRequest.findFirst({ where: { id: input.requestId, shopifyStoreId: input.shopifyStoreId, status: "APPROVED" } });
+  if (!request) throw new Error("Tracking can only be submitted for an approved request on this account.");
+  const order = await findOrderForCustomerSession(input.shopifyStoreId, session, request.orderNumber);
+  if (!order || order.shopifyOrderId !== request.shopifyOrderId) throw new Error("Tracking can only be submitted for an approved request belonging to this account.");
+  if (sessionEmail && String(request.customerEmail || "").trim().toLowerCase() !== sessionEmail) {
+    throw new Error("Tracking can only be submitted for an approved request belonging to this account.");
+  }
 
   const priorShipment = await prisma.shipmentTrack.findFirst({ where: input.requestType === "RETURN"
     ? { shopifyStoreId: input.shopifyStoreId, returnRequestId: input.requestId }
@@ -432,9 +475,42 @@ export async function submitCustomerTracking(input: {
     return created;
   });
 
+  await prisma.shipmentDocument.create({
+    data: {
+      shopifyStoreId: input.shopifyStoreId,
+      shipmentTrackId: shipment.id,
+      documentType: "PROOF",
+      fileName: String(proof.fileName || "shipping-proof.jpg").replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120),
+      mimeType: proof.mimeType,
+      contentBase64: proof.contentBase64,
+    },
+  });
+
+  const provider = registeredCourierName(carrier);
+  let liveStatus: string | null = null;
+  if (provider) {
+    await prisma.shipmentTrack.update({ where: { id: shipment.id }, data: { courier: provider } });
+    try {
+      const tracked = await syncShipmentTrackingStatus(trackingNumber, input.shopifyStoreId);
+      liveStatus = tracked?.status || null;
+    } catch (error) {
+      console.warn("[CustomerPortal] Live tracking lookup failed:", error instanceof Error ? error.message : error);
+    }
+  }
+
   await Promise.all([
     triggerLifecycleNotification({ shopifyStoreId: input.shopifyStoreId, eventType: "TRACKING_UPDATE", entityId: shipment.id, recipientEmail: order.customerEmail || session.customerEmail, variables: { customer_name: order.customerName || "Customer", order_number: order.orderNumber, tracking_number: trackingNumber, status: "Tracking details received by the store" } }),
     notifyStatusChange({ shopifyStoreId: input.shopifyStoreId, entity: `${input.requestType} TRACKING`, orderNumber: order.orderNumber, previousStatus: "APPROVED", newStatus: "TRACKING_PROVIDED", adminNote: `${carrier}: ${trackingNumber}` }),
   ]);
-  return { success: true, idempotent: false, shipmentId: shipment.id, trackingNumber, carrier, requestId: input.requestId };
+  return { success: true, idempotent: false, shipmentId: shipment.id, trackingNumber, carrier: provider || carrier, requestId: input.requestId, liveStatus };
+}
+
+function registeredCourierName(value: string): string | null {
+  const text = value.toLowerCase().replace(/[^a-z]/g, "");
+  if (text.includes("postex")) return "POSTEX";
+  if (text.includes("leopard")) return "LEOPARDS";
+  if (text.includes("fedex")) return "FEDEX";
+  if (text === "dhl" || text.includes("dhlexpress")) return "DHL";
+  if (text === "tcs" || text.startsWith("tcs")) return "TCS";
+  return null;
 }
