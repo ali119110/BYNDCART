@@ -259,45 +259,65 @@ export async function checkReturnEligibility(input: CheckEligibilityInput): Prom
     );
   }
 
-  // Rule 4: Previous Return / Exchange Restrictions
-  if (preventPreviousReturns) {
-    let existingReturn: any = null;
-    let existingExchange: any = null;
+  // Rule 4: Item-level duplicate prevention. An order may contain multiple
+  // products, so an earlier request must not block unrelated line items.
+  // Only requested quantities which overlap already-active requests are blocked.
+  const requestedItems = input.requestedItems || [];
+  const lineItems = Array.isArray(order.lineItems) ? order.lineItems as any[] : [];
+  const lineItemById = new Map<string, any>(lineItems.map((line: any) => [String(line.lineItemId), line]));
+  const requestedVariantIds = lineItems.map((line: any) => String(line.variantId || "")).filter(Boolean);
+  let productCacheByVariant = new Map<string, any>();
+  try {
+    const cachedProducts = await prisma.productCache.findMany({
+      where: { shopifyStoreId: input.shopifyStoreId, shopifyVariantId: { in: requestedVariantIds } },
+      select: { shopifyVariantId: true, sku: true, shopifyProductId: true, title: true, variantTitle: true },
+    });
+    productCacheByVariant = new Map(cachedProducts.map((product: any) => [product.shopifyVariantId, product]));
+  } catch {
+    // Tests or development databases may not include a populated ProductCache.
+  }
 
-
-    try {
-      existingReturn = await prisma.returnRequest.findFirst({
-        where: {
-          shopifyStoreId: input.shopifyStoreId,
-          orderNumber: normalizedOrderNumber,
-          status: { not: "CANCELLED" },
-        },
-      });
-
-      existingExchange = await prisma.exchangeRequest.findFirst({
-        where: {
-          shopifyStoreId: input.shopifyStoreId,
-          orderNumber: normalizedOrderNumber,
-          status: { not: "CANCELLED" },
-        },
-      });
-    } catch {
-      // Mock fallback
+  const availableQuantityByLineItem = new Map<string, number>();
+  for (const item of requestedItems) {
+    const sourceLine = lineItemById.get(item.shopifyLineItemId);
+    if (!sourceLine) {
+      availableQuantityByLineItem.set(item.shopifyLineItemId, 0);
+      continue;
     }
-
-    if (existingReturn || existingExchange) {
-      return createResult(
-        false,
-        "PREVIOUS_RETURN_EXISTS",
-        `Order ${normalizedOrderNumber} already has an active return or exchange request on record.`,
-        serializedPolicy,
-        []
-      );
+    let alreadyRequested = 0;
+    if (preventPreviousReturns) {
+      try {
+        const [priorReturns, priorExchanges] = await Promise.all([
+          prisma.returnRequest.findMany({
+            where: {
+              shopifyStoreId: input.shopifyStoreId,
+              shopifyOrderId: order.shopifyOrderId,
+              status: { notIn: ["CANCELLED", "REJECTED"] },
+            },
+            include: { items: { where: { shopifyLineItemId: item.shopifyLineItemId } } },
+          }),
+          prisma.exchangeRequest.findMany({
+            where: {
+              shopifyStoreId: input.shopifyStoreId,
+              shopifyOrderId: order.shopifyOrderId,
+              status: { notIn: ["CANCELLED", "REJECTED"] },
+            },
+            include: { items: { where: { originalLineItemId: item.shopifyLineItemId } } },
+          }),
+        ]);
+        alreadyRequested = priorReturns.reduce((sum: number, request: any) =>
+          sum + request.items.reduce((inner: number, row: any) => inner + Number(row.quantity || 0), 0), 0)
+          + priorExchanges.reduce((sum: number, request: any) =>
+            sum + request.items.reduce((inner: number, row: any) => inner + Number(row.originalQuantity || 0), 0), 0);
+      } catch {
+        // Mock fallback.
+      }
     }
+    const originalQuantity = Math.max(0, Number(sourceLine.quantity || 0));
+    availableQuantityByLineItem.set(item.shopifyLineItemId, Math.max(0, originalQuantity - alreadyRequested));
   }
 
   // Evaluate Item-Level Policies if items provided
-  const requestedItems = input.requestedItems || [];
   const itemResults: ItemEligibilityResult[] = [];
 
   let totalQuantityRequested = 0;
@@ -306,14 +326,40 @@ export async function checkReturnEligibility(input: CheckEligibilityInput): Prom
   let overallMessage = "All requested items are eligible for return.";
 
   for (const item of requestedItems) {
-    totalQuantityRequested += item.quantity;
-    const itemSku = (item.sku || "").trim().toUpperCase();
-    const itemCategory = (item.category || "").trim().toLowerCase();
-    const itemProdId = item.productId || item.variantId || "";
+    const sourceLine = lineItemById.get(item.shopifyLineItemId);
+    const validQuantity = Number.isInteger(item.quantity) && item.quantity > 0;
+    totalQuantityRequested += validQuantity ? item.quantity : 0;
+    const cachedProduct = sourceLine ? productCacheByVariant.get(String(sourceLine.variantId || "")) : null;
+    // SKU, product IDs and price values come from our stored order/product snapshot,
+    // never from the browser's editable request payload.
+    const itemSku = String(cachedProduct?.sku || sourceLine?.sku || "").trim().toUpperCase();
+    const itemCategory = String(sourceLine?.category || "").trim().toLowerCase();
+    const itemProdId = String(sourceLine?.productId || cachedProduct?.shopifyProductId || "");
+    const availableQuantity = availableQuantityByLineItem.get(item.shopifyLineItemId) ?? 0;
 
     let itemEligible = true;
     let itemReason: IneligibilityReasonCode = "ELIGIBLE";
     let itemMsg = "Eligible";
+
+    if (!sourceLine) {
+      itemEligible = false;
+      itemReason = "ORDER_NOT_FOUND";
+      itemMsg = "This line item does not belong to the selected Shopify order.";
+    } else if (!validQuantity) {
+      itemEligible = false;
+      itemReason = "MAX_QUANTITY_EXCEEDED";
+      itemMsg = "Requested quantity must be a positive whole number.";
+    } else if (item.quantity > Number(sourceLine.quantity || 0)) {
+      itemEligible = false;
+      itemReason = "MAX_QUANTITY_EXCEEDED";
+      itemMsg = `Requested quantity exceeds the original order quantity (${Number(sourceLine.quantity || 0)}).`;
+    } else if (preventPreviousReturns && item.quantity > availableQuantity) {
+      itemEligible = false;
+      itemReason = "PREVIOUS_RETURN_EXISTS";
+      itemMsg = availableQuantity > 0
+        ? `Only ${availableQuantity} unit(s) remain eligible because other units of this item are already in a return/exchange request.`
+        : "This item is already included in an active or completed return/exchange request.";
+    }
 
     // Item Rule A: Excluded SKU Check
     if (policy.excludedSkus && policy.excludedSkus.some((s) => s.trim().toUpperCase() === itemSku && itemSku !== "")) {
@@ -347,7 +393,7 @@ export async function checkReturnEligibility(input: CheckEligibilityInput): Prom
       itemMsg = `Product category '${item.category}' is not in the store's eligible return categories.`;
     }
     // Item Rule E: Sale / Discounted Item Restriction
-    else if (!allowSaleItems && (item.isSaleItem || (item.originalPrice && item.price && item.price < item.originalPrice))) {
+    else if (!allowSaleItems && (item.isSaleItem || (Number(sourceLine?.originalPrice || 0) > 0 && Number(sourceLine?.price || 0) < Number(sourceLine?.originalPrice || 0)))) {
 
       itemEligible = false;
       itemReason = "SALE_ITEMS_EXCLUDED";
@@ -363,7 +409,7 @@ export async function checkReturnEligibility(input: CheckEligibilityInput): Prom
     itemResults.push({
       shopifyLineItemId: item.shopifyLineItemId,
       eligible: itemEligible,
-      maxEligibleQuantity: itemEligible ? item.quantity : 0,
+      maxEligibleQuantity: itemEligible ? Math.min(Number(sourceLine?.quantity || 0), availableQuantity) : 0,
       reasonCode: itemReason,
       message: itemMsg,
     });

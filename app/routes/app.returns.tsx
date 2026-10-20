@@ -84,12 +84,14 @@ export async function action({ request }: Route.ActionArgs) {
         shopifyStoreId,
         shopifyOrderId,
         orderNumber,
-        customerEmail: customerEmail || existingOrder.customerEmail || "merchant-created@store.com",
+        customerEmail: customerEmail || existingOrder.customerEmail || "",
         customerName: customerName || existingOrder.customerName || "Customer",
         reason: reason || "Merchant Created Return",
         customerNote: "Created manually by store merchant admin",
-        adminNote: adminNote || "Created manually via merchant dashboard",
-        refundAmount: refundAmountRaw ? parseFloat(refundAmountRaw) : 0,
+        adminNote: adminNote || undefined,
+        requestSource: "MERCHANT",
+        policyOverrideReason: adminNote || undefined,
+        refundAmount: refundAmountRaw ? parseFloat(refundAmountRaw) : undefined,
         items: parsedItems.map((i: any) => ({
           shopifyLineItemId: i.lineItemId,
           quantity: parseInt(i.quantity, 10) || 1,
@@ -117,8 +119,10 @@ export async function action({ request }: Route.ActionArgs) {
     const updated = await updateReturnRequestStatus(
       returnId,
       shopifyStoreId,
-      newStatus as "PENDING" | "APPROVED" | "REJECTED" | "COMPLETED" | "CANCELLED",
-      adminNote || undefined
+      newStatus as "PENDING" | "APPROVED" | "REJECTED" | "RECEIVED" | "INSPECTED" | "REFUND_PENDING" | "COMPLETED" | "CANCELLED",
+      adminNote || undefined,
+      undefined,
+      admin
     );
 
     return { success: true, return: updated };
@@ -133,14 +137,14 @@ export default function Returns() {
   const { returns: dbReturns, orders: dbOrders = [], riskFlags } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   const orderSearchFetcher = useFetcher<typeof action>();
-  const availableOrders = (orderSearchFetcher.data as any)?.orders ?? dbOrders;
-
   // Manual Return Creation Modal State
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [orderSearchQuery, setOrderSearchQuery] = useState<string>("");
   const [selectedOrderId, setSelectedOrderId] = useState<string>("");
+  const searchResultOrders = (orderSearchFetcher.data as any)?.orders;
+  const availableOrders = orderSearchQuery.trim().length >= 2 && Array.isArray(searchResultOrders) ? searchResultOrders : dbOrders;
   const [selectedItems, setSelectedItems] = useState<Record<string, { quantity: number; reason: string }>>({});
-  const [refundAmountInput, setRefundAmountInput] = useState<string>("0.00");
+  const [refundAmountInput, setRefundAmountInput] = useState<string>("");
   const [returnReasonInput, setReturnReasonInput] = useState<string>("DEFECTIVE");
   const [adminNoteInput, setAdminNoteInput] = useState<string>("");
   const [showConfirmStep, setShowConfirmStep] = useState<boolean>(false);
@@ -175,7 +179,7 @@ export default function Returns() {
     setSelectedOrderId(ord.shopifyOrderId);
     setSelectedItems({});
     setShowConfirmStep(false);
-    setRefundAmountInput(Number(ord.totalPrice).toFixed(2));
+    setRefundAmountInput("");
   };
 
   const handleItemToggle = (item: any) => {
@@ -220,14 +224,12 @@ export default function Returns() {
         customerEmail: selectedOrder.customerEmail || "",
         customerName: selectedOrder.customerName || "",
         reason: returnReasonInput,
-        refundAmount: refundAmountInput,
+        refundAmount: refundAmountInput.trim(),
         adminNote: adminNoteInput,
         items: JSON.stringify(itemsArray),
       },
       { method: "POST" }
     );
-
-    handleCloseModal();
   };
 
   const handleCloseModal = () => {
@@ -257,14 +259,17 @@ export default function Returns() {
       reason: item.reason,
       price: 0,
     })),
-    timeline: [
-      {
-        status: ret.status,
-        title: `Return ${ret.status}`,
-        description: `Status is currently ${ret.status}`,
-        date: new Date(ret.updatedAt).toLocaleString(),
-      },
-    ],
+    timeline: (ret.auditHistory || []).map((entry: any) => ({
+      status: entry.action,
+      title: String(entry.action || "AUDIT EVENT").replaceAll("_", " "),
+      description: entry.metadata ? JSON.stringify(entry.metadata) : "Recorded in audit history",
+      date: new Date(entry.createdAt).toLocaleString(),
+    })).concat((ret.auditHistory || []).length ? [] : [{
+      status: ret.status,
+      title: `Return ${ret.status}`,
+      description: `Current status: ${ret.status}`,
+      date: new Date(ret.updatedAt).toLocaleString(),
+    }]),
   }));
 
   // Local state for interactive features
@@ -302,17 +307,12 @@ export default function Returns() {
 
   // Status Action Handler (submit to server)
   const handleUpdateStatus = (id: string, newStatus: string) => {
-    fetcher.submit(
-      { returnId: id, status: newStatus },
-      { method: "POST" }
-    );
-
-    if (selectedReturn?.id === id) {
-      setSelectedReturn({
-        ...selectedReturn,
-        status: newStatus,
-      });
+    let adminNote = "";
+    if (newStatus === "COMPLETED") {
+      adminNote = window.prompt("Enter the manual refund reference or confirmation note:", "") || "";
+      if (adminNote.trim().length < 2) return;
     }
+    fetcher.submit({ returnId: id, status: newStatus, adminNote }, { method: "POST" });
   };
 
   const isSubmitting = fetcher.state !== "idle" && fetcher.formData?.get("actionType") === "CREATE_MANUAL_RETURN";
@@ -324,7 +324,7 @@ export default function Returns() {
           <div className="bc-header-copy">
             <p className="bc-eyebrow">REQUESTS</p>
             <h1>Return requests</h1>
-            <p>Review customer returns and create one when the shopper cannot send it from the store.</p>
+            <p>Approve requests, inspect customer-arranged shipments in Warehouse, and confirm manual refunds when required.</p>
           </div>
           <button type="button" className="bc-btn primary" onClick={() => setIsCreateModalOpen(true)}>
             Create return
@@ -355,6 +355,9 @@ export default function Returns() {
               <option value="All">All Statuses</option>
               <option value="PENDING">Pending</option>
               <option value="APPROVED">Approved</option>
+              <option value="RECEIVED">Received at warehouse</option>
+              <option value="INSPECTED">Inspected</option>
+              <option value="REFUND_PENDING">Refund pending</option>
               <option value="REJECTED">Rejected</option>
               <option value="COMPLETED">Completed</option>
               <option value="CANCELLED">Cancelled</option>
@@ -438,9 +441,14 @@ export default function Returns() {
                     </td>
                     <td style={{ padding: "12px 16px", fontSize: "13px", color: "#64748b" }}>{ret.date}</td>
                     <td style={{ padding: "12px 16px", textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
-                      <button type="button" className="bc-btn" onClick={() => setSelectedReturn(ret)}>
-                        View
-                      </button>
+                      <div style={{ display: "flex", justifyContent: "flex-end", gap: "6px", flexWrap: "wrap" }}>
+                        <button type="button" className="bc-btn" onClick={() => setSelectedReturn(ret)}>View</button>
+                        {ret.status === "PENDING" ? <>
+                          <button type="button" className="bc-btn primary" onClick={() => handleUpdateStatus(ret.id, "APPROVED")}>Approve</button>
+                          <button type="button" className="bc-btn" onClick={() => handleUpdateStatus(ret.id, "REJECTED")}>Reject</button>
+                        </> : null}
+                        {ret.status === "REFUND_PENDING" ? <button type="button" className="bc-btn primary" onClick={() => handleUpdateStatus(ret.id, "COMPLETED")}>Confirm manual refund</button> : null}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -518,6 +526,8 @@ export default function Returns() {
                 ✕ Close
               </button>
             </div>
+            {fetcher.data?.error ? <p role="alert" style={{ color: "#b91c1c", background: "#fef2f2", padding: "10px 12px", borderRadius: "8px", margin: 0 }}>{fetcher.data.error}</p> : null}
+            {fetcher.data?.success ? <p role="status" style={{ color: "#047857", background: "#ecfdf5", padding: "10px 12px", borderRadius: "8px", margin: 0 }}>{fetcher.data.message || "Return request saved."} You can close this panel when ready.</p> : null}
 
             {!showConfirmStep ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
@@ -563,7 +573,7 @@ export default function Returns() {
                           >
                             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                               <strong style={{ fontSize: "14px", color: "#0f172a" }}>{ord.orderNumber}</strong>
-                              <span style={{ fontSize: "13px", fontWeight: 700, color: "#10b981" }}>PKR {Number(ord.totalPrice).toFixed(2)}</span>
+                              <span style={{ fontSize: "13px", fontWeight: 700, color: "#10b981" }}>{ord.currency || "USD"} {Number(ord.totalPrice).toFixed(2)}</span>
                             </div>
                             <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>
                               Customer: {ord.customerName || "N/A"} ({ord.customerEmail || "No Email"})
@@ -624,7 +634,7 @@ export default function Returns() {
                               <label htmlFor={`ret-item-${li.lineItemId}`} style={{ flex: 1, cursor: "pointer" }}>
                                 <div style={{ fontWeight: 600, fontSize: "14px", color: "#0f172a" }}>{li.title}</div>
                                 <div style={{ fontSize: "12px", color: "#64748b" }}>
-                                  Unit Price: PKR {Number(li.price).toFixed(2)} | Max Qty: {li.quantity}
+                                  Unit Price: {selectedOrder.currency || "USD"} {Number(li.price).toFixed(2)} | Max Qty: {li.quantity}
                                 </div>
                               </label>
                             </div>
@@ -687,24 +697,26 @@ export default function Returns() {
 
                     <div>
                       <label style={{ display: "block", fontWeight: 700, fontSize: "12.5px", color: "#475569", marginBottom: "4px" }}>
-                        Refund Amount (PKR)
+                        Optional refund override ({selectedOrder?.currency || "order currency"})
                       </label>
                       <input
                         type="number"
                         step="0.01"
                         value={refundAmountInput}
                         onChange={(e) => setRefundAmountInput(e.target.value)}
+                        min="0"
+                        placeholder="Leave blank to calculate after inspection"
                         style={{ width: "100%", padding: "8px 12px" }}
                       />
                     </div>
 
                     <div style={{ gridColumn: "span 2" }}>
                       <label style={{ display: "block", fontWeight: 700, fontSize: "12.5px", color: "#475569", marginBottom: "4px" }}>
-                        Merchant Internal Note
+                        Internal note / policy-override reason (required for policy exceptions)
                       </label>
                       <input
                         type="text"
-                        placeholder="Internal note for staff..."
+                        placeholder="Internal note; explain any eligibility override here..."
                         value={adminNoteInput}
                         onChange={(e) => setAdminNoteInput(e.target.value)}
                       />
@@ -744,7 +756,7 @@ export default function Returns() {
                   <p style={{ margin: 0, fontSize: "13.5px", color: "#475569" }}>
                     Please confirm creating return request for <strong>{selectedOrder?.orderNumber}</strong> with{" "}
                     <strong>{Object.keys(selectedItems).length} item(s)</strong> and a refund amount of{" "}
-                    <strong>PKR {refundAmountInput}</strong>.
+                    <strong>{refundAmountInput.trim() ? `${selectedOrder?.currency || "Order currency"} ${refundAmountInput}` : "Calculated after warehouse inspection"}</strong>.
                   </p>
                 </s-box>
 
@@ -773,6 +785,20 @@ export default function Returns() {
               </div>
             )}
           </div>
+        </>
+      )}
+
+      {selectedReturn && (
+        <>
+          <div onClick={() => setSelectedReturn(null)} style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.4)", zIndex: 1100 }} />
+          <aside role="dialog" aria-label="Return request details and audit history" style={{ position: "fixed", top: 0, right: 0, height: "100%", width: "min(500px,100%)", overflowY: "auto", background: "#fff", zIndex: 1101, padding: 24, boxShadow: "-8px 0 28px rgba(15,23,42,.16)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}><div><p style={{ margin: 0, color: "#64748b", fontSize: 11, fontWeight: 800, letterSpacing: ".1em" }}>RETURN REQUEST</p><h2 style={{ margin: "4px 0 0", fontSize: 21 }}>#{selectedReturn.id.slice(0, 8)} · {selectedReturn.orderNumber}</h2></div><button type="button" className="bc-btn" onClick={() => setSelectedReturn(null)}>Close</button></div>
+            <div style={{ display: "grid", gap: 8, marginTop: 20, fontSize: 13 }}><div><strong>Customer:</strong> {selectedReturn.customerName} ({selectedReturn.customerEmail})</div><div><strong>Status:</strong> {selectedReturn.status}</div><div><strong>Reason:</strong> {selectedReturn.reason}</div>{selectedReturn.customerNote ? <div><strong>Customer note:</strong> {selectedReturn.customerNote}</div> : null}{selectedReturn.adminNote ? <div><strong>Merchant note:</strong> {selectedReturn.adminNote}</div> : null}</div>
+            <h3 style={{ margin: "24px 0 10px", fontSize: 15 }}>Items</h3>
+            <div style={{ display: "grid", gap: 8 }}>{selectedReturn.items.map((item: any, index: number) => <div key={`${item.sku}-${index}`} style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 12 }}><strong>{item.sku}</strong><div style={{ color: "#64748b", fontSize: 12 }}>Quantity: {item.quantity} · Reason: {item.reason}</div></div>)}</div>
+            <h3 style={{ margin: "24px 0 10px", fontSize: 15 }}>Audit history</h3>
+            <div style={{ display: "grid", gap: 12 }}>{selectedReturn.timeline.map((event: any, index: number) => <div key={`${event.title}-${index}`} style={{ borderLeft: "2px solid #cbd5e1", paddingLeft: 12 }}><strong style={{ fontSize: 12 }}>{event.title}</strong><div style={{ color: "#64748b", fontSize: 11, marginTop: 3 }}>{event.date}</div><p style={{ color: "#334155", fontSize: 12, whiteSpace: "pre-wrap", overflowWrap: "anywhere", margin: "5px 0 0" }}>{event.description}</p></div>)}</div>
+          </aside>
         </>
       )}
 

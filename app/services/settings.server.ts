@@ -47,6 +47,8 @@ export async function updateSettings(
     exchangeShippingCost?: number;
     notificationEmail?: string | null;
     emailNotificationsEnabled?: boolean;
+    refundExecutionMode?: "SHOPIFY_API" | "MANUAL";
+    exchangeReplacementTiming?: "AFTER_APPROVAL" | "AFTER_INSPECTION";
     fraudFlagReturnCount?: number;
     fraudFlagWindowDays?: number;
     fraudFlagWindowCount?: number;

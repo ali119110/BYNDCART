@@ -27,6 +27,8 @@ export async function loader({ request }: Route.LoaderArgs) {
         exchangeShippingCost: 0,
         notificationEmail: "",
         emailNotificationsEnabled: false,
+        refundExecutionMode: "MANUAL",
+        exchangeReplacementTiming: "AFTER_INSPECTION",
       },
       portal,
       policyRule: {
@@ -59,6 +61,10 @@ export async function action({ request }: Route.ActionArgs) {
   const exchangeShippingCost = Number(formData.get("exchangeShippingCost"));
   const notificationEmail = formData.get("notificationEmail") as string | null;
   const emailNotificationsEnabled = formData.get("emailNotificationsEnabled") === "on";
+  const refundExecutionMode = String(formData.get("refundExecutionMode") || "MANUAL");
+  const exchangeReplacementTiming = String(formData.get("exchangeReplacementTiming") || "AFTER_INSPECTION");
+  if (!["SHOPIFY_API", "MANUAL"].includes(refundExecutionMode)) return { error: "Invalid refund execution mode." };
+  if (!["AFTER_APPROVAL", "AFTER_INSPECTION"].includes(exchangeReplacementTiming)) return { error: "Invalid replacement-order timing." };
 
   const fraudFlagReturnCount = Number(formData.get("fraudFlagReturnCount") || 5);
   const fraudFlagWindowDays = Number(formData.get("fraudFlagWindowDays") || 30);
@@ -87,6 +93,8 @@ export async function action({ request }: Route.ActionArgs) {
       exchangeShippingCost,
       notificationEmail: notificationEmail || null,
       emailNotificationsEnabled,
+      refundExecutionMode: refundExecutionMode as "SHOPIFY_API" | "MANUAL",
+      exchangeReplacementTiming: exchangeReplacementTiming as "AFTER_APPROVAL" | "AFTER_INSPECTION",
       fraudFlagReturnCount,
       fraudFlagWindowDays,
       fraudFlagWindowCount,
@@ -412,6 +420,36 @@ export default function Settings() {
                 min={1}
               />
               <span className="bc-hint">How far back to count recent requests.</span>
+            </label>
+          </div>
+        </section>
+
+        <section className="bc-card bc-form" aria-labelledby="bc-workflow-settings-title">
+          <div className="bc-section-heading">
+            <div className="bc-section-icon bc-icon-return" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M7 4v6m10-6v6M5 12h14v8H5z" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" /></svg>
+            </div>
+            <div>
+              <h2 className="bc-title" id="bc-workflow-settings-title">Processing workflow</h2>
+              <p className="bc-muted">Returns and exchanges always require warehouse receipt and inspection before final processing.</p>
+            </div>
+          </div>
+          <div className="bc-fields">
+            <label>
+              <span className="bc-field-label">Refund execution</span>
+              <select name="refundExecutionMode" defaultValue={settings.refundExecutionMode || "MANUAL"}>
+                <option value="MANUAL">Manual refund confirmation</option>
+                <option value="SHOPIFY_API">Create refund through Shopify Admin API</option>
+              </select>
+              <span className="bc-hint">Shopify API mode creates a Shopify refund using the order’s available payment transaction. Confirm gateway behavior in a test store before production.</span>
+            </label>
+            <label>
+              <span className="bc-field-label">Create exchange replacement order</span>
+              <select name="exchangeReplacementTiming" defaultValue={settings.exchangeReplacementTiming || "AFTER_INSPECTION"}>
+                <option value="AFTER_APPROVAL">After merchant approval</option>
+                <option value="AFTER_INSPECTION">After the original item is received and inspected</option>
+              </select>
+              <span className="bc-hint">BYNDCART will not book a courier shipment. Merchants and customers manage shipping with their chosen carrier.</span>
             </label>
           </div>
         </section>

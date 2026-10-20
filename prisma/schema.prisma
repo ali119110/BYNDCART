@@ -98,6 +98,9 @@ model ReturnRequest {
   reason         String?
   customerNote   String?
   adminNote      String?
+  requestSource  String       @default("CUSTOMER") // CUSTOMER or MERCHANT
+  policyOverrideReason String?
+  inspectionCompletedAt DateTime?
   refundAmount   Decimal?     @db.Decimal(10, 2)
   shopifyReturnId String?     // e.g. gid://shopify/Return/123456789
   shopifyRefundId String?     // e.g. gid://shopify/Refund/987654321
@@ -135,13 +138,20 @@ model ExchangeRequest {
   orderNumber    String         // Original order number
   customerEmail  String
   customerName   String?
-  status         String         @default("PENDING") // PENDING, APPROVED, REJECTED, FULFILLED, COMPLETED, CANCELLED
-  newOrderId     String?        // Replacement draft/actual order ID in Shopify
+  status         String         @default("PENDING") // PENDING, APPROVED, REJECTED, RECEIVED, INSPECTED, FULFILLED, COMPLETED, CANCELLED
+  reason         String?
+  customerNote   String?
+  adminNote      String?
+  newOrderId     String?        // Replacement actual order ID in Shopify
   newOrderNumber String?        // Replacement order number
+  requestSource  String         @default("CUSTOMER") // CUSTOMER or MERCHANT
+  policyOverrideReason String?
+  inspectionCompletedAt DateTime?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
   shopifyStore   ShopifyStore   @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
   items          ExchangeItem[]
+  warehouseIntakes WarehouseIntake[]
 
   @@index([shopifyStoreId])
   @@index([shopifyStoreId, status])
@@ -157,9 +167,11 @@ model ExchangeItem {
   replacementQuantity  Int
   replacementTitle     String?
   priceDifference      Decimal         @default(0.00) @db.Decimal(10, 2)
+  status               String          @default("PENDING") // PENDING, RECEIVED, INSPECTED, REJECTED
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt
   exchangeRequest      ExchangeRequest @relation(fields: [exchangeRequestId], references: [id], onDelete: Cascade)
+  itemInspections      ItemInspection[]
 
   @@index([exchangeRequestId])
 }
@@ -203,6 +215,8 @@ model StoreSettings {
   exchangeShippingCost   Decimal      @default(0.00) @db.Decimal(10, 2)
   notificationEmail      String?
   emailNotificationsEnabled Boolean @default(false)
+  refundExecutionMode   String       @default("MANUAL") // SHOPIFY_API or MANUAL
+  exchangeReplacementTiming String   @default("AFTER_INSPECTION") // AFTER_APPROVAL or AFTER_INSPECTION
   fraudFlagReturnCount    Int         @default(5)
   fraudFlagWindowDays     Int         @default(30)
   fraudFlagWindowCount    Int         @default(3)
@@ -313,7 +327,8 @@ model WarehouseIntake {
   id                 String           @id @default(uuid())
   shopifyStoreId     String
   shipmentTrackId    String?
-  returnRequestId    String
+  returnRequestId    String?
+  exchangeRequestId  String?
   scannedAwb         String
   receivedByUserId   String?
   status             String           @default("RECEIVED") // RECEIVED, INSPECTED, REJECTED
@@ -322,19 +337,22 @@ model WarehouseIntake {
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
   shopifyStore       ShopifyStore     @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
-  returnRequest      ReturnRequest    @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  returnRequest      ReturnRequest?   @relation(fields: [returnRequestId], references: [id], onDelete: Cascade)
+  exchangeRequest    ExchangeRequest? @relation(fields: [exchangeRequestId], references: [id], onDelete: Cascade)
   shipmentTrack      ShipmentTrack?   @relation(fields: [shipmentTrackId], references: [id], onDelete: SetNull)
   inspections        ItemInspection[]
 
   @@index([shopifyStoreId])
   @@index([shopifyStoreId, scannedAwb])
   @@index([returnRequestId])
+  @@index([exchangeRequestId])
 }
 
 model ItemInspection {
   id                String          @id @default(uuid())
   warehouseIntakeId String
   returnItemId      String?
+  exchangeItemId    String?
   shopifyLineItemId String
   title             String?
   sku               String?
@@ -347,8 +365,10 @@ model ItemInspection {
   updatedAt         DateTime        @updatedAt
   warehouseIntake   WarehouseIntake @relation(fields: [warehouseIntakeId], references: [id], onDelete: Cascade)
   returnItem        ReturnItem?     @relation(fields: [returnItemId], references: [id], onDelete: SetNull)
+  exchangeItem      ExchangeItem?   @relation(fields: [exchangeItemId], references: [id], onDelete: SetNull)
 
   @@index([warehouseIntakeId])
+  @@index([exchangeItemId])
 }
 
 model CustomerOTP {

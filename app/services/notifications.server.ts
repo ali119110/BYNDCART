@@ -54,12 +54,15 @@ export async function sendEmail(input: SendEmailInput) {
 
 export type NotificationEventType =
   | "RETURN_SUBMITTED"
+  | "EXCHANGE_SUBMITTED"
   | "RETURN_APPROVED"
   | "RETURN_REJECTED"
   | "COURIER_PICKUP_BOOKED"
   | "TRACKING_UPDATE"
   | "RETURN_RECEIVED"
+  | "EXCHANGE_RECEIVED"
   | "INSPECTION_COMPLETED"
+  | "EXCHANGE_INSPECTION_COMPLETED"
   | "REFUND_INITIATED"
   | "EXCHANGE_APPROVED"
   | "REPLACEMENT_CREATED"
@@ -80,11 +83,17 @@ export const DEFAULT_TEMPLATES: Record<NotificationEventType, DefaultTemplateCon
     subject: "Return Request Received for Order {{order_number}}",
     body: "<p>Dear {{customer_name}},</p><p>We have received your return request for order <strong>{{order_number}}</strong>. Our team is currently reviewing your request.</p><p>Thank you for shopping with us!</p>",
   },
+  EXCHANGE_SUBMITTED: {
+    eventType: "EXCHANGE_SUBMITTED",
+    label: "Exchange Request Submitted",
+    subject: "Exchange Request Received for Order {{order_number}}",
+    body: "<p>Dear {{customer_name}},</p><p>We have received your exchange request for order <strong>{{order_number}}</strong>. Our team will review it and email you when its status changes.</p>",
+  },
   RETURN_APPROVED: {
     eventType: "RETURN_APPROVED",
     label: "Return Approved",
     subject: "Return Request Approved — Order {{order_number}}",
-    body: "<p>Dear {{customer_name}},</p><p>Great news! Your return request for order <strong>{{order_number}}</strong> has been approved. A courier pickup will be dispatched shortly.</p>",
+    body: "<p>Dear {{customer_name}},</p><p>Your return request for order <strong>{{order_number}}</strong> has been approved. Please arrange shipping with a carrier of your choice and submit the tracking details in your return portal. BYNDCART does not book the shipment.</p>",
   },
   RETURN_REJECTED: {
     eventType: "RETURN_REJECTED",
@@ -110,23 +119,35 @@ export const DEFAULT_TEMPLATES: Record<NotificationEventType, DefaultTemplateCon
     subject: "Return Package Delivered to Warehouse — Order {{order_number}}",
     body: "<p>Dear {{customer_name}},</p><p>We have safely received your returned package at our processing warehouse for order <strong>{{order_number}}</strong>.</p>",
   },
+  EXCHANGE_RECEIVED: {
+    eventType: "EXCHANGE_RECEIVED",
+    label: "Exchange Package Received",
+    subject: "Exchange Package Received for Order {{order_number}}",
+    body: "<p>Dear {{customer_name}},</p><p>We have received the original item for exchange for order <strong>{{order_number}}</strong>. The warehouse team will inspect it before the next step.</p>",
+  },
   INSPECTION_COMPLETED: {
     eventType: "INSPECTION_COMPLETED",
     label: "Warehouse Inspection Completed",
     subject: "Item Inspection Completed for Order {{order_number}}",
     body: "<p>Dear {{customer_name}},</p><p>Quality inspection for order <strong>{{order_number}}</strong> has been completed. Condition: {{condition}}.</p>",
   },
+  EXCHANGE_INSPECTION_COMPLETED: {
+    eventType: "EXCHANGE_INSPECTION_COMPLETED",
+    label: "Exchange Inspection Completed",
+    subject: "Exchange Inspection Completed for Order {{order_number}}",
+    body: "<p>Dear {{customer_name}},</p><p>Inspection of the original item for order <strong>{{order_number}}</strong> is complete. The replacement order will follow the store's exchange settings.</p>",
+  },
   REFUND_INITIATED: {
     eventType: "REFUND_INITIATED",
     label: "Refund Initiated",
     subject: "Refund Processed for Order {{order_number}}",
-    body: "<p>Dear {{customer_name}},</p><p>A refund of <strong>PKR {{refund_amount}}</strong> has been initiated for order <strong>{{order_number}}</strong> via Shopify.</p>",
+    body: "<p>Dear {{customer_name}},</p><p>The refund process for <strong>{{refund_amount}} {{refund_currency}}</strong> on order <strong>{{order_number}}</strong> has been updated. Contact the store if you need the payment reference or status.</p>",
   },
   EXCHANGE_APPROVED: {
     eventType: "EXCHANGE_APPROVED",
     label: "Exchange Request Approved",
     subject: "Exchange Approved for Order {{order_number}}",
-    body: "<p>Dear {{customer_name}},</p><p>Your exchange request for order <strong>{{order_number}}</strong> has been approved. Your replacement order is being prepared.</p>",
+    body: "<p>Dear {{customer_name}},</p><p>Your exchange request for order <strong>{{order_number}}</strong> has been approved. Please arrange shipping with a carrier of your choice and submit the tracking details in your portal. The replacement order is created according to the store's workflow settings.</p>",
   },
   REPLACEMENT_CREATED: {
     eventType: "REPLACEMENT_CREATED",
@@ -432,21 +453,42 @@ export async function getNotificationLogs(shopifyStoreId: string, limit = 20) {
  * Backward compatibility helpers
  */
 export async function notifyStatusChange(input: any) {
-  let settings;
+  let settings: any;
   try {
     settings = await getSettings(input.shopifyStoreId);
   } catch (error) {
     return { skipped: true, reason: "settings_load_failed" };
   }
 
-  if (!settings?.emailNotificationsEnabled || !settings?.notificationEmail) {
+  if (!settings?.emailNotificationsEnabled) {
     return { skipped: true, reason: "notifications_disabled" };
   }
 
-  const subject = `${input.entity} ${input.orderNumber} — status changed to ${input.newStatus}`;
-  const html = `<p>Status changed from <strong>${input.previousStatus}</strong> to <strong>${input.newStatus}</strong> for order ${input.orderNumber}</p>`;
+  // Prefer the current business/contact email from Shopify; use saved settings
+  // only as a fallback when Shopify's admin email cannot be resolved.
+  let businessEmail: string | null = null;
+  try {
+    const { getShopifyAdminClient } = await import("./shopifySync.server");
+    const admin = await getShopifyAdminClient(input.shopifyStoreId);
+    if (admin) {
+      const response = await admin.graphql(`#graphql
+query getNotificationShopEmail { shop { email } }`);
+      const { data } = await response.json();
+      businessEmail = data?.shop?.email || null;
+    }
+  } catch (error) {
+    console.warn("[Notifications] Could not resolve current Shopify shop email; using configured fallback.", error);
+  }
+  businessEmail = businessEmail || settings?.notificationEmail || null;
+  if (!businessEmail) return { skipped: true, reason: "no_business_email" };
 
-  return sendEmail({ to: settings.notificationEmail, subject, html });
+  const subject = `${input.entity} ${input.orderNumber} — status changed to ${input.newStatus}`;
+  const html = `<p>Status changed from <strong>${escapeHtml(String(input.previousStatus || "NEW"))}</strong> to <strong>${escapeHtml(String(input.newStatus || "UNKNOWN"))}</strong> for order ${escapeHtml(String(input.orderNumber || ""))}</p>${input.adminNote ? `<p>Note: ${escapeHtml(String(input.adminNote))}</p>` : ""}`;
+  return sendEmail({ to: businessEmail, subject, html });
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>\"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[char] || char));
 }
 
 export async function sendCustomerOTPNotification(input: {

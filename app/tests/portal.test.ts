@@ -14,6 +14,11 @@ import { createCustomerSessionToken } from "../services/otp.server";
 prisma.$transaction = (async (cb: any) => {
   return await cb(prisma);
 }) as any;
+(prisma as any).$queryRaw = async () => [];
+(prisma as any).productCache = { findMany: async () => [] };
+prisma.returnRequest.findMany = (async () => []) as any;
+prisma.exchangeRequest.findMany = (async () => []) as any;
+prisma.shipmentTrack.findMany = (async () => []) as any;
 
 // Mock prisma queries for portal testing
 (prisma as any).billingSubscription = {
@@ -76,10 +81,8 @@ prisma.returnRequest.count = (async () => 0) as any;
 
 prisma.returnRequest.create = (async (args: any) => ({
   id: "ret-uuid-201",
-  shopifyStoreId: args.data.shopifyStoreId,
-  shopifyOrderId: args.data.shopifyOrderId,
-  orderNumber: args.data.orderNumber,
-  customerEmail: args.data.customerEmail,
+  ...args.data,
+  items: args.data.items?.create || [],
   status: "PENDING",
   createdAt: new Date(),
 })) as any;
@@ -123,25 +126,25 @@ test("Portal Service - Submit Shopper Return with PKR Restocking Fee Math & Veri
     customerEmail: "shopper@example.pk",
   });
 
-  await assert.rejects(
-    () => submitShopperReturn({
-      shopifyStoreId: "store-1",
-      shopifyOrderId: "gid://shopify/Order/1001",
-      orderNumber: "#1001",
-      customerEmail: "shopper@example.pk",
-      customerName: "Tariq Mahmood",
-      courier: "TCS",
-      reason: "Size Mismatch",
-      sessionToken,
-      items: [
-        {
-          shopifyLineItemId: "gid://shopify/LineItem/1",
-          quantity: 1,
-          reason: "Size Mismatch",
-          price: 3000,
-        },
-      ],
-    }),
-    /supported courier/,
-  );
+  const result = await submitShopperReturn({
+    shopifyStoreId: "store-1",
+    shopifyOrderId: "gid://shopify/Order/1001",
+    orderNumber: "#1001",
+    customerEmail: "shopper@example.pk",
+    customerName: "Tariq Mahmood",
+    reason: "Size Mismatch",
+    sessionToken,
+    items: [
+      {
+        shopifyLineItemId: "gid://shopify/LineItem/1",
+        quantity: 1,
+        reason: "Size Mismatch",
+        price: 3000,
+      },
+    ],
+  });
+
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.status, "PENDING");
+  assert.strictEqual(Number((result.request as { refundAmount?: number }).refundAmount), 2700);
 });

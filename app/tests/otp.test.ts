@@ -382,7 +382,7 @@ test("OTP & Security — Changing Order Number After Authentication Prevention",
         items: [],
       });
     },
-    /Unauthorized return submission/
+    /Unauthorized request submission/
   );
 });
 
@@ -400,7 +400,7 @@ test("OTP & Security — Unauthorized Return & Exchange Submission Prevention", 
         items: [],
       });
     },
-    /Unauthorized return submission/
+    /Unauthorized request submission/
   );
 
   // Unauthenticated order lookup without token

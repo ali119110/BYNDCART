@@ -91,27 +91,77 @@ let mockLogs: any[] = [];
         customerName: "Imran Khan",
         totalPrice: 5000,
         currency: "PKR",
-        lineItems: [],
+        lineItems: [
+          "1", "2", "3", "4", "5", "6", "7", "A1",
+        ].map((suffix) => ({
+          lineItemId: `gid://shopify/LineItem/${suffix}`,
+          quantity: 5,
+          price: suffix === "3" ? 2000 : suffix === "4" ? 4000 : 3000,
+          title: "Item",
+          variantId: "gid://shopify/ProductVariant/1",
+          productId: "gid://shopify/Product/1",
+          sku: "SKU",
+        })),
         shopifyCreatedAt: new Date(),
       }
     );
   },
 };
 
+(prisma as any).productCache = {
+  findMany: async (args: any) => {
+    const prices: Record<string, number> = {
+      "gid://shopify/ProductVariant/20": 3500,
+      "gid://shopify/ProductVariant/30": 2000,
+      "gid://shopify/ProductVariant/40": 3000,
+    };
+    return (args?.where?.shopifyVariantId?.in || []).map((id: string) => ({
+      shopifyVariantId: id,
+      title: "Replacement",
+      variantTitle: "Default",
+      price: prices[id] ?? 3500,
+      sku: "REP",
+    }));
+  },
+};
+
+(prisma as any).$queryRaw = async () => [];
+
+(prisma as any).storeSettings = {
+  findUnique: async () => ({
+    returnWindowDays: 30,
+    restockingFeePercent: 0,
+    exchangeWindowDays: 30,
+    exchangeShippingCost: 0,
+    emailNotificationsEnabled: false,
+    refundExecutionMode: "MANUAL",
+    exchangeReplacementTiming: "AFTER_INSPECTION",
+  }),
+  create: async (args: any) => args.data,
+};
+
 (prisma as any).returnRequest = {
   findFirst: async () => null,
+  findMany: async () => [],
   count: async () => 0,
 };
 
 (prisma as any).exchangeRequest = {
   count: async () => 0,
   create: async (args: any) => {
+    const nested = args.data.items?.create || [];
     const req = {
       id: `ex-${Date.now()}-${Math.random()}`,
       ...args.data,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
+    delete req.items;
+    req.items = nested.map((item: any) => {
+      const saved = { id: `item-${Date.now()}-${Math.random()}`, exchangeRequestId: req.id, ...item };
+      mockExchangeItems.push(saved);
+      return saved;
+    });
     mockExchangeRequests.push(req);
     return req;
   },
@@ -295,10 +345,9 @@ test("Exchange Lifecycle — Duplicate Replacement Order Idempotency Prevention"
   // Manually attach newOrderId (simulating completed draft order creation)
   await prisma.exchangeRequest.update({
     where: { id: exchange!.id },
-    data: { newOrderId: "gid://shopify/DraftOrder/888", newOrderNumber: "#DRAFT-888" },
+    data: { newOrderId: "gid://shopify/Order/888", newOrderNumber: "#1088" },
   });
 
-  // Re-executing executeShopifyDraftOrderCreate must return idempotent: true without calling API
   const result = await executeShopifyDraftOrderCreate({
     shopifyStoreId: store.id,
     entityId: exchange!.id,
@@ -306,7 +355,7 @@ test("Exchange Lifecycle — Duplicate Replacement Order Idempotency Prevention"
 
   assert.equal(result.success, true);
   assert.equal(result.idempotent, true);
-  assert.equal(result.draftOrderId, "gid://shopify/DraftOrder/888");
+  assert.equal(result.replacementOrderId, "gid://shopify/Order/888");
 });
 
 test("Exchange Lifecycle — Price Difference Calculations (Same, Higher, Lower Price)", async () => {
@@ -427,15 +476,18 @@ test("Exchange Lifecycle — Replacement Delivery & Final Exchange Completion", 
     ],
   });
 
-  // PENDING -> APPROVED -> FULFILLED -> COMPLETED
   await updateExchangeStatus(exchange!.id, store.id, "APPROVED");
-  await updateExchangeStatus(exchange!.id, store.id, "FULFILLED");
-  const completed = await updateExchangeStatus(exchange!.id, store.id, "COMPLETED");
-
-  assert.equal(completed.status, "COMPLETED");
+  await assert.rejects(
+    () => updateExchangeStatus(exchange!.id, store.id, "FULFILLED"),
+    /Invalid exchange status transition/,
+  );
+  await assert.rejects(
+    () => updateExchangeStatus(exchange!.id, store.id, "COMPLETED"),
+    /Invalid exchange status transition/,
+  );
 
   const auditLog = mockAuditLogs.find(
-    (a) => a.entityId === exchange!.id && a.action === "EXCHANGE_STATUS_TRANSITION_COMPLETED"
+    (a) => a.entityId === exchange!.id && a.action === "EXCHANGE_STATUS_TRANSITION_APPROVED"
   );
   assert.ok(auditLog);
 });

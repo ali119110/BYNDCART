@@ -47,7 +47,8 @@ export async function action({ request }: Route.ActionArgs) {
     return { products: await getShopifyStoreProducts({ shopifyStoreId, admin, query: String(formData.get("query") || "") }) };
   }
 
-  // Handle Manual Exchange Creation & Seamless Auto Shopify Order Creation
+  // Manual creation creates a PENDING request only. Approval and warehouse
+  // inspection drive the replacement-order timing configured in Settings.
   if (actionType === "CREATE_MANUAL_EXCHANGE") {
     const shopifyOrderId = formData.get("shopifyOrderId") as string;
     const itemsJson = formData.get("items") as string;
@@ -79,23 +80,17 @@ export async function action({ request }: Route.ActionArgs) {
         shopifyStoreId,
         shopifyOrderId: order.shopifyOrderId,
         orderNumber: order.orderNumber,
-        customerEmail: order.customerEmail || "customer@example.com",
+        customerEmail: order.customerEmail || "",
         customerName: order.customerName || undefined,
+        requestSource: "MERCHANT",
+        reason: String(formData.get("reason") || "Merchant-created exchange"),
+        customerNote: "Created manually by store merchant admin",
+        adminNote: "Created manually via merchant dashboard",
+        policyOverrideReason: String(formData.get("policyOverrideReason") || ""),
         items: parsedItems,
       });
 
-      // 2. Seamlessly Auto-Create Shopify Replacement Order / Draft Order
-      let finalExchange = exchangeRequest;
-      try {
-        const approvedResult = await approveExchangeWithDraftOrder(admin, exchangeRequest.id, shopifyStoreId);
-        if (approvedResult) {
-          finalExchange = { ...approvedResult, items: exchangeRequest.items };
-        }
-      } catch (draftErr) {
-        console.warn("[Exchange Action] Auto Shopify draft order creation skipped/warned:", draftErr);
-      }
-
-      return { success: true, exchange: finalExchange, message: "Exchange created and replacement Shopify draft order processed!" };
+      return { success: true, exchange: exchangeRequest, message: "Exchange request created as pending merchant review. No courier shipment was booked." };
     } catch (error) {
       console.error("Failed to create manual exchange:", error);
       return { error: String(error) };
@@ -106,6 +101,7 @@ export async function action({ request }: Route.ActionArgs) {
   const exchangeId = formData.get("exchangeId") as string;
   const newStatus = formData.get("status") as string;
   const newOrderNumber = formData.get("newOrderNumber") as string | null;
+  const adminNote = String(formData.get("adminNote") || "").trim();
 
   if (!exchangeId || !newStatus) {
     return { error: "Missing exchangeId or status" };
@@ -122,9 +118,12 @@ export async function action({ request }: Route.ActionArgs) {
         : await updateExchangeStatus(
             exchangeId,
             shopifyStoreId,
-            newStatus as "PENDING" | "APPROVED" | "REJECTED" | "FULFILLED" | "COMPLETED" | "CANCELLED",
+            newStatus as "PENDING" | "APPROVED" | "REJECTED" | "RECEIVED" | "INSPECTED" | "FULFILLED" | "COMPLETED" | "CANCELLED",
             undefined,
-            newOrderNumber || undefined
+            newOrderNumber || undefined,
+            undefined,
+            admin,
+            adminNote || undefined
           );
 
     return { success: true, exchange: updated };
@@ -140,12 +139,13 @@ export default function Exchanges() {
   const fetcher = useFetcher();
   const orderSearchFetcher = useFetcher<typeof action>();
   const productSearchFetcher = useFetcher<typeof action>();
-  const availableOrders = (orderSearchFetcher.data as any)?.orders ?? orders;
   const availableProducts = (productSearchFetcher.data as any)?.products ?? initialProducts;
 
   // Create Exchange Modal State
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [orderSearchQuery, setOrderSearchQuery] = useState("");
+  const searchedOrders = (orderSearchFetcher.data as any)?.orders;
+  const availableOrders = orderSearchQuery.trim().length >= 2 && Array.isArray(searchedOrders) ? searchedOrders : orders;
 
   useEffect(() => {
     const query = orderSearchQuery.trim();
@@ -170,7 +170,9 @@ export default function Exchanges() {
     >
   >({});
   const [isConfirmStep, setIsConfirmStep] = useState(false);
-  const formatBalance = (balance: number) => balance > 0 ? `+PKR ${balance.toFixed(2)} (Customer Balance Owed)` : balance < 0 ? `-PKR ${Math.abs(balance).toFixed(2)} (Store Credit / Partial Refund)` : "PKR 0.00 (Even Exchange)";
+  const [policyOverrideReasonInput, setPolicyOverrideReasonInput] = useState("");
+  const [exchangeReasonInput, setExchangeReasonInput] = useState("Size Mismatch");
+  const formatBalance = (balance: number, currency = "USD") => balance > 0 ? `+${currency} ${balance.toFixed(2)} (Customer Balance Owed)` : balance < 0 ? `-${currency} ${Math.abs(balance).toFixed(2)} (Merchant refund/credit pending)` : `${currency} 0.00 (Even Exchange)`;
 
   // Selected Order for Modal
   const selectedOrder = availableOrders.find((o: any) => o.shopifyOrderId === selectedOrderId);
@@ -194,12 +196,15 @@ export default function Exchanges() {
     setSelectedOrderId(ord.shopifyOrderId);
     setExchangeItems({});
     setIsConfirmStep(false);
+    setPolicyOverrideReasonInput("");
+    setExchangeReasonInput("Size Mismatch");
   };
 
   // Convert DB data to UI format
   const exchangesList = dbExchanges.map((exc: any) => ({
     id: exc.id,
     originalOrder: exc.orderNumber,
+    currency: exc.currency || "USD",
     customerName: exc.customerName || "Customer",
     customerEmail: exc.customerEmail,
     riskFlag: riskFlags[exc.customerEmail] ?? { flagged: false, reasons: [] },
@@ -215,8 +220,9 @@ export default function Exchanges() {
     priceDifference: exc.items?.[0]?.priceDifference || 0,
     trackingNumber: null,
     courier: null,
-    newOrderId: exc.newOrderId || null,
-    newOrderNumber: exc.newOrderNumber || null,
+    newOrderId: String(exc.newOrderId || "").startsWith("gid://shopify/Order/") ? exc.newOrderId : null,
+    newOrderNumber: String(exc.newOrderId || "").startsWith("gid://shopify/Order/") ? exc.newOrderNumber : null,
+    pendingReplacementDraft: String(exc.newOrderId || "").startsWith("gid://shopify/DraftOrder/"),
     date: new Date(exc.createdAt).toLocaleDateString(),
     items: (exc.items || []).map((item: any) => ({
       id: item.id,
@@ -227,14 +233,17 @@ export default function Exchanges() {
       replacementTitle: item.replacementTitle,
       priceDifference: item.priceDifference,
     })),
-    timeline: [
-      {
-        status: exc.status,
-        title: `Exchange ${exc.status}`,
-        description: `Status is currently ${exc.status}`,
-        date: new Date(exc.updatedAt).toLocaleString(),
-      },
-    ],
+    timeline: (exc.auditHistory || []).map((entry: any) => ({
+      status: entry.action,
+      title: String(entry.action || "AUDIT EVENT").replaceAll("_", " "),
+      description: entry.metadata ? JSON.stringify(entry.metadata) : "Recorded in audit history",
+      date: new Date(entry.createdAt).toLocaleString(),
+    })).concat((exc.auditHistory || []).length ? [] : [{
+      status: exc.status,
+      title: `Exchange ${exc.status}`,
+      description: `Current status: ${exc.status}`,
+      date: new Date(exc.updatedAt).toLocaleString(),
+    }]),
   }));
 
   // Local state for interactive features
@@ -254,17 +263,13 @@ export default function Exchanges() {
   });
 
   const handleUpdateStatus = (id: string, newStatus: string) => {
-    fetcher.submit(
-      { exchangeId: id, status: newStatus },
-      { method: "POST" }
-    );
-
-    if (selectedExchange?.id === id) {
-      setSelectedExchange({
-        ...selectedExchange,
-        status: newStatus,
-      });
+    if (newStatus === "COMPLETED") {
+      const confirmation = window.prompt("Confirm the replacement has been delivered. Add a note or reference:", "") || "";
+      if (confirmation.trim().length < 2) return;
+      fetcher.submit({ exchangeId: id, status: newStatus, adminNote: confirmation }, { method: "POST" });
+      return;
     }
+    fetcher.submit({ exchangeId: id, status: newStatus }, { method: "POST" });
   };
 
   const handleToggleItem = (lineItemId: string, defaultTitle: string) => {
@@ -323,12 +328,12 @@ export default function Exchanges() {
       {
         actionType: "CREATE_MANUAL_EXCHANGE",
         shopifyOrderId: selectedOrder.shopifyOrderId,
+        reason: exchangeReasonInput,
+        policyOverrideReason: policyOverrideReasonInput,
         items: JSON.stringify(items),
       },
       { method: "POST" }
     );
-
-    handleCloseModal();
   };
 
   const isApproving = fetcher.state !== "idle" && fetcher.formData?.get("status") === "APPROVED";
@@ -340,7 +345,7 @@ export default function Exchanges() {
           <div className="bc-header-copy">
             <p className="bc-eyebrow">REQUESTS</p>
             <h1>Exchange requests</h1>
-            <p>Review replacement requests and create one from a store order.</p>
+            <p>Approve requests, receive and inspect the original item in Warehouse, then track the replacement order.</p>
           </div>
           <button type="button" className="bc-btn primary" onClick={() => setIsCreateModalOpen(true)}>
             Create exchange
@@ -365,6 +370,8 @@ export default function Exchanges() {
               <option value="All">All Statuses</option>
               <option value="PENDING">Pending</option>
               <option value="APPROVED">Approved</option>
+              <option value="RECEIVED">Received at warehouse</option>
+              <option value="INSPECTED">Inspected</option>
               <option value="FULFILLED">Fulfilled</option>
               <option value="COMPLETED">Completed</option>
               <option value="REJECTED">Rejected</option>
@@ -414,7 +421,7 @@ export default function Exchanges() {
                       {exc.newOrderNumber ? (
                         <span style={{ fontWeight: 700, color: "#6366f1" }}>{exc.newOrderNumber}</span>
                       ) : (
-                        <span style={{ color: "#94a3b8", fontSize: "12px" }}>Auto-Creating...</span>
+                        <span style={{ color: "#64748b", fontSize: "12px" }}>{exc.status === "PENDING" ? "Pending approval" : exc.status === "INSPECTED" || exc.pendingReplacementDraft ? "Needs replacement retry" : "Created per workflow timing"}</span>
                       )}
                     </td>
                     <td style={{ padding: "12px 16px" }}>
@@ -443,9 +450,14 @@ export default function Exchanges() {
                     </td>
                     <td style={{ padding: "12px 16px", fontSize: "13px", color: "#64748b" }}>{exc.date}</td>
                     <td style={{ padding: "12px 16px", textAlign: "right" }} onClick={(e) => e.stopPropagation()}>
-                      <button type="button" className="bc-btn" onClick={() => setSelectedExchange(exc)}>
-                        View
-                      </button>
+                      <div style={{ display: "flex", justifyContent: "flex-end", gap: "6px", flexWrap: "wrap" }}>
+                        <button type="button" className="bc-btn" onClick={() => setSelectedExchange(exc)}>View</button>
+                        {exc.status === "PENDING" ? <>
+                          <button type="button" className="bc-btn primary" onClick={() => handleUpdateStatus(exc.id, "APPROVED")}>Approve</button>
+                          <button type="button" className="bc-btn" onClick={() => handleUpdateStatus(exc.id, "REJECTED")}>Reject</button>
+                        </> : null}
+                        {exc.status === "FULFILLED" ? <button type="button" className="bc-btn primary" onClick={() => handleUpdateStatus(exc.id, "COMPLETED")}>Mark delivered</button> : null}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -492,13 +504,15 @@ export default function Exchanges() {
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "14px" }}>
               <h2 style={{ fontSize: "18px", fontWeight: 700, margin: 0, fontFamily: "Outfit, sans-serif" }}>
-                {isConfirmStep ? "Confirm Exchange & Shopify Order Creation" : "Create Manual Exchange"}
+                {isConfirmStep ? "Confirm exchange request" : "Create Manual Exchange"}
               </h2>
               <button onClick={handleCloseModal} style={{ padding: "4px 10px", fontSize: "12px" }}>
                 ✕ Close
               </button>
             </div>
 
+            {fetcher.data?.error ? <p role="alert" style={{ color: "#b91c1c", background: "#fef2f2", padding: "10px 12px", borderRadius: "8px" }}>{fetcher.data.error}</p> : null}
+            {fetcher.data?.success && fetcher.data?.message ? <p role="status" style={{ color: "#047857", background: "#ecfdf5", padding: "10px 12px", borderRadius: "8px" }}>{fetcher.data.message} You can close this panel when ready.</p> : null}
             <form onSubmit={handleCreateSubmit}>
               {!isConfirmStep ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: "18px" }}>
@@ -544,7 +558,7 @@ export default function Exchanges() {
                             >
                               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                                 <strong style={{ fontSize: "14px", color: "#0f172a" }}>{ord.orderNumber}</strong>
-                                <span style={{ fontSize: "13px", fontWeight: 700, color: "#10b981" }}>PKR {Number(ord.totalPrice).toFixed(2)}</span>
+                                <span style={{ fontSize: "13px", fontWeight: 700, color: "#10b981" }}>{ord.currency || "USD"} {Number(ord.totalPrice).toFixed(2)}</span>
                               </div>
                               <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>
                                 Customer: {ord.customerName || "N/A"} ({ord.customerEmail || "No Email"})
@@ -572,6 +586,33 @@ export default function Exchanges() {
                       </div>
                     )}
                   </div>
+
+                  {selectedOrder && (
+                    <div style={{ display: "grid", gap: "12px" }}>
+                      <div>
+                        <label style={{ display: "block", fontWeight: 700, fontSize: "12.5px", marginBottom: "4px", color: "#475569" }}>Exchange reason</label>
+                        <select value={exchangeReasonInput} onChange={(e) => setExchangeReasonInput(e.target.value)} style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: "8px" }}>
+                          <option value="Size Mismatch">Size mismatch</option>
+                          <option value="Defective / Damaged">Defective / damaged</option>
+                          <option value="Wrong Item Received">Wrong item received</option>
+                          <option value="Changed Mind">Changed mind</option>
+                          <option value="Other">Other</option>
+                        </select>
+                      </div>
+                      <div>
+                      <label style={{ display: "block", fontWeight: 700, fontSize: "12.5px", marginBottom: "4px", color: "#475569" }}>
+                        Policy override reason (only required if the order is outside policy)
+                      </label>
+                      <textarea
+                        value={policyOverrideReasonInput}
+                        onChange={(e) => setPolicyOverrideReasonInput(e.target.value)}
+                        placeholder="Explain why this exchange should proceed despite policy eligibility..."
+                        rows={2}
+                        style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: "8px" }}
+                      />
+                      </div>
+                    </div>
+                  )}
 
                   {/* Product A -> Product B Diff Grid */}
                   {selectedOrder && (
@@ -605,7 +646,7 @@ export default function Exchanges() {
                                 />
                                 <label htmlFor={`exc-item-${li.lineItemId}`} style={{ flex: 1, cursor: "pointer" }}>
                                   <div style={{ fontWeight: 600, fontSize: "14px", color: "#0f172a" }}>
-                                    Product A: {li.title} (PKR {Number(li.price).toFixed(2)})
+                                    Product A: {li.title} ({selectedOrder.currency || "USD"} {Number(li.price).toFixed(2)})
                                   </div>
                                 </label>
                               </div>
@@ -651,13 +692,13 @@ export default function Exchanges() {
                                               <span style={{ minWidth: 0 }}>
                                                 <strong style={{ display: "block", fontSize: "13px" }}>{product.productTitle || product.title}</strong>
                                                 <span style={{ display: "block", fontSize: "12px", color: "#475569" }}>{variantLabel || "Default variant"}{product.sku ? ` · ${product.sku}` : ""}</span>
-                                                <span style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#059669" }}>PKR {Number(product.price).toFixed(2)}</span>
+                                                <span style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#059669" }}>{selectedOrder.currency || "USD"} {Number(product.price).toFixed(2)}</span>
                                               </span>
                                             </button>
                                           );
                                         })}
                                       </div>
-                                      {selectedProduct && <span style={{ fontSize: "12px", color: "#166534" }}>Selected: {selectedProduct.productTitle || selectedProduct.title} · PKR {Number(selectedProduct.price).toFixed(2)}</span>}
+                                      {selectedProduct && <span style={{ fontSize: "12px", color: "#166534" }}>Selected: {selectedProduct.productTitle || selectedProduct.title} · {selectedOrder.currency || "USD"} {Number(selectedProduct.price).toFixed(2)}</span>}
                                     </div>
                                     <div>
                                       <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Replacement Quantity</label>
@@ -670,8 +711,8 @@ export default function Exchanges() {
                                       />
                                     </div>
                                     <div>
-                                      <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Exchange Balance (PKR)</label>
-                                      <div style={{ padding: "8px 10px", fontWeight: 700 }}>{formatBalance(Number(itemData.replacementPrice || 0) * Number(itemData.replacementQuantity || 1) - Number(li.price || 0) * Number(itemData.originalQuantity || 1))}</div>
+                                      <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Exchange Balance ({selectedOrder.currency || "USD"})</label>
+                                      <div style={{ padding: "8px 10px", fontWeight: 700 }}>{formatBalance(Number(itemData.replacementPrice || 0) * Number(itemData.replacementQuantity || 1) - Number(li.price || 0) * Number(itemData.originalQuantity || 1), selectedOrder.currency || "USD")}</div>
                                     </div>
                                   </div>
                                 </div>
@@ -705,10 +746,10 @@ export default function Exchanges() {
                 /* Confirmation Screen */
                 <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
                   <div style={{ backgroundColor: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "12px", padding: "18px" }}>
-                    <div style={{ fontWeight: 700, fontSize: "15px", color: "#0f172a", marginBottom: "8px" }}>Exchange & Auto-Shopify Order Summary</div>
+                    <div style={{ fontWeight: 700, fontSize: "15px", color: "#0f172a", marginBottom: "8px" }}>Exchange request summary</div>
                     <div style={{ fontSize: "13.5px" }}><strong>Original Order:</strong> {selectedOrder?.orderNumber}</div>
                     <div style={{ fontSize: "13.5px" }}><strong>Customer Email:</strong> {selectedOrder?.customerEmail || "N/A"}</div>
-                    <div style={{ fontSize: "13.5px", color: "#10b981" }}><strong>Shopify Order Auto-Creation:</strong> ENABLED (Will generate draft order in Shopify instantly)</div>
+                    <div style={{ fontSize: "13.5px", color: "#475569" }}><strong>Approval:</strong> Pending merchant approval. The replacement order follows your configured timing after approval or warehouse inspection.</div>
                     <hr style={{ border: "none", borderTop: "1px solid #e2e8f0", margin: "12px 0" }} />
                     <div style={{ fontWeight: 700, fontSize: "13.5px", marginBottom: "8px" }}>Product Replacements (A → B):</div>
                     {Object.entries(exchangeItems).map(([lineItemId, data]) => {
@@ -717,7 +758,7 @@ export default function Exchanges() {
                         <div key={lineItemId} style={{ fontSize: "13px", paddingLeft: "12px", borderLeft: "3px solid #10b981", marginBottom: "8px" }}>
                           <div>Product A (Original): <strong>{data.originalQuantity}x {orig?.title || lineItemId}</strong></div>
                           <div>Product B (Replacement): <strong>{data.replacementQuantity}x {data.replacementTitle}</strong></div>
-                          <div>Exchange Balance: <strong>{formatBalance(Number(data.replacementPrice || 0) * Number(data.replacementQuantity || 1) - Number(orig?.price || 0) * Number(data.originalQuantity || 1))}</strong></div>
+                          <div>Exchange Balance: <strong>{formatBalance(Number(data.replacementPrice || 0) * Number(data.replacementQuantity || 1) - Number(orig?.price || 0) * Number(data.originalQuantity || 1), selectedOrder?.currency || "USD")}</strong></div>
                         </div>
                       );
                     })}
@@ -737,7 +778,7 @@ export default function Exchanges() {
                         cursor: isSubmitting ? "not-allowed" : "pointer",
                       }}
                     >
-                      {isSubmitting ? "Processing Exchange & Shopify Order..." : "Confirm & Auto-Create Shopify Order"}
+                      {isSubmitting ? "Creating request..." : "Create pending exchange request"}
                     </button>
                   </div>
                 </div>
@@ -790,11 +831,19 @@ export default function Exchanges() {
             </div>
 
             <div>
-              <h3 style={{ fontSize: "13px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", margin: "0 0 8px 0" }}>Shopify Draft Order Link</h3>
+              <h3 style={{ fontSize: "13px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", margin: "0 0 8px 0" }}>Shopify Replacement Order</h3>
               <div style={{ background: "#f8fafc", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0", fontSize: "13.5px" }}>
-                <div><strong>Draft Order Name:</strong> {selectedExchange.newOrderNumber || "Created"}</div>
-                <div style={{ fontSize: "12px", color: "#10b981", marginTop: "2px" }}>Linked to Shopify Admin</div>
+                <div><strong>Replacement order:</strong> {selectedExchange.newOrderNumber || "Not created yet"}</div>
+                <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>{selectedExchange.newOrderId ? "Linked to Shopify Admin" : selectedExchange.pendingReplacementDraft ? "Draft exists; finalization is pending" : "Creation follows merchant approval / inspection settings"}</div>
               </div>
+            </div>
+            <div>
+              <h3 style={{ fontSize: "13px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", margin: "0 0 8px 0" }}>Exchange items</h3>
+              <div style={{ display: "grid", gap: 8 }}>{selectedExchange.items.map((item: any) => <div key={item.id} style={{ border: "1px solid #e2e8f0", borderRadius: 8, padding: 10, fontSize: 12 }}><strong>{item.replacementTitle || item.replacementVariantId}</strong><div>Original line item: {item.originalLineItemId}</div><div>Quantity: {item.originalQuantity} → {item.replacementQuantity}</div><div>Price difference: {formatBalance(Number(item.priceDifference || 0), selectedExchange.currency || "USD")}</div></div>)}</div>
+            </div>
+            <div>
+              <h3 style={{ fontSize: "13px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", margin: "0 0 8px 0" }}>Full audit history</h3>
+              <div style={{ display: "grid", gap: 12 }}>{selectedExchange.timeline.map((event: any, index: number) => <div key={`${event.title}-${index}`} style={{ borderLeft: "2px solid #cbd5e1", paddingLeft: 12 }}><strong style={{ fontSize: 12 }}>{event.title}</strong><div style={{ color: "#64748b", fontSize: 11, marginTop: 3 }}>{event.date}</div><p style={{ color: "#334155", fontSize: 12, whiteSpace: "pre-wrap", overflowWrap: "anywhere", margin: "5px 0 0" }}>{event.description}</p></div>)}</div>
             </div>
           </div>
         </>

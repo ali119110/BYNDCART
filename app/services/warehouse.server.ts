@@ -1,405 +1,209 @@
 import prisma from "../db.server";
+import { transitionReturnStatus, transitionExchangeStatus } from "./stateMachine.server";
+import { getSettings } from "./settings.server";
 import { executeShopifyInventoryAdjust } from "./shopifySync.server";
-import { transitionReturnStatus } from "./stateMachine.server";
-import { enqueueJob } from "./jobs.server";
-import { triggerLifecycleNotification } from "./notifications.server";
 
-export type InspectionCondition =
-  | "RESTOCKABLE"
-  | "DAMAGED"
-  | "DEFECTIVE"
-  | "WRONG_ITEM"
-  | "MISSING_ITEM"
-  | "DISCARD";
+export type WarehouseRequestType = "RETURN" | "EXCHANGE";
+export type InspectionCondition = "RESTOCKABLE" | "DAMAGED" | "DEFECTIVE" | "WRONG_ITEM" | "MISSING_ITEM" | "DISCARD";
 
-export interface ItemInspectionInput {
-  returnItemId?: string;
-  shopifyLineItemId: string;
-  title?: string;
-  sku?: string;
-  expectedQuantity: number;
-  receivedQuantity: number;
-  condition: InspectionCondition;
-  inspectionNotes?: string;
-}
-
-export interface ProcessWarehouseIntakeInput {
+/**
+ * Records physical warehouse receipt. The warehouse scan is database-only:
+ * this function never calls a courier API or creates a courier booking.
+ */
+export async function receiveInboundRequest(input: {
   shopifyStoreId: string;
-  returnRequestId: string;
-  shipmentTrackId?: string;
+  requestType: WarehouseRequestType;
+  requestId: string;
   scannedAwb: string;
   receivedByUserId?: string;
   notes?: string;
-  admin?: any;
-  inspections: ItemInspectionInput[];
-}
+}) {
+  const scannedAwb = String(input.scannedAwb || "").trim().slice(0, 120);
+  if (scannedAwb.length < 3) throw new Error("Scan or enter the carrier tracking number / airway bill.");
 
-export interface InboundShipmentLookupResult {
-  found: boolean;
-  alreadyReceived: boolean;
-  existingIntakeId?: string;
-  shipment?: {
-    id: string;
-    courier: string;
-    trackingNumber: string;
-    status: string;
-  };
-  returnRequest?: {
-    id: string;
-    orderNumber: string;
-    customerName: string;
-    customerEmail: string;
-    status: string;
-    reason: string;
-    items: Array<{
-      id: string;
-      shopifyLineItemId: string;
-      title: string;
-      sku: string;
-      expectedQuantity: number;
-      reason: string;
-    }>;
-  };
-}
+  const request = input.requestType === "RETURN"
+    ? await prisma.returnRequest.findFirst({ where: { id: input.requestId, shopifyStoreId: input.shopifyStoreId }, include: { items: true } })
+    : await prisma.exchangeRequest.findFirst({ where: { id: input.requestId, shopifyStoreId: input.shopifyStoreId }, include: { items: true } });
+  if (!request) throw new Error(`${input.requestType.toLowerCase()} request was not found for this store.`);
 
-/**
- * Searches and validates inbound return shipments by scanned AWB tracking number.
- * Enforces strict tenant isolation and prevents cross-merchant scans or duplicate intake.
- */
-export async function lookupInboundShipmentByAwb(
-  shopifyStoreId: string,
-  scannedAwb: string
-): Promise<InboundShipmentLookupResult> {
-  const normalizedAwb = scannedAwb.trim();
-  if (!normalizedAwb) {
-    throw new Error("Scanned AWB tracking number cannot be empty.");
+  const duplicateAwb = await prisma.warehouseIntake.findFirst({ where: { shopifyStoreId: input.shopifyStoreId, scannedAwb } });
+  if (duplicateAwb) {
+    const sameRequest = input.requestType === "RETURN"
+      ? duplicateAwb.returnRequestId === input.requestId
+      : duplicateAwb.exchangeRequestId === input.requestId;
+    if (sameRequest) return { success: true, idempotent: true, intake: duplicateAwb };
+    throw new Error("This airway bill has already been scanned for another request in this store.");
   }
+  if (request.status !== "APPROVED") throw new Error(`Only an approved ${input.requestType.toLowerCase()} can be received. Current status: ${request.status}.`);
 
-  // Cross-tenant check: verify tracking number does not belong to a different store
-  const globalShipment = await prisma.shipmentTrack.findUnique({
-    where: { trackingNumber: normalizedAwb },
-  });
+  let shipment = await prisma.shipmentTrack.findFirst({ where: input.requestType === "RETURN"
+    ? { shopifyStoreId: input.shopifyStoreId, returnRequestId: input.requestId, trackingNumber: scannedAwb }
+    : { shopifyStoreId: input.shopifyStoreId, exchangeRequestId: input.requestId, trackingNumber: scannedAwb } });
 
-  if (globalShipment && globalShipment.shopifyStoreId !== shopifyStoreId) {
-    throw new Error(
-      `Cross-merchant shipment scan rejected: tracking number '${normalizedAwb}' belongs to a different merchant store.`
-    );
-  }
-
-  // Find shipment for current tenant
-  let shipment = globalShipment;
+  // Warehouse may receive a parcel even if the customer did not submit tracking.
+  // Keep the scanned airway bill without contacting any carrier.
   if (!shipment) {
-    shipment = await prisma.shipmentTrack.findFirst({
-      where: {
-        shopifyStoreId,
-        trackingNumber: { equals: normalizedAwb, mode: "insensitive" },
+    shipment = await prisma.shipmentTrack.create({
+      data: {
+        shopifyStoreId: input.shopifyStoreId,
+        shopifyOrderId: request.shopifyOrderId,
+        orderNumber: request.orderNumber,
+        type: input.requestType,
+        courier: "MANUAL",
+        trackingNumber: scannedAwb,
+        status: "DELIVERED",
+        returnRequestId: input.requestType === "RETURN" ? input.requestId : null,
+        exchangeRequestId: input.requestType === "EXCHANGE" ? input.requestId : null,
       },
     });
+  } else if (shipment.status !== "DELIVERED") {
+    shipment = await prisma.shipmentTrack.update({ where: { id: shipment.id }, data: { status: "DELIVERED", location: "Warehouse received" } });
+  }
+  // Record the physical arrival regardless of whether tracking was entered by
+  // the customer earlier or scanned for the first time at the warehouse.
+  const arrivalEvent = await prisma.shipmentEvent.findFirst({ where: { shipmentTrackId: shipment.id, status: "DELIVERED" } });
+  if (!arrivalEvent) {
+    await prisma.shipmentEvent.create({ data: { shipmentTrackId: shipment.id, status: "DELIVERED", description: "Warehouse received parcel by physical scan; no carrier API was used." } });
   }
 
-  let returnRequest = null;
-
-  if (shipment?.returnRequestId) {
-    returnRequest = await prisma.returnRequest.findFirst({
-      where: { id: shipment.returnRequestId, shopifyStoreId },
-      include: { items: true },
-    });
-  }
-
-  // Fallback lookup: if shipment tracking record not found directly, search ReturnRequest by orderNumber or ID
-  if (!returnRequest) {
-    const formattedOrderNumber = normalizedAwb.startsWith("#") ? normalizedAwb : `#${normalizedAwb}`;
-    returnRequest = await prisma.returnRequest.findFirst({
-      where: {
-        shopifyStoreId,
-        OR: [
-          { orderNumber: { equals: formattedOrderNumber, mode: "insensitive" } },
-          { id: normalizedAwb },
-        ],
-      },
-      include: { items: true },
-    });
-  }
-
-  if (!returnRequest) {
-    return {
-      found: false,
-      alreadyReceived: false,
-    };
-  }
-
-  // Check if warehouse intake was already completed for this return request / AWB
-  const existingIntake = await prisma.warehouseIntake.findFirst({
-    where: {
-      shopifyStoreId,
-      returnRequestId: returnRequest.id,
+  const intake = await prisma.warehouseIntake.create({
+    data: {
+      shopifyStoreId: input.shopifyStoreId,
+      shipmentTrackId: shipment.id,
+      returnRequestId: input.requestType === "RETURN" ? input.requestId : null,
+      exchangeRequestId: input.requestType === "EXCHANGE" ? input.requestId : null,
+      scannedAwb,
+      receivedByUserId: input.receivedByUserId || null,
+      status: "RECEIVED",
+      notes: input.notes || null,
     },
+    include: { inspections: true },
+  });
+  await prisma.auditLog.create({
+    data: { shopifyStoreId: input.shopifyStoreId, action: `${input.requestType}_WAREHOUSE_RECEIVED`, entityType: input.requestType === "RETURN" ? "ReturnRequest" : "ExchangeRequest", entityId: input.requestId, userId: input.receivedByUserId || undefined, metadata: { intakeId: intake.id, scannedAwb, shipmentTrackId: shipment.id } },
   });
 
-  // Query synced order line items to get item title & SKU details
-  const syncedOrder = await prisma.order.findFirst({
-    where: { shopifyStoreId, shopifyOrderId: returnRequest.shopifyOrderId },
-  });
-
-  const orderLineItemsMap = new Map<string, { title: string; sku: string }>();
-  if (syncedOrder && Array.isArray(syncedOrder.lineItems)) {
-    for (const li of syncedOrder.lineItems as any[]) {
-      orderLineItemsMap.set(li.lineItemId, {
-        title: li.title || "Returned Product",
-        sku: li.sku || li.variantId || "N/A",
-      });
-    }
-  }
-
-  const items = returnRequest.items.map((item) => {
-    const details = orderLineItemsMap.get(item.shopifyLineItemId) || {
-      title: "Returned Product",
-      sku: "N/A",
-    };
-    return {
-      id: item.id,
-      shopifyLineItemId: item.shopifyLineItemId,
-      title: details.title,
-      sku: details.sku,
-      expectedQuantity: item.quantity,
-      reason: item.reason,
-    };
-  });
-
-  return {
-    found: true,
-    alreadyReceived: !!existingIntake,
-    existingIntakeId: existingIntake?.id,
-    shipment: shipment
-      ? {
-          id: shipment.id,
-          courier: shipment.courier,
-          trackingNumber: shipment.trackingNumber,
-          status: shipment.status,
-        }
-      : {
-          id: "virtual-shipment",
-          courier: "STANDARD",
-          trackingNumber: normalizedAwb,
-          status: "LABEL_CREATED",
-        },
-    returnRequest: {
-      id: returnRequest.id,
-      orderNumber: returnRequest.orderNumber,
-      customerName: returnRequest.customerName || "Customer",
-      customerEmail: returnRequest.customerEmail,
-      status: returnRequest.status,
-      reason: returnRequest.reason || "Return Request",
-      items,
-    },
-  };
+  const updated = input.requestType === "RETURN"
+    ? await transitionReturnStatus({ id: input.requestId, shopifyStoreId: input.shopifyStoreId, targetStatus: "RECEIVED", userId: input.receivedByUserId })
+    : await transitionExchangeStatus({ id: input.requestId, shopifyStoreId: input.shopifyStoreId, targetStatus: "RECEIVED", userId: input.receivedByUserId });
+  return { success: true, idempotent: false, intake, request: updated };
 }
 
 /**
- * Processes warehouse intake & item condition inspection.
- * Idempotent, tenant-scoped, triggers inventory restocks for RESTOCKABLE items,
- * enqueues BackgroundJobs on inventory failure, and updates Return lifecycle.
+ * Saves a complete, item-by-item inspection. Every requested original line item
+ * must appear once; requested quantities and line item IDs are server-validated.
  */
-export async function processWarehouseIntake(input: ProcessWarehouseIntakeInput) {
-  const {
-    shopifyStoreId,
-    returnRequestId,
-    shipmentTrackId,
-    scannedAwb,
-    receivedByUserId,
-    notes,
-    admin,
-    inspections,
-  } = input;
-
-  const returnRequest = await prisma.returnRequest.findFirst({
-    where: { id: returnRequestId, shopifyStoreId },
-    include: { items: true },
+export async function completeWarehouseInspection(input: {
+  shopifyStoreId: string;
+  intakeId: string;
+  inspectedByUserId?: string;
+  notes?: string;
+  items: Array<{
+    shopifyLineItemId: string;
+    receivedQuantity: number;
+    condition: InspectionCondition;
+    inspectionNotes?: string;
+    sku?: string;
+    title?: string;
+  }>;
+}) {
+  const intake = await prisma.warehouseIntake.findFirst({
+    where: { id: input.intakeId, shopifyStoreId: input.shopifyStoreId },
+    include: { inspections: true },
   });
+  if (!intake) throw new Error("Warehouse intake not found for this store.");
+  if (intake.status === "INSPECTED") return { success: true, idempotent: true, intake };
+  if (intake.status !== "RECEIVED") throw new Error(`Only a received package can be inspected (current status: ${intake.status}).`);
+  const requestType: WarehouseRequestType = intake.returnRequestId ? "RETURN" : "EXCHANGE";
+  const requestId = intake.returnRequestId || intake.exchangeRequestId;
+  if (!requestId) throw new Error("Warehouse intake is not linked to a return or exchange request.");
+  const request = requestType === "RETURN"
+    ? await prisma.returnRequest.findFirst({ where: { id: requestId, shopifyStoreId: input.shopifyStoreId }, include: { items: true } })
+    : await prisma.exchangeRequest.findFirst({ where: { id: requestId, shopifyStoreId: input.shopifyStoreId }, include: { items: true } });
+  if (!request) throw new Error("Linked return/exchange request was not found.");
+  if (request.status !== "RECEIVED") throw new Error(`The request must be at warehouse-received status before inspection (current status: ${request.status}).`);
 
-  if (!returnRequest) {
-    throw new Error(`Return request ${returnRequestId} not found for store ${shopifyStoreId}`);
-  }
-
-  // Idempotency check: prevent duplicate receiving of the same package
-  const existingIntake = await prisma.warehouseIntake.findFirst({
-    where: {
-      shopifyStoreId,
-      returnRequestId,
-    },
+  const settings = requestType === "RETURN" ? await getSettings(input.shopifyStoreId) : null;
+  const requestItems = request.items as any[];
+  const itemByLineId = new Map<string, any>(requestItems.map((item: any) => [requestType === "RETURN" ? item.shopifyLineItemId : item.originalLineItemId, item]));
+  const suppliedIds = new Set<string>();
+  const inspections = input.items.map((item) => {
+    const lineId = String(item.shopifyLineItemId || "").trim();
+    const requestItem = itemByLineId.get(lineId);
+    if (!requestItem) throw new Error(`Line item ${lineId || "(empty)"} is not part of this request.`);
+    if (suppliedIds.has(lineId)) throw new Error(`Line item ${lineId} was inspected more than once.`);
+    suppliedIds.add(lineId);
+    const expectedQuantity = requestType === "RETURN" ? Number(requestItem.quantity) : Number(requestItem.originalQuantity);
+    const receivedQuantity = Number(item.receivedQuantity);
+    if (!Number.isInteger(receivedQuantity) || receivedQuantity < 0 || receivedQuantity > expectedQuantity) throw new Error(`Received quantity for ${lineId} must be between 0 and ${expectedQuantity}.`);
+    const allowed: InspectionCondition[] = ["RESTOCKABLE", "DAMAGED", "DEFECTIVE", "WRONG_ITEM", "MISSING_ITEM", "DISCARD"];
+    if (!allowed.includes(item.condition)) throw new Error(`Invalid inspection condition for ${lineId}.`);
+    return { requestItem, lineId, expectedQuantity, receivedQuantity, condition: item.condition, notes: String(item.inspectionNotes || "").slice(0, 2000), sku: item.sku ? String(item.sku).slice(0, 120) : null, title: item.title ? String(item.title).slice(0, 250) : null };
   });
-
-  if (existingIntake) {
-    console.log(
-      `[Warehouse] Idempotent skip: Package intake already processed for Return ${returnRequestId} (Intake ID: ${existingIntake.id})`
-    );
-    return {
-      success: true,
-      intakeId: existingIntake.id,
-      returnStatus: returnRequest.status,
-      idempotent: true,
-    };
+  if (suppliedIds.size !== requestItems.length || requestItems.some((item: any) => !suppliedIds.has(requestType === "RETURN" ? item.shopifyLineItemId : item.originalLineItemId))) {
+    throw new Error("Submit an inspection result for every item in this request before completing inspection.");
   }
 
-  if (!inspections || inspections.length === 0) {
-    throw new Error("Cannot process warehouse intake without item inspection records.");
-  }
-
-  // Execute database transaction to create WarehouseIntake & ItemInspection records
-  const intakeResult = await prisma.$transaction(async (tx) => {
-    const intake = await tx.warehouseIntake.create({
-      data: {
-        shopifyStoreId,
-        returnRequestId,
-        shipmentTrackId: shipmentTrackId || null,
-        scannedAwb,
-        receivedByUserId,
-        status: "INSPECTED",
-        notes,
-      },
-    });
-
-    const createdInspections = [];
-    for (const item of inspections) {
-      const insp = await tx.itemInspection.create({
+  await prisma.$transaction(async (tx) => {
+    for (const inspection of inspections) {
+      await tx.itemInspection.create({
         data: {
           warehouseIntakeId: intake.id,
-          returnItemId: item.returnItemId || null,
-          shopifyLineItemId: item.shopifyLineItemId,
-          title: item.title || "Returned Item",
-          sku: item.sku || "N/A",
-          expectedQuantity: item.expectedQuantity,
-          receivedQuantity: item.receivedQuantity,
-          condition: item.condition,
-          inspectionNotes: item.inspectionNotes,
-          restockedInShopify: false,
+          returnItemId: requestType === "RETURN" ? inspection.requestItem.id : null,
+          exchangeItemId: requestType === "EXCHANGE" ? inspection.requestItem.id : null,
+          shopifyLineItemId: inspection.lineId,
+          title: inspection.title || inspection.requestItem.replacementTitle || null,
+          sku: inspection.sku,
+          expectedQuantity: inspection.expectedQuantity,
+          receivedQuantity: inspection.receivedQuantity,
+          condition: inspection.condition,
+          inspectionNotes: inspection.notes || null,
         },
       });
-      createdInspections.push(insp);
+      if (requestType === "RETURN") {
+        await tx.returnItem.update({ where: { id: inspection.requestItem.id }, data: { status: "INSPECTED" } });
+      } else {
+        await tx.exchangeItem.update({ where: { id: inspection.requestItem.id }, data: { status: "INSPECTED" } });
+      }
     }
-
-    if (shipmentTrackId && shipmentTrackId !== "virtual-shipment") {
-      await tx.shipmentTrack.updateMany({
-        where: { id: shipmentTrackId, shopifyStoreId },
-        data: { status: "DELIVERED" },
-      });
-    }
-
+    await tx.warehouseIntake.update({ where: { id: intake.id }, data: { status: "INSPECTED", notes: [intake.notes, input.notes].filter(Boolean).join("\n") || null } });
     await tx.auditLog.create({
-      data: {
-        shopifyStoreId,
-        userId: receivedByUserId,
-        action: "WAREHOUSE_PACKAGE_RECEIVED",
-        entityType: "WarehouseIntake",
-        entityId: intake.id,
-        metadata: {
-          scannedAwb,
-          returnRequestId,
-          inspectedItemCount: inspections.length,
-        },
-      },
+      data: { shopifyStoreId: input.shopifyStoreId, action: `${requestType}_WAREHOUSE_INSPECTION_COMPLETED`, entityType: requestType === "RETURN" ? "ReturnRequest" : "ExchangeRequest", entityId: requestId, userId: input.inspectedByUserId || undefined, metadata: { intakeId: intake.id, items: inspections.map((row) => ({ lineItemId: row.lineId, expectedQuantity: row.expectedQuantity, receivedQuantity: row.receivedQuantity, condition: row.condition, notes: row.notes })) } },
     });
 
-    return { intake, inspections: createdInspections };
+    if (requestType === "RETURN") {
+      const order = await tx.order.findFirst({ where: { shopifyStoreId: input.shopifyStoreId, shopifyOrderId: request.shopifyOrderId } });
+      const orderLines = Array.isArray(order?.lineItems) ? order!.lineItems as any[] : [];
+      const valueForReceivedItems = inspections.reduce((sum, row) => {
+        const orderLine = orderLines.find((line: any) => String(line.lineItemId) === row.lineId);
+        return sum + Math.max(0, Number(orderLine?.price || 0)) * row.receivedQuantity;
+      }, 0);
+      const fee = valueForReceivedItems * Number(settings?.restockingFeePercent || 0) / 100;
+      const calculatedRefund = Math.max(0, Number((valueForReceivedItems - fee).toFixed(2)));
+      await tx.returnRequest.update({ where: { id: requestId }, data: { refundAmount: calculatedRefund, inspectionCompletedAt: new Date() } });
+    } else {
+      await tx.exchangeRequest.update({ where: { id: requestId }, data: { inspectionCompletedAt: new Date() } });
+    }
   });
 
-  // Handle inventory restocks for items marked RESTOCKABLE
-  const restockableItems = inspections.filter(
-    (i) => i.condition === "RESTOCKABLE" && i.receivedQuantity > 0
-  );
+  const updatedRequest = requestType === "RETURN"
+    ? await transitionReturnStatus({ id: requestId, shopifyStoreId: input.shopifyStoreId, targetStatus: "INSPECTED", userId: input.inspectedByUserId })
+    : await transitionExchangeStatus({ id: requestId, shopifyStoreId: input.shopifyStoreId, targetStatus: "INSPECTED", userId: input.inspectedByUserId });
 
-  let inventoryRestocked = false;
-  if (restockableItems.length > 0) {
+  // Only RESTOCKABLE quantities are eligible for stock adjustment. The sync
+  // helper resolves Shopify InventoryItem IDs; it must never use LineItem IDs.
+  if (requestType === "RETURN" && inspections.some((row) => row.condition === "RESTOCKABLE" && row.receivedQuantity > 0)) {
     try {
-      await executeShopifyInventoryAdjust({ shopifyStoreId, entityId: returnRequestId, admin });
-      inventoryRestocked = true;
-      await prisma.itemInspection.updateMany({
-        where: { warehouseIntakeId: intakeResult.intake.id, condition: "RESTOCKABLE" },
-        data: { restockedInShopify: true },
-      });
-    } catch (err: any) {
-      console.error(
-        `[Warehouse] Live inventory restock failed for Return ${returnRequestId}:`,
-        err?.message || err
-      );
-      // Enqueue retryable background job for inventory adjustment failure
-      await enqueueJob({
-        shopifyStoreId,
-        type: "SHOPIFY_INVENTORY_ADJUST",
-        payload: { returnRequestId },
-      });
+      const restock = await executeShopifyInventoryAdjust({ shopifyStoreId: input.shopifyStoreId, entityId: requestId });
+      if (!restock?.success) {
+        await prisma.auditLog.create({ data: { shopifyStoreId: input.shopifyStoreId, action: "SHOPIFY_INVENTORY_RESTOCK_FAILED", entityType: "ReturnRequest", entityId: requestId, metadata: { reason: restock?.reason || "Shopify restock was not confirmed" } } });
+      }
+    } catch (error: any) {
+      await prisma.auditLog.create({ data: { shopifyStoreId: input.shopifyStoreId, action: "SHOPIFY_INVENTORY_RESTOCK_FAILED", entityType: "ReturnRequest", entityId: requestId, metadata: { error: String(error?.message || error) } } });
+      console.error("[Warehouse] Inspection is complete, but Shopify restock failed:", error);
     }
   }
 
-  // Update Return Request lifecycle to COMPLETED via central state machine
-  const updatedReturn = await transitionReturnStatus({
-    id: returnRequestId,
-    shopifyStoreId,
-    targetStatus: "COMPLETED",
-    userId: receivedByUserId,
-    admin,
-  });
-
-  await prisma.auditLog.create({
-    data: {
-      shopifyStoreId,
-      userId: receivedByUserId,
-      action: "WAREHOUSE_INSPECTION_COMPLETED",
-      entityType: "ReturnRequest",
-      entityId: returnRequestId,
-      metadata: {
-        intakeId: intakeResult.intake.id,
-        inventoryRestocked,
-        finalStatus: updatedReturn.status,
-      },
-    },
-  });
-
-  // Trigger non-blocking RETURN_RECEIVED & INSPECTION_COMPLETED notifications
-  await triggerLifecycleNotification({
-    shopifyStoreId,
-    eventType: "RETURN_RECEIVED",
-    entityId: intakeResult.intake.id,
-    recipientEmail: updatedReturn.customerEmail,
-    variables: {
-      customer_name: updatedReturn.customerName || "Customer",
-      order_number: updatedReturn.orderNumber,
-    },
-  });
-
-  await triggerLifecycleNotification({
-    shopifyStoreId,
-    eventType: "INSPECTION_COMPLETED",
-    entityId: `${intakeResult.intake.id}_inspected`,
-    recipientEmail: updatedReturn.customerEmail,
-    variables: {
-      customer_name: updatedReturn.customerName || "Customer",
-      order_number: updatedReturn.orderNumber,
-      condition: inspections[0]?.condition || "RESTOCKABLE",
-    },
-  });
-
-  return {
-    success: true,
-    intakeId: intakeResult.intake.id,
-    returnStatus: updatedReturn.status,
-    inventoryRestocked,
-    idempotent: false,
-  };
-}
-
-/**
- * Fetches historical warehouse intake records for a tenant.
- */
-export async function getWarehouseIntakes(shopifyStoreId: string, limit = 50) {
-  return await prisma.warehouseIntake.findMany({
-    where: { shopifyStoreId },
-    include: {
-      inspections: true,
-      returnRequest: true,
-      shipmentTrack: true,
-    },
-    orderBy: { receivedAt: "desc" },
-    take: limit,
-  });
+  const refreshedIntake = await prisma.warehouseIntake.findFirst({ where: { id: intake.id, shopifyStoreId: input.shopifyStoreId }, include: { inspections: true } });
+  return { success: true, idempotent: false, intake: refreshedIntake, request: updatedRequest };
 }

@@ -215,33 +215,82 @@ export async function syncCustomerOrder(shopifyStoreId: string, orderNumber: str
   return searchOrSyncOrders({ shopifyStoreId, admin, query: `name:${stripped}` });
 }
 
-/** Search Shopify directly when the local order snapshot does not contain a match. */
+/**
+ * Searches Shopify for the requested query and returns those matching orders.
+ * The old implementation synced matching orders, then returned the newest 100
+ * cached orders, which meant the visible results did not correspond to the query.
+ */
 export async function searchOrSyncOrders({ shopifyStoreId, admin, query }: SyncOrdersInput & { query: string }) {
   const normalizedQuery = query.trim();
-  if (!admin || !normalizedQuery) return getStoreOrders(shopifyStoreId, 100);
+  if (!normalizedQuery) return [];
 
-  const response: any = await admin.graphql(
-    `#graphql
-    query searchOrders($query: String!) {
-      orders(first: 50, query: $query, sortKey: CREATED_AT, reverse: true) {
-        edges { node {
-          id name email createdAt displayFinancialStatus displayFulfillmentStatus
-          totalPriceSet { shopMoney { amount currencyCode } }
-          customer { firstName lastName email }
-          lineItems(first: 50) { edges { node { id title quantity originalUnitPriceSet { shopMoney { amount } } variant { id product { id } } } } }
-        } }
-      }
-    }`,
-    { variables: { query: normalizedQuery } }
-  );
-  const { data } = await response.json();
-  for (const edge of data?.orders?.edges ?? []) await upsertOrder(shopifyStoreId, mapGraphqlOrder(edge.node));
-  return getStoreOrders(shopifyStoreId, 100);
+  if (!admin) {
+    // Local/dev fallback: filter a larger tenant-scoped snapshot in memory.
+    const cached = await prisma.order.findMany({
+      where: { shopifyStoreId },
+      orderBy: { shopifyCreatedAt: "desc" },
+      take: 1000,
+    });
+    const q = normalizedQuery.toLowerCase().replace(/^#/, "");
+    const matches = cached.filter((order: any) => {
+      const lines = Array.isArray(order.lineItems) ? order.lineItems : [];
+      return String(order.orderNumber || "").toLowerCase().replace(/^#/, "").includes(q)
+        || String(order.customerName || "").toLowerCase().includes(q)
+        || String(order.customerEmail || "").toLowerCase().includes(q)
+        || lines.some((line: any) => String(line.title || "").toLowerCase().includes(q));
+    });
+    return annotateOrders(shopifyStoreId, matches);
+  }
+
+  const mappedOrders: MappedOrder[] = [];
+  let cursor: string | null = null;
+  let hasNextPage = true;
+  const maxSearchResults = 500;
+
+  while (hasNextPage && mappedOrders.length < maxSearchResults) {
+    const response: any = await admin.graphql(
+      `#graphql
+      query searchOrders($query: String!, $cursor: String) {
+        orders(first: 100, after: $cursor, query: $query, sortKey: CREATED_AT, reverse: true) {
+          pageInfo { hasNextPage endCursor }
+          edges { node {
+            id name email createdAt displayFinancialStatus displayFulfillmentStatus
+            totalPriceSet { shopMoney { amount currencyCode } }
+            customer { firstName lastName email }
+            lineItems(first: 50) { edges { node {
+              id title quantity originalUnitPriceSet { shopMoney { amount } }
+              variant { id product { id } }
+            } } }
+          } }
+        }
+      }`,
+      { variables: { query: normalizedQuery, cursor } }
+    );
+    const payload = await response.json();
+    const errors = payload?.errors || [];
+    if (errors.length) throw new Error(`Shopify order search failed: ${errors.map((e: any) => e.message).join("; ")}`);
+    const orderConnection = payload?.data?.orders;
+    const edges = orderConnection?.edges ?? [];
+    for (const edge of edges) mappedOrders.push(mapGraphqlOrder(edge.node));
+    hasNextPage = Boolean(orderConnection?.pageInfo?.hasNextPage);
+    cursor = orderConnection?.pageInfo?.endCursor ?? null;
+    if (!edges.length || !cursor) break;
+  }
+
+  // Upsert the exact search results, then return those IDs—not the newest cached
+  // orders. Pagination supports broad customer/product searches beyond page one.
+  for (const mapped of mappedOrders) await upsertOrder(shopifyStoreId, mapped);
+  if (!mappedOrders.length) return [];
+  const matchingIds = mappedOrders.map((order) => order.shopifyOrderId);
+  const matchedOrders = await prisma.order.findMany({
+    where: { shopifyStoreId, shopifyOrderId: { in: matchingIds } },
+    orderBy: { shopifyCreatedAt: "desc" },
+  });
+  return annotateOrders(shopifyStoreId, matchedOrders);
 }
 
 /**
- * Retrieves orders for a store, annotated with return/exchange status
- * pulled from ReturnRequest / ExchangeRequest (matched by shopifyOrderId).
+ * Retrieves orders for a store, annotated with return/exchange status.
  */
 export async function getStoreOrders(shopifyStoreId: string, limit = 50, admin?: any) {
   const orders = await prisma.order.findMany({
@@ -255,26 +304,33 @@ export async function getStoreOrders(shopifyStoreId: string, limit = 50, admin?:
     return getStoreOrders(shopifyStoreId, limit);
   }
   if (orders.length === 0) return [];
+  return annotateOrders(shopifyStoreId, orders);
+}
 
-  const orderIds = orders.map((o) => o.shopifyOrderId);
-
+async function annotateOrders(shopifyStoreId: string, orders: any[]) {
+  if (!orders.length) return [];
+  const orderIds = orders.map((order) => order.shopifyOrderId);
   const [returns, exchanges] = await Promise.all([
     prisma.returnRequest.findMany({
       where: { shopifyStoreId, shopifyOrderId: { in: orderIds } },
-      select: { shopifyOrderId: true, status: true },
+      select: { shopifyOrderId: true, status: true, updatedAt: true },
+      orderBy: { updatedAt: "desc" },
     }),
     prisma.exchangeRequest.findMany({
       where: { shopifyStoreId, shopifyOrderId: { in: orderIds } },
-      select: { shopifyOrderId: true, status: true },
+      select: { shopifyOrderId: true, status: true, updatedAt: true },
+      orderBy: { updatedAt: "desc" },
     }),
   ]);
 
-  const returnStatusByOrder = new Map(returns.map((r) => [r.shopifyOrderId, r.status]));
-  const exchangeStatusByOrder = new Map(exchanges.map((e) => [e.shopifyOrderId, e.status]));
+  const returnStatusByOrder = new Map<string, string>();
+  const exchangeStatusByOrder = new Map<string, string>();
+  for (const record of returns) if (!returnStatusByOrder.has(record.shopifyOrderId)) returnStatusByOrder.set(record.shopifyOrderId, record.status);
+  for (const record of exchanges) if (!exchangeStatusByOrder.has(record.shopifyOrderId)) exchangeStatusByOrder.set(record.shopifyOrderId, record.status);
 
   return orders.map((order) => ({
     ...order,
-    totalPrice: Number(order.totalPrice), // Decimal doesn't serialize across loader boundary
+    totalPrice: Number(order.totalPrice),
     returnStatus: returnStatusByOrder.get(order.shopifyOrderId) ?? "None",
     exchangeStatus: exchangeStatusByOrder.get(order.shopifyOrderId) ?? "None",
   }));

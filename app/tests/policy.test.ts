@@ -109,6 +109,21 @@ prisma.returnRequest.findFirst = (async (args: any) => {
   );
 }) as any;
 
+prisma.returnRequest.findMany = (async (args: any) => {
+  const lineId = args?.include?.items?.where?.shopifyLineItemId;
+  return mockReturnRequests
+    .filter((request) => request.shopifyStoreId === args.where.shopifyStoreId && request.shopifyOrderId === args.where.shopifyOrderId)
+    .filter((request) => !args.where.status?.notIn || !args.where.status.notIn.includes(request.status))
+    .map((request) => ({
+      ...request,
+      items: (request.items || []).filter((item: any) => !lineId || item.shopifyLineItemId === lineId),
+    }));
+}) as any;
+
+prisma.exchangeRequest.findMany = (async () => []) as any;
+
+(prisma as any).productCache = { findMany: async () => [] };
+
 prisma.exchangeRequest.findFirst = (async (args: any) => {
   const storeId = args.where.shopifyStoreId;
   const ordNum = args.where.orderNumber;
@@ -158,6 +173,7 @@ test("Return Policy Engine — Valid Return Check", async () => {
     orderNumber: "#1001",
     customerEmail: "valid@example.pk",
     shopifyCreatedAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000), // 5 days old
+    lineItems: [{ lineItemId: "gid://shopify/LineItem/1", quantity: 1, price: 1000, sku: "SHIRT-M", title: "Shirt" }],
   });
 
   const res = await checkReturnEligibility({
@@ -223,6 +239,10 @@ test("Return Policy Engine — Excluded Product / SKU Check", async () => {
     orderNumber: "#1003",
     customerEmail: "sku@example.pk",
     shopifyCreatedAt: new Date(),
+    lineItems: [
+      { lineItemId: "li-1", quantity: 1, price: 1000, sku: "FINAL-SALE-SKU", title: "Final sale" },
+      { lineItemId: "li-2", quantity: 1, price: 1000, productId: "gid://shopify/Product/999", title: "Excluded product" },
+    ],
   });
 
   const resSku = await checkReturnEligibility({
@@ -264,6 +284,7 @@ test("Return Policy Engine — Excluded Category Check", async () => {
     orderNumber: "#1004",
     customerEmail: "cat@example.pk",
     shopifyCreatedAt: new Date(),
+    lineItems: [{ lineItemId: "li-3", quantity: 1, price: 1000, category: "Lingerie", title: "Set" }],
   });
 
   const res = await checkReturnEligibility({
@@ -291,6 +312,7 @@ test("Return Policy Engine — Sale / Discounted Item Restriction", async () => 
     orderNumber: "#1005",
     customerEmail: "sale@example.pk",
     shopifyCreatedAt: new Date(),
+    lineItems: [{ lineItemId: "li-4", quantity: 1, price: 1500, originalPrice: 3000, title: "Sale item" }],
   });
 
   const res = await checkReturnEligibility({
@@ -318,6 +340,7 @@ test("Return Policy Engine — Maximum Return Quantity Limit", async () => {
     orderNumber: "#1006",
     customerEmail: "qty@example.pk",
     shopifyCreatedAt: new Date(),
+    lineItems: [{ lineItemId: "li-5", quantity: 5, price: 1000, title: "Bulk item" }],
   });
 
   const res = await checkReturnEligibility({
@@ -368,23 +391,30 @@ test("Return Policy Engine — Previous Return Request Restriction", async () =>
   mockOrders.push({
     id: "ord-8",
     shopifyStoreId: "store-1",
+    shopifyOrderId: "gid://shopify/Order/1008",
     orderNumber: "#1008",
     customerEmail: "prev@example.pk",
     shopifyCreatedAt: new Date(),
+    lineItems: [
+      { lineItemId: "li-prev", quantity: 2, price: 1000, title: "Already requested" },
+      { lineItemId: "li-other", quantity: 1, price: 1000, title: "Still available" },
+    ],
   });
 
-  // Active return already exists
   mockReturnRequests.push({
     id: "ret-existing",
     shopifyStoreId: "store-1",
+    shopifyOrderId: "gid://shopify/Order/1008",
     orderNumber: "#1008",
     status: "PENDING",
+    items: [{ shopifyLineItemId: "li-prev", quantity: 2 }],
   });
 
   const res = await checkReturnEligibility({
     shopifyStoreId: "store-1",
     orderNumber: "#1008",
     customerEmail: "prev@example.pk",
+    requestedItems: [{ shopifyLineItemId: "li-prev", quantity: 1 }],
   });
 
   assert.strictEqual(res.eligible, false);
@@ -428,6 +458,7 @@ test("Return Policy Engine — Server-Side Frontend Bypass Attempt Blocking", as
     orderNumber: "#1010",
     customerEmail: "hacker@example.pk",
     shopifyCreatedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 days old (expired)
+    lineItems: [{ lineItemId: "li-10", quantity: 1, price: 2000, title: "Expired item" }],
   });
 
   const validToken = createCustomerSessionToken({
