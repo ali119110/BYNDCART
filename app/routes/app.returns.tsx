@@ -5,23 +5,20 @@ import { requireTenantContext } from "../utils/tenant.server";
 import prisma from "../db.server";
 import { getReturnRequests, updateReturnRequestStatus, createReturnRequest } from "../services/returns.server";
 import { getCustomerRiskFlagsForEmails } from "../services/fraud.server";
-import { getStoreOrders, searchOrSyncOrders } from "../services/orders.server";
+import { searchOrSyncOrders } from "../services/orders.server";
 
 // ===== LOADER: Fetch returns and store orders from database =====
 export async function loader({ request }: Route.LoaderArgs) {
-  const { shopifyStoreId, admin } = await requireTenantContext(request);
+  const { shopifyStoreId } = await requireTenantContext(request);
 
   try {
-    const [returns, orders] = await Promise.all([
-      getReturnRequests(shopifyStoreId),
-      getStoreOrders(shopifyStoreId, 100, admin),
-    ]);
+    const returns = await getReturnRequests(shopifyStoreId);
     const emails = returns.map((r) => r.customerEmail);
     const riskFlags = await getCustomerRiskFlagsForEmails(shopifyStoreId, emails);
 
     return {
       returns,
-      orders,
+      orders: [],
       // Map isn't serializable across the loader boundary, convert to plain object
       riskFlags: Object.fromEntries(riskFlags),
     };
@@ -42,7 +39,14 @@ export async function action({ request }: Route.ActionArgs) {
   const actionType = formData.get("actionType") as string;
 
   if (actionType === "SEARCH_ORDERS") {
-    return { orders: await searchOrSyncOrders({ shopifyStoreId, admin, query: String(formData.get("query") || "") }) };
+    const query = String(formData.get("query") || "").trim();
+    if (query.length < 2) return { query, orders: [] };
+    try {
+      return { query, orders: await searchOrSyncOrders({ shopifyStoreId, admin, query }) };
+    } catch (error) {
+      console.error("[Manual Return] Shopify search failed:", error);
+      return { query, orders: [], error: error instanceof Error ? error.message : "Shopify order search failed. Please try again." };
+    }
   }
 
   if (actionType === "CREATE_MANUAL_RETURN") {
@@ -134,15 +138,17 @@ export async function action({ request }: Route.ActionArgs) {
 
 // ===== COMPONENT =====
 export default function Returns() {
-  const { returns: dbReturns, orders: dbOrders = [], riskFlags } = useLoaderData<typeof loader>();
+  const { returns: dbReturns, riskFlags } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   const orderSearchFetcher = useFetcher<typeof action>();
   // Manual Return Creation Modal State
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [orderSearchQuery, setOrderSearchQuery] = useState<string>("");
   const [selectedOrderId, setSelectedOrderId] = useState<string>("");
-  const searchResultOrders = (orderSearchFetcher.data as any)?.orders;
-  const availableOrders = orderSearchQuery.trim().length >= 2 && Array.isArray(searchResultOrders) ? searchResultOrders : dbOrders;
+  const orderSearchResult = orderSearchFetcher.data as any;
+  const activeSearchQuery = orderSearchQuery.trim();
+  const availableOrders = activeSearchQuery.length >= 2 && orderSearchResult?.query === activeSearchQuery && Array.isArray(orderSearchResult.orders) ? orderSearchResult.orders : [];
+  const isSearchingOrders = orderSearchFetcher.state !== "idle" && orderSearchFetcher.formData?.get("actionType") === "SEARCH_ORDERS";
   const [selectedItems, setSelectedItems] = useState<Record<string, { quantity: number; reason: string }>>({});
   const [refundAmountInput, setRefundAmountInput] = useState<string>("");
   const [returnReasonInput, setReturnReasonInput] = useState<string>("DEFECTIVE");
@@ -152,19 +158,8 @@ export default function Returns() {
   // Selected Order for Modal
   const selectedOrder = availableOrders.find((o: any) => o.shopifyOrderId === selectedOrderId);
 
-  // Autocomplete Filtered Orders
-  const filteredOrders = availableOrders.filter((ord: any) => {
-    const q = orderSearchQuery.toLowerCase().trim();
-    if (!q) return true;
-    const matchOrderNumber = (ord.orderNumber || "").toLowerCase().includes(q);
-    const matchCustomer =
-      (ord.customerName || "").toLowerCase().includes(q) ||
-      (ord.customerEmail || "").toLowerCase().includes(q);
-    const matchItem = (ord.lineItems || []).some((li: any) =>
-      (li.title || "").toLowerCase().includes(q)
-    );
-    return matchOrderNumber || matchCustomer || matchItem;
-  });
+  // Shopify search returns matching records; don't hide matches with a second client-side filter.
+  const filteredOrders = availableOrders;
 
   useEffect(() => {
     const query = orderSearchQuery.trim();
@@ -500,14 +495,18 @@ export default function Returns() {
             }}
           />
           <div
+            className="bc-manual-request-modal"
             style={{
               position: "fixed",
               top: "50%",
               left: "50%",
               transform: "translate(-50%, -50%)",
-              width: "min(680px, 94vw)",
-              maxHeight: "88vh",
+              width: "min(840px, calc(100vw - 24px))",
+              maxWidth: "calc(100vw - 24px)",
+              maxHeight: "calc(100dvh - 32px)",
               overflowY: "auto",
+              overflowX: "hidden",
+              boxSizing: "border-box",
               backgroundColor: "#ffffff",
               borderRadius: "16px",
               boxShadow: "0 20px 40px rgba(0,0,0,0.2)",
@@ -551,39 +550,31 @@ export default function Returns() {
                     }}
                   />
 
-                  {/* Scrollable Order Autocomplete Results */}
                   {!selectedOrder && (
-                    <div style={{ maxHeight: "220px", overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: "8px", background: "#f8fafc" }}>
-                        {filteredOrders.length === 0 ? (
-                          <div style={{ padding: "16px", textAlign: "center", color: "#64748b", fontSize: "13px" }}>
-                            No store orders match "{orderSearchQuery}". <button type="button" onClick={() => orderSearchFetcher.submit({ actionType: "SEARCH_ORDERS", query: orderSearchQuery }, { method: "post" })}>Search Shopify</button>
+                    <div style={{ maxHeight: "280px", overflowY: "auto", overflowX: "hidden", border: "1px solid #e2e8f0", borderRadius: "10px", background: "#fff" }}>
+                      {activeSearchQuery.length < 2 ? (
+                        <div style={{ padding: "18px 14px", color: "#64748b", fontSize: "13px", textAlign: "center" }}>
+                          Start typing at least 2 characters to search Shopify orders. No orders are loaded until you search.
                         </div>
+                      ) : orderSearchResult?.query !== activeSearchQuery || isSearchingOrders ? (
+                        <div role="status" style={{ padding: "18px 14px", color: "#475569", fontSize: "13px", textAlign: "center" }}>Searching Shopify orders…</div>
+                      ) : orderSearchResult?.error ? (
+                        <div role="alert" style={{ padding: "18px 14px", color: "#b91c1c", fontSize: "13px" }}>{orderSearchResult.error}</div>
+                      ) : filteredOrders.length === 0 ? (
+                        <div style={{ padding: "18px 14px", color: "#64748b", fontSize: "13px", textAlign: "center" }}>No matching orders found. Try another order number, customer name, or email.</div>
                       ) : (
-                        filteredOrders.map((ord: any) => (
-                          <div
-                            key={ord.shopifyOrderId}
-                            onClick={() => handleOrderSelect(ord)}
-                            style={{
-                              padding: "12px 14px",
-                              borderBottom: "1px solid #e2e8f0",
-                              cursor: "pointer",
-                              backgroundColor: "#ffffff",
-                              transition: "background 0.15s",
-                            }}
-                          >
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                              <strong style={{ fontSize: "14px", color: "#0f172a" }}>{ord.orderNumber}</strong>
-                              <span style={{ fontSize: "13px", fontWeight: 700, color: "#10b981" }}>{ord.currency || "USD"} {Number(ord.totalPrice).toFixed(2)}</span>
-                            </div>
-                            <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>
-                              Customer: {ord.customerName || "N/A"} ({ord.customerEmail || "No Email"})
-                            </div>
-                          </div>
-                        ))
+                        <>
+                          <div style={{ padding: "9px 14px", color: "#64748b", background: "#f8fafc", borderBottom: "1px solid #e2e8f0", fontSize: "12px" }}>{filteredOrders.length.toLocaleString()} matching orders · Select an order</div>
+                          {filteredOrders.map((ord: any) => (
+                            <button key={ord.shopifyOrderId} type="button" onClick={() => handleOrderSelect(ord)} style={{ display: "block", width: "100%", textAlign: "left", padding: "12px 14px", border: 0, borderBottom: "1px solid #e2e8f0", borderRadius: 0, background: "#fff", color: "#0f172a", cursor: "pointer" }}>
+                              <span style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px" }}><strong style={{ fontSize: "14px", color: "#0f172a" }}>{ord.orderNumber}</strong><span style={{ fontSize: "13px", fontWeight: 700, color: "#059669", whiteSpace: "nowrap" }}>{ord.currency || "USD"} {Number(ord.totalPrice).toFixed(2)}</span></span>
+                              <span style={{ display: "block", fontSize: "12px", color: "#64748b", marginTop: "3px" }}>{ord.customerName || "Customer details unavailable"} · {ord.customerEmail || ord.customerPhone || "No email/phone"}</span>
+                            </button>
+                          ))}
+                        </>
                       )}
                     </div>
                   )}
-
                   {/* Selected Order Summary Banner */}
                   {selectedOrder && (
                     <div style={{ backgroundColor: "#f0fdf4", border: "1px solid #bbf7d0", padding: "12px 14px", borderRadius: "8px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -640,7 +631,7 @@ export default function Returns() {
                             </div>
 
                             {isSelected && (
-                              <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid #ddd6fe", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                              <div style={{ marginTop: "12px", paddingTop: "12px", borderTop: "1px solid #ddd6fe", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "12px" }}>
                                 <div>
                                   <label style={{ fontSize: "12px", fontWeight: 700, color: "#475569" }}>Return Quantity</label>
                                   <input
@@ -677,7 +668,7 @@ export default function Returns() {
 
                 {/* Additional Return Options */}
                 {selectedOrder && Object.keys(selectedItems).length > 0 && (
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "14px" }}>
                     <div>
                       <label style={{ display: "block", fontWeight: 700, fontSize: "12.5px", color: "#475569", marginBottom: "4px" }}>
                         Global Return Reason
@@ -804,7 +795,16 @@ export default function Returns() {
 
       {/* Basic Hover Row Styling */}
       <style>{`
-        .hover-row:hover {
+        .hover-row:hov      <style>{`
+        .bc-manual-request-modal, .bc-manual-request-modal * { box-sizing: border-box; min-width: 0; }
+        .bc-manual-request-modal { overscroll-behavior: contain; }
+        .bc-manual-request-modal input, .bc-manual-request-modal select, .bc-manual-request-modal textarea { max-width: 100%; min-width: 0; }
+        @media (max-width: 640px) {
+          .bc-manual-request-modal { width: calc(100vw - 20px) !important; max-width: calc(100vw - 20px) !important; max-height: calc(100dvh - 20px) !important; padding: 16px !important; }
+          .bc-manual-request-modal [style*="grid-column: span 2"] { grid-column: auto !important; }
+        }
+      `}</style>
+er {
           background-color: #f9fafb !important;
         }
       `}</style>
