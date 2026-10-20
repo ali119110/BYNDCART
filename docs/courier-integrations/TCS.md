@@ -1,45 +1,22 @@
-# TCS — integration notes
+# TCS COD API — BYNDCART integration
 
-## Use the correct TCS API product
+## Source contract and distinction between API products
 
-TCS exposes multiple API products. The official COD/ECOM guide documents more than one auth scheme:
+Implemented against the supplied `TCS doc/tcscod.json` OpenAPI contract. It declares production base URL `https://api.tcscourier.com/production/v1/cod` and uses `X-IBM-Client-Id`. The separately supplied `tcstrack.json` is the **Transit / time-in-transit calculator API** (`/stations`, `/postal-codes/{stationId}`, `/services/{productId}`, `/products`, `/time-calculator`); it is not a live consignment scan-tracking API.
 
-- ECOM authentication: `POST/GET` behavior is described by the versioned guide at `https://envio.tcscourier.com/COD-API-UserManual.pdf`; the ECOM token endpoint is `https://ociconnect.tcscourier.com/ecom/api/authentication/token`, using merchant-provided `username` and `password` and returning `accesstoken`/expiry.
-- A separate authorization API section in that guide describes `clientId` and `clientsecret`. Those credentials are not interchangeable with the ECOM username/password set; use the auth flow that matches the API product enabled for the merchant.
+## Current adapter behavior
 
-The official TCS developer portal supports API keys/application setup, and TCS requires successful UAT before production access approval.
+- **Credential test:** calls `GET /cities` and checks the API client/subscription. The supplied contract provides no documented, non-mutating request that verifies COD username/password and cost center together; those fields are validated by the corresponding operation when used.
+- **Forward booking:** `POST /create-order`, with consignee, origin/destination city, phone/email/address, package weight, pieces, COD amount, service and fragile fields. BYNDCART records a shipment only after a successful API response contains the carrier-issued CN/consignment number.
+- **Return/reverse logistics:** `POST /reverse-logistics` is called only when BYNDCART has a prior TCS consignment for the same merchant/order. It will not substitute a Shopify order ID or claim a new reverse shipment unless the API returns a CN.
+- **Consignment lookup:** `GET /track-order` with username, password and `referenceNo`. The supplied `cnDetail` response contains consignment/customer/route/weight/service/COD details, but does not define scan events or a status field. If no shipment status is actually returned, BYNDCART reports `UNKNOWN` rather than inventing a delivered/in-transit state.
+- **Cancellation:** `PUT /cancel-order`; app shipment status changes only after TCS returns a successful cancellation response.
+- **Shipping labels:** no label endpoint or label document schema is provided in these supplied TCS files, so BYNDCART does not claim to generate or download a TCS label.
 
-## ECOM endpoints present in the guide
+## Configuration
 
-- Auth/token: `https://ociconnect.tcscourier.com/ecom/api/authentication/token`
-- Create booking: `https://ociconnect.tcscourier.com/ecom/api/booking/create`
-- Reverse pickup request: `https://ociconnect.tcscourier.com/ecom/api/booking/reverse`
-- CN status update: `https://ociconnect.tcscourier.com/ecom/api/booking/getcnupdate`
-- Print label: `https://ociconnect.tcscourier.com/ecom/api/print/label`
-- Tracking: `https://ociconnect.tcscourier.com/tracking/api/Tracking/GetDynamicTrackDetail`
+Merchant settings include client ID, username/password, cost-center code, warehouse origin city, default weight, service code and fragile setting. Customer shipment requests also need a valid Pakistani mobile, complete address, destination city and email. No placeholder address/phone is generated.
 
-The guide's reverse operation accepts an existing TCS consignment number (plus optional cost center/consignee mobile); it is **not automatically equivalent to creating a brand-new return shipment with a new CN**. Use it only for the workflow it supports and persist the returned result appropriately.
+## Required carrier UAT
 
-## Credential/UI fields
-
-For the ECOM product, configure at least:
-
-- TCS ECOM username
-- TCS ECOM password
-- TCS account/cost center code
-- Merchant registered shipper details and required city/area codes
-- Environment (UAT vs production) where supported
-
-Do not call the field “API token” if the merchant provides a username/password pair. Auth should acquire and refresh its access token according to the official response expiry.
-
-## Payload notes
-
-The official create-booking payload includes an account number (`tcsaccount`) and structured shipper/consignee data, with Pakistani country code `PK`, city names/codes, phone, address, and shipment details. Tracking requires a TCS CN/consignment number. Map fields only when the BYNDCART source model has them; otherwise block booking with a validation message rather than substituting fake phone numbers, cities, or addresses.
-
-## BYNDCART status: disabled
-
-This is research-only context, **not an enabled implementation** in the current package. TCS is not registered in `CourierRegistry`, not offered by the courier settings UI or customer portal, and cannot book shipments. The endpoints/auth notes above should be re-verified with TCS because the merchant supplied PostEx and Leopards PDFs—not a TCS contract. Before enabling TCS, obtain the current account-specific API pack, implement all required operations, test UAT, and then register it. No manual airway-bill fallback is allowed.
-
-## Verification required
-
-TCS production API access requires successful UAT and production approval. No live bookings were performed in this research. Confirm current method/content-type details in the portal because the guide uses unusual GET-with-body examples for some operations.
+Verify client ID subscription, username/password/cost center correctness, city names, booking response shape and CN, reverse-logistics response/CN behavior, cancellation success/rejection, track-order response shape and privacy implications of the API's documented credentials-in-query parameters. If TCS later supplies its actual live scan-tracking API or label endpoint, implement it as a separate contract-backed capability rather than misusing the Transit calculator. No live TCS booking is claimed by this code package.

@@ -159,13 +159,14 @@ prisma.auditLog.create = (async (args: any) => {
   return args.data;
 }) as any;
 
-test("Courier registry offers only PostEx and Leopards", async () => {
+test("Courier registry offers PostEx, Leopards, DHL, FedEx, and TCS", async () => {
   const registered = CourierRegistry.getRegisteredAdapters().map((adapter) => adapter.providerName).sort();
-  assert.deepStrictEqual(registered, ["LEOPARDS", "POSTEX"]);
-  assert.strictEqual(CourierRegistry.has("TCS"), false);
-  assert.throws(() => CourierRegistry.get("TCS"), /Unsupported courier provider/);
+  assert.deepStrictEqual(registered, ["DHL", "FEDEX", "LEOPARDS", "POSTEX", "TCS"]);
+  assert.strictEqual(CourierRegistry.has("TCS"), true);
+  assert.strictEqual(CourierRegistry.get("DHL").supportsCancellation, false);
+  assert.throws(() => CourierRegistry.get("TRAX"), /Unsupported courier provider/);
 
-  for (const provider of ["POSTEX", "LEOPARDS"]) {
+  for (const provider of ["POSTEX", "LEOPARDS", "DHL", "FEDEX", "TCS"]) {
     const adapter = CourierRegistry.get(provider);
     const reverse = await adapter.createReverseShipment({
       shopifyStoreId: "store-1",

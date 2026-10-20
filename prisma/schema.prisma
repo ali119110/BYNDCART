@@ -62,6 +62,7 @@ model ShopifyStore {
   customerCaches CustomerCache[]
   backgroundJobs BackgroundJob[]
   shipments     ShipmentTrack[]
+  shipmentDocuments ShipmentDocument[]
   warehouseIntakes WarehouseIntake[]
   customerOtps  CustomerOTP[]
   courierConfigs MerchantCourierConfig[]
@@ -329,10 +330,29 @@ model ShipmentTrack {
   shopifyStore       ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
   warehouseIntakes   WarehouseIntake[]
   events             ShipmentEvent[]
+  documents          ShipmentDocument[]
 
   @@index([shopifyStoreId])
   @@index([shopifyStoreId, type])
   @@index([shopifyStoreId, status])
+}
+
+model ShipmentDocument {
+  id              String       @id @default(uuid())
+  shopifyStoreId  String
+  shipmentTrackId String
+  documentType    String       @default("LABEL")
+  fileName        String
+  mimeType        String       @default("application/pdf")
+  contentBase64   String       @db.Text
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  shopifyStore    ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+  shipmentTrack   ShipmentTrack @relation(fields: [shipmentTrackId], references: [id], onDelete: Cascade)
+
+  @@unique([shipmentTrackId, documentType])
+  @@index([shopifyStoreId])
+  @@index([shopifyStoreId, documentType])
 }
 
 model WarehouseIntake {

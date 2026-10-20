@@ -147,7 +147,8 @@ test("Courier Integration - Neutral ICourierAdapter registry", async () => {
 
   const adapter = CourierRegistry.get("POSTEX");
   assert.strictEqual(adapter.providerName, "POSTEX");
-  assert.throws(() => CourierRegistry.get("TCS"), /Unsupported courier provider/);
+  assert.strictEqual(CourierRegistry.get("TCS").providerName, "TCS");
+  assert.throws(() => CourierRegistry.get("TRAX"), /Unsupported courier provider/);
 
   const label = await adapter.generateReturnLabel({
     shopifyStoreId: "store-1",

@@ -190,7 +190,7 @@ export default function Couriers() {
         <div className="bc-courier-capability-icon" aria-hidden="true">i</div>
         <div>
           <strong>API-only booking status</strong>
-          <p>PostEx and Leopards are the only enabled carrier integrations. PostEx uses a store-specific token; Leopards uses an API key and password plus warehouse details. TCS, TRAX, M&amp;P, Call Courier, and Rider are disabled and cannot be selected or booked. BYNDCART does not provide manual airway-bill entry.</p>
+          <p>PostEx, Leopards, DHL Express, FedEx, and TCS have API-backed adapters based on the supplied contracts. Each store must save and test its own credentials before booking. DHL shipment cancellation is not supported by the supplied REST contract; TCS returns require a prior TCS consignment and its supplied tracking endpoint does not expose scan events. TRAX, M&amp;P, Call Courier, and Rider remain disabled. BYNDCART does not provide manual airway-bill entry.</p>
         </div>
       </section>
 

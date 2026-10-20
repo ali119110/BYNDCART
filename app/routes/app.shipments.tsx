@@ -3,14 +3,20 @@ import { Form, useFetcher, useLoaderData, useSearchParams } from "react-router";
 import prisma from "../db.server";
 import { requireTenantContext } from "../services/tenant.server";
 import { cancelShipmentTrack, getStoreShipments, syncShipmentTrackingStatus } from "../services/shipments.server";
-import { getDecryptedCourierCredentials } from "../services/courier.server";
+import { CourierRegistry, getDecryptedCourierCredentials } from "../services/courier.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopifyStoreId } = await requireTenantContext(request);
   const url = new URL(request.url);
   const search = url.searchParams.get("search") || "";
   const type = url.searchParams.get("type") || "All";
-  const shipments = await getStoreShipments(shopifyStoreId, { search, type });
+  const storedShipments = await getStoreShipments(shopifyStoreId, { search, type });
+  const shipments = storedShipments.map((shipment: any) => ({
+    ...shipment,
+    supportsCancellation: CourierRegistry.has(shipment.courier)
+      ? CourierRegistry.get(shipment.courier).supportsCancellation !== false
+      : false,
+  }));
   return { shipments, search, type };
 };
 
@@ -115,7 +121,7 @@ export default function Shipments() {
       </header>
 
       <section className="bc-note" role="note">
-        BYNDCART records shipments only from PostEx or Leopards API responses. Manual airway-bill entry is disabled. PostEx may initially return an order status of UnBooked after assigning a tracking number.
+        BYNDCART records shipments only after a registered courier API confirms a carrier-generated tracking number. PostEx, Leopards, DHL Express, FedEx, and TCS have adapters; exact label, tracking, cancellation, and reverse-shipment capabilities depend on each supplied carrier contract and verified store credentials. Manual airway-bill entry is disabled.
       </section>
       {actionFetcher.data?.message && <div className={`bc-note ${actionFetcher.data.success ? "ok" : "bad"}`} role={actionFetcher.data.success ? "status" : "alert"}>{actionFetcher.data.message}</div>}
       {actionFetcher.data?.error && <div className="bc-note bad" role="alert">{actionFetcher.data.error}</div>}
@@ -195,7 +201,7 @@ export default function Shipments() {
                         <input type="hidden" name="shipmentId" value={shipment.id} />
                         <button type="submit" className="bc-btn" disabled={actionFetcher.state !== "idle"}>Refresh tracking</button>
                       </actionFetcher.Form>
-                      {!(["DELIVERED", "CANCELLED"].includes(shipment.status)) && (
+                      {!(["DELIVERED", "CANCELLED"].includes(shipment.status)) && shipment.supportsCancellation && (
                         <actionFetcher.Form method="post" onSubmit={(event: any) => {
                           if (typeof window !== "undefined" && !window.confirm(`Ask ${shipment.courier} to cancel tracking ${shipment.trackingNumber}?`)) event.preventDefault();
                         }}>

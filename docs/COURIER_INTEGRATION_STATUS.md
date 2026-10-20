@@ -4,63 +4,50 @@
 
 | Provider | Registered in app | Credential test | API booking | Tracking | Cancellation | Document/label | Status |
 |---|---:|---:|---:|---:|---:|---:|---|
-| PostEx | Yes | Operational Cities endpoint | Normal / Reverse / Replacement | `track-order` | `cancel-order` | Invoice PDF + load sheet PDF | Implemented from supplied PostEx guide; UAT required |
-| Leopards | Yes | `getAllCities` | `bookPacket` | `trackBookedPacket` | `cancelBookedPackets` | `slip_link` | Implemented from supplied eCom guide; reverse-booking mapping needs carrier UAT |
+| PostEx | Yes | Operational Cities endpoint | Normal / Reverse / Replacement | `track-order` | `cancel-order` | Invoice PDF + load-sheet PDF | Implemented from supplied PostEx guide; UAT required |
+| Leopards | Yes | `getAllCities` | `bookPacket` | `trackBookedPacket` | `cancelBookedPackets` | `slip_link` | Implemented from supplied eCom guide; reverse-booking mapping still needs carrier UAT |
+| DHL Express | Yes | Authenticated Reference Data (`datasetName=country`) | MyDHL `POST /shipments`; customs/cross-border blocked until proper line data exists | MyDHL shipment tracking | Disabled: supplied contract has pickup cancellation but no shipment cancellation endpoint | Base64 carrier labels saved server-side | Implemented against supplied MyDHL 3.3.4 OpenAPI; UAT required |
+| FedEx | Yes | OAuth token request | Ship API; reverse return labels | Track API | Ship API cancellation | Base64 carrier labels saved server-side | Implemented against supplied Ship/Track OpenAPI; UAT required |
+| TCS COD | Yes | Cities endpoint verifies API client/subscription; username/password are not verified without a side-effecting operation | COD `create-order`; requires carrier CN | COD `track-order` record lookup; no scan events in supplied schema | COD `cancel-order` | No label endpoint in supplied contract | Implemented against supplied COD OpenAPI; UAT required |
 | TRAX | No | No | No | No | No | No | Disabled pending current official docs |
-| TCS | No | No | No | No | No | No | Disabled pending current subscribed API contract |
 | M&P | No | No | No | No | No | No | Disabled pending current official docs |
 | Call Courier | No | No | No | No | No | No | Disabled pending current official docs |
 | Rider | No | No | No | No | No | No | Disabled pending current official docs |
 
-A provider appears in the courier UI only if it is registered. The dormant class definitions for other providers are not registered, so those names cannot be selected via `CourierRegistry`.
+The merchant courier settings page stores credential bundles encrypted in the existing `encryptedApiToken` column. Saved secrets are not returned to the browser. Saving credentials disables the integration; a successful connection test is required before it is marked enabled/live. For DHL, FedEx and TCS, this test confirms only the specific checks described above, not every shipment lane or carrier operation.
 
-## Credential flow
+## Carrier-specific notes
 
-- PostEx uses the store's own API token in the `token` HTTP header.
-- Leopards uses `api_key` and `api_password` in JSON request bodies. The merchant can select production or staging; credentials must match that environment.
-- Credential fields are stored encrypted inside the existing `encryptedApiToken` column as a versioned JSON bundle, which also reads legacy single-token records.
-- Browser loaders receive only configured field names, non-secret settings, and masked credential previews. They never receive decrypted secrets.
-- Saving changes disables the integration. The merchant must test the connection again to mark the configuration enabled/verified.
-- Booking, tracking, cancellation and authenticated PostEx PDF routes enforce tenant-scoped records and verified credential configuration.
+- **DHL:** test/production hosts from MyDHL 3.3.4. Shipment labels returned as document bytes are stored in `ShipmentDocument`, served only after tenant authentication. The supplied YAML documents pickup cancellation, not shipment cancellation. Cross-border customs requests are blocked because there is no validated line-level customs item model in the supplied app inputs.
+- **FedEx:** sandbox/production hosts, OAuth 2.0, Ship API, Track API and Cancel Shipment endpoint are implemented. Verify the exact account service type, pickup type and return service in FedEx sandbox and with the merchant's production account.
+- **TCS:** `tcscod.json` is implemented for booking, reverse-logistics, consignment lookup and cancellation. `tcstrack.json` is a Transit/time-calculator API and does not replace scan-level tracking. Username and password are part of TCS query parameters for `/track-order` because that is how the supplied contract defines it; avoid logging full request URLs.
 
-## PostEx workflow
-
-1. The merchant enters a PostEx token and optionally the documented pickup/store address codes.
-2. Test Connection calls the official Operational Cities endpoint.
-3. The return form requires the customer pickup phone/address/city. City availability is verified against the carrier endpoint.
-4. The server posts `orderType="Reverse"` to `/order/v3/create-order` and requires HTTP success, `statusCode=200`, and a carrier tracking number.
-5. The documented create response may be `UnBooked`. BYNDCART records the API-created order/tracking reference but does not falsely announce that pickup is complete. Tracking can later be refreshed.
-6. Shipment management offers tracking refresh, carrier cancellation, PostEx invoice PDF download, and load sheet PDF generation through the official APIs.
-
-## Leopards workflow
-
-1. The merchant enters API key/password, selects the matching environment, and configures warehouse city/address/contact/phone and a default weight in grams.
-2. Test Connection posts credentials to `/getAllCities/format/json/` and enables the integration only after `status=1` and a city list are returned.
-3. At booking time, BYNDCART resolves the sender and recipient city IDs from the live city list and checks origin/destination permissions.
-4. `/bookPacket/format/json/` must return `status=1` and `track_number` before BYNDCART creates the shipment record. A provider `slip_link` is saved as the label URL.
-5. Tracking and cancellation use `/trackBookedPacket/format/json/` and `/cancelBookedPackets/format/json/`.
-6. For returns, the code reverses shipper/consignee and origin/destination. The supplied document describes generic packet booking and not a dedicated reverse-booking operation. This mapping must be verified with Leopards on staging before production returns are enabled.
-
-## API safety & data rules
+## Security and data rules
 
 - Do not save a manually typed tracking number as a booking confirmation.
-- Do not create a shipment if the carrier has not returned its own tracking/CN number with its documented success status.
-- Never fall back to a global PostEx token or another merchant's credentials.
-- Pakistani mobile numbers are normalized and validated; no dummy phone number or address is substituted.
-- City IDs are not guessed. Leopards city IDs are read from `getAllCities`; PostEx city names are checked against its Operational Cities endpoint.
-- COD/PKR amounts must come from the caller's authoritative Shopify/payment data. The adapter defaults missing COD to zero rather than fabricating a value.
-- Keep API failures visible to merchants; do not label a connection check as a confirmed shipment.
+- Never expose another merchant's credentials or shipment documents. Document downloads verify the current authenticated tenant and shipment ownership.
+- Do not claim a cancellation unless the carrier confirms success. DHL cancellation remains hidden/disabled in the UI.
+- Do not mark a TCS consignment delivered merely because the API request itself succeeded; status must come from an actual status field.
+- Never send an invalid TCS reverse request with a Shopify order ID standing in for an original TCS CN.
+- Do not send DHL customs-declarable shipments without validated commodity/customs data.
+- Keep provider API errors visible and distinguish connection-test success from shipment booking success.
 
 ## Required release verification
 
-1. Run the full app's type check, lint, tests and production build.
-2. Test PostEx valid/invalid token; supported/unsupported cities; Normal, Reverse and Replacement order types; API error; `UnBooked` state; later delivered/returned tracking; cancellation; invoice and load sheet PDFs.
-3. Test Leopards production and staging separately with matching credentials; city permission rejection; booking success/failure; CN tracking; cancellation; slip URL; default weight; COD zero/non-zero; and reverse-direction shipment with Leopards' written confirmation.
-4. Confirm the new `app.shipments-label.tsx` route is registered by the project's route configuration.
-5. Verify the app proxy/customer route used by the storefront is the one being deployed; `app/routes/apps.returns.tsx` was not supplied in the upload and has not been modified by this patch.
-6. Confirm in the app UI that only PostEx and Leopards are offered; there must be no manual airway-bill form or fallback path.
+1. Apply the new Prisma migration and regenerate the Prisma client (`npx prisma migrate deploy` then `npx prisma generate`); verify `ShipmentDocument` model and both tenant/shipment relations.
+2. Run the complete repository's type check, lint, unit tests and production build. The uploaded source ZIP contains only a subset of the full app, so a full build cannot be completed from this package alone.
+3. Run merchant-account UAT for PostEx and Leopards as already documented in their integration guides.
+4. DHL: test authentication, domestic shipment, label document storage/download, tracking status parsing, wrong credentials, invalid product/route, incomplete address and safe rejection of a cross-border/customs booking.
+5. FedEx: test OAuth, valid shipment PDF, download isolation by tenant, reverse label, known tracking states, cancel success/rejection, address/service validation and account enablement.
+6. TCS: test client ID, booking CN response, exact city names, COD amount, missing fields, prior-CN reverse logistics, no-CN reverse rejection, cancellation, and `track-order` with payloads that omit scan status. Validate that the UI shows no TCS label action.
+7. Confirm DHL cancel action is not displayed; any direct cancel attempt must fail without changing BYNDCART shipment status.
 
-## Source material
+No live shipment creation or cancellation has been executed as part of this offline source update; carrier UAT is required before production use.
 
-- *PostEx COD API Integration Guide*, version 4.1.9, supplied PDF: Operational Cities (p. 6), Order Creation (pp. 12–13), Tracking (pp. 17–19), Load Sheet (p. 16), Airway Bill / Invoice (p. 23), Cancel Order (p. 26).
-- *Leopards eCom Merchant APIs*, version 2.0, supplied PDF: production/staging URL and auth (p. 3), City List (pp. 4–6), Tracking (pp. 8–16), Book a Packet (pp. 17–20), Cancel Booked Packets (pp. 31–32).
+## Source material used for this update
+
+- Merchant-provided MyDHL Express REST API 3.3.4 OpenAPI YAML: `DHL/dpdhl-express-api-3.3.4.yaml`.
+- Merchant-provided FedEx Ship and Track OpenAPI JSON: `FedEx/ship.json`, `FedEx/track.json`.
+- Merchant-provided TCS COD OpenAPI JSON: `TCS doc/tcscod.json`.
+- Merchant-provided TCS Transit/time-calculator OpenAPI JSON: `TCS doc/tcstrack.json`.
+- Existing BYNDCART PostEx/Leopards integration notes: `docs/courier-integrations/POSTEX.md`, `LEOPARDS.md`.

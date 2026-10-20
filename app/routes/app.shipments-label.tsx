@@ -12,7 +12,41 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { shopifyStoreId } = await requireTenantContext(request);
   const url = new URL(request.url);
   const trackingNumber = String(url.searchParams.get("trackingNumber") || "").trim();
+  const documentType = String(url.searchParams.get("documentType") || "").trim().toUpperCase();
   if (!trackingNumber) return new Response("Tracking number is required.", { status: 400 });
+
+  if (documentType === "LABEL") {
+    const shipment = await prisma.shipmentTrack.findFirst({
+      where: { shopifyStoreId, trackingNumber },
+      select: { id: true, courier: true, orderNumber: true },
+    });
+    if (!shipment) return new Response("Shipment not found for this store.", { status: 404 });
+    const document = await prisma.shipmentDocument.findFirst({
+      where: { shopifyStoreId, shipmentTrackId: shipment.id, documentType: "LABEL" },
+      select: { fileName: true, mimeType: true, contentBase64: true },
+    });
+    if (!document) return new Response("No stored carrier label was found for this shipment. Refresh the shipment details or contact support.", { status: 404 });
+    let body: ArrayBuffer;
+    try {
+      const decoded = Buffer.from(document.contentBase64, "base64");
+      body = new ArrayBuffer(decoded.byteLength);
+      new Uint8Array(body).set(decoded);
+    } catch {
+      return new Response("The stored carrier label could not be decoded.", { status: 500 });
+    }
+    if (!body.byteLength) return new Response("The stored carrier label is empty.", { status: 500 });
+    const mimeType = ["application/pdf", "image/png", "application/octet-stream"].includes(document.mimeType) ? document.mimeType : "application/pdf";
+    const safeFileName = String(document.fileName || `${shipment.courier}-${trackingNumber}.pdf`).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
+    return new Response(body, {
+      status: 200,
+      headers: {
+        "Content-Type": mimeType,
+        "Content-Disposition": `attachment; filename="${safeFileName}"`,
+        "Cache-Control": "private, no-store, max-age=0",
+        "X-Content-Type-Options": "nosniff",
+      },
+    });
+  }
 
   const shipment = await prisma.shipmentTrack.findFirst({
     where: { shopifyStoreId, trackingNumber, courier: "POSTEX" },

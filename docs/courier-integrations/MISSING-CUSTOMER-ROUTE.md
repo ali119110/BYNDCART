@@ -1,10 +1,10 @@
 # Route audit note: `app/routes/apps.returns.tsx`
 
-The uploaded source files did not include `app/routes/apps.returns.tsx`. This patch updates `app/routes/portal.tsx`, but cannot verify or edit the separately named `apps.returns.tsx` route. Do not substitute the internal merchant route `app/routes/app.returns.tsx`.
+The uploaded source files did not include `app/routes/apps.returns.tsx`. The supplied courier-settings ZIP does not include `app/routes/apps.returns.tsx` or `app/routes/portal.tsx`, so this courier update cannot verify or edit the customer-facing storefront route. Do not substitute the internal merchant route `app/routes/app.returns.tsx`.
 
 Before release, inspect the real storefront return route and ensure it follows the same API-only rules:
 
-1. Only PostEx and Leopards can be offered; verify the provider is registered, enabled, connection-tested, and has the required credentials for this `shopifyStoreId`.
+1. Offer only a provider registered in `CourierRegistry`, enabled, connection-tested, and configured with the required credentials for this `shopifyStoreId`. The current registry includes PostEx, Leopards, DHL Express, FedEx and TCS; provider-specific restrictions in the capability matrix still apply (for example, no DHL shipment cancellation, and TCS reverse logistics requires a prior TCS consignment).
 2. Use the server-side courier service; never trust a client-supplied tracking/CN number.
 3. Create a return/shipment record only when the carrier API reports success and returns a carrier-generated tracking/consignment number.
 4. Require the fields actually required by the selected provider, including Pakistani mobile, exact supported city, complete address, and Leopards warehouse settings/weight.

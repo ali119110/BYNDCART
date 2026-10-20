@@ -257,6 +257,40 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
     },
   });
 
+  // FedEx and DHL return Base64 label documents. Keep bytes server-side and expose only
+  // the authenticated /app/shipments-label URL; do not store large data URIs in labelUrl.
+  if (labelResult?.labelContentBase64) {
+    const contentBase64 = labelResult.labelContentBase64.replace(/^data:[^,]+;base64,/i, "").replace(/\s/g, "");
+    try {
+      if (!contentBase64 || !/^[A-Za-z0-9+/]+={0,2}$/.test(contentBase64)) {
+        throw new Error("The carrier returned an invalid Base64 label document.");
+      }
+      await prisma.shipmentDocument.upsert({
+        where: { shipmentTrackId_documentType: { shipmentTrackId: shipment.id, documentType: "LABEL" } },
+        update: {
+          shopifyStoreId: input.shopifyStoreId,
+          fileName: labelResult.labelFileName || `${adapter.providerName}-${trackingNumber}.pdf`,
+          mimeType: labelResult.labelContentType || "application/pdf",
+          contentBase64,
+        },
+        create: {
+          shopifyStoreId: input.shopifyStoreId,
+          shipmentTrackId: shipment.id,
+          documentType: "LABEL",
+          fileName: labelResult.labelFileName || `${adapter.providerName}-${trackingNumber}.pdf`,
+          mimeType: labelResult.labelContentType || "application/pdf",
+          contentBase64,
+        },
+      });
+    } catch (documentError) {
+      console.error(`[Shipment Service] ${adapter.displayName} booking succeeded but label storage failed for ${trackingNumber}: ${documentError instanceof Error ? documentError.message : "unknown error"}`);
+      if (labelUrl.includes("/app/shipments-label") && labelResult.labelContentBase64) {
+        labelUrl = "";
+        await prisma.shipmentTrack.update({ where: { id: shipment.id }, data: { labelUrl: null } }).catch(() => undefined);
+      }
+    }
+  }
+
   // 6. Record normalized ShipmentEvent
   try {
     await prisma.shipmentEvent.create({
@@ -395,6 +429,9 @@ export async function cancelShipmentTrack(shopifyStoreId: string, shipmentId: st
     throw new Error(`${shipment.courier} is disabled in BYNDCART. Cancellation is unavailable for this carrier.`);
   }
   const adapter = CourierRegistry.get(shipment.courier);
+  if (adapter.supportsCancellation === false) {
+    throw new Error(`${adapter.displayName} shipment cancellation is not supported by the configured carrier API contract.`);
+  }
   if (!adapter.isLive) throw new Error(`${adapter.displayName} cancellation is disabled in BYNDCART.`);
   const credentials = await getDecryptedCourierCredentials(shopifyStoreId, adapter.providerName);
   if (!credentials || credentials.isLive !== true) throw new Error(`${adapter.displayName} credentials are missing, disabled, or unverified.`);

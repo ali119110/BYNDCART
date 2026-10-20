@@ -47,11 +47,11 @@ prisma.shipmentEvent.create = (async () => ({})) as any;
 prisma.auditLog.create = (async () => ({})) as any;
 
 
-test("Registered couriers are PostEx and Leopards, and incomplete bookings stay unconfirmed", async () => {
+test("Registered couriers include PostEx, Leopards, DHL, FedEx, and TCS, and incomplete bookings stay unconfirmed", async () => {
   const { CourierRegistry } = await import("../services/courier.server");
 
   const registered = CourierRegistry.getRegisteredAdapters().map((adapter) => adapter.providerName).sort();
-  assert.deepStrictEqual(registered, ["LEOPARDS", "POSTEX"]);
+  assert.deepStrictEqual(registered, ["DHL", "FEDEX", "LEOPARDS", "POSTEX", "TCS"]);
   assert.throws(() => CourierRegistry.get("TRAX"), /Unsupported courier provider/);
 
   const leopards = CourierRegistry.get("LEOPARDS");
