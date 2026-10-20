@@ -215,6 +215,7 @@ model StoreSettings {
   exchangeShippingCost   Decimal      @default(0.00) @db.Decimal(10, 2)
   notificationEmail      String?
   emailNotificationsEnabled Boolean @default(false)
+  portalSlug            String?      @unique
   refundExecutionMode   String       @default("MANUAL") // SHOPIFY_API or MANUAL
   exchangeReplacementTiming String   @default("AFTER_INSPECTION") // AFTER_APPROVAL or AFTER_INSPECTION
   fraudFlagReturnCount    Int         @default(5)

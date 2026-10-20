@@ -4,7 +4,7 @@ import "./styles/byndcart.css";
 
 export const loader: LoaderFunction = async ({ request }) => {
   const path = new URL(request.url).pathname;
-  const customerPage = path === "/portal" || path.startsWith("/apps/returns");
+  const customerPage = path === "/portal" || path.startsWith("/apps/returns") || path.startsWith("/returns/");
   return {
     apiKey: process.env.SHOPIFY_API_KEY || "mock-api-key",
     isOffline: customerPage || process.env.SKIP_AUTH === "true",

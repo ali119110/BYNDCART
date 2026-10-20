@@ -1,41 +1,119 @@
 import db from "../db.server";
 
-export async function getSettings(shopifyStoreId: string, admin?: any) {
-  let settings = await db.storeSettings.findUnique({
-    where: { shopifyStoreId },
-  });
+type ShopMetadata = { email: string | null; name: string | null };
 
-  // Auto-create defaults on first visit if none exist yet.
-  // Pre-fill notificationEmail with the Shopify shop owner's email when we
-  // have a live admin client — merchants shouldn't have to type their own
-  // email in on day one. emailNotificationsEnabled stays OFF by default
-  // regardless (schema default), merchant has to opt in.
+export async function getSettings(shopifyStoreId: string, admin?: any) {
+  const store = process.env.NODE_ENV === "test"
+    ? null
+    : await db.shopifyStore.findUnique({
+      where: { id: shopifyStoreId },
+      select: { shop: true, merchant: { select: { name: true } } },
+    }).catch(() => null);
+
+  let settings = await db.storeSettings.findUnique({ where: { shopifyStoreId } });
+  let shopMetadata: ShopMetadata | null = null;
+  if ((!settings || !settings.portalSlug) && process.env.NODE_ENV !== "test") {
+    shopMetadata = await fetchShopMetadata(admin);
+  }
+
   if (!settings) {
-    const shopEmail = await fetchShopOwnerEmail(admin);
-    settings = await db.storeSettings.create({
-      data: { shopifyStoreId, notificationEmail: shopEmail },
-    });
+    try {
+      settings = await db.storeSettings.create({
+        data: { shopifyStoreId, notificationEmail: shopMetadata?.email ?? null },
+      });
+    } catch (error: any) {
+      if (error?.code !== "P2002") throw error;
+      settings = await db.storeSettings.findUnique({ where: { shopifyStoreId } });
+      if (!settings) throw error;
+    }
+  }
+
+  if (!settings.portalSlug && store && process.env.NODE_ENV !== "test") {
+    const preferredName = shopMetadata?.name || store.shop.replace(/\.myshopify\.com$/i, "") || store.merchant?.name || "store";
+    const portalSlug = await assignUniquePortalSlug(shopifyStoreId, preferredName);
+    const refreshed = await db.storeSettings.findUnique({ where: { shopifyStoreId } });
+    if (refreshed?.portalSlug === portalSlug) settings = refreshed;
   }
 
   return serializeSettings(settings);
 }
 
-async function fetchShopOwnerEmail(admin?: any): Promise<string | null> {
+async function fetchShopMetadata(admin?: any): Promise<ShopMetadata | null> {
   if (!admin) return null;
-
   try {
     const response = await admin.graphql(
       `#graphql
-      query getShopEmail {
-        shop { email }
+      query getShopPortalMetadata {
+        shop { email name }
       }`
     );
     const { data } = await response.json();
-    return data?.shop?.email ?? null;
+    return {
+      email: data?.shop?.email ?? null,
+      name: data?.shop?.name ?? null,
+    };
   } catch (error) {
-    console.error("[Settings] Failed to fetch shop owner email:", error);
+    console.error("[Settings] Failed to fetch Shopify shop metadata:", error);
     return null;
   }
+}
+
+function slugifyPortalName(value: string): string {
+  const slug = value
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48)
+    .replace(/-+$/g, "");
+  return slug || "store";
+}
+
+async function assignUniquePortalSlug(shopifyStoreId: string, preferredName: string): Promise<string> {
+  const base = slugifyPortalName(preferredName);
+  for (let suffix = 0; suffix < 1000; suffix++) {
+    const tail = suffix === 0 ? "" : `-${suffix + 1}`;
+    const candidate = `${base.slice(0, Math.max(1, 48 - tail.length))}${tail}`;
+    const owner = await db.storeSettings.findUnique({
+      where: { portalSlug: candidate },
+      select: { shopifyStoreId: true },
+    });
+    if (owner && owner.shopifyStoreId !== shopifyStoreId) continue;
+
+    try {
+      await db.storeSettings.update({ where: { shopifyStoreId }, data: { portalSlug: candidate } });
+      return candidate;
+    } catch (error: any) {
+      if (error?.code === "P2002") continue;
+      throw error;
+    }
+  }
+  throw new Error("Could not allocate a unique customer portal slug for this store.");
+}
+
+export function getCustomerPortalBaseUrl(): string | null {
+  const configured = process.env.CUSTOMER_PORTAL_BASE_URL
+    || process.env.RAILWAY_PUBLIC_DOMAIN
+    || process.env.SHOPIFY_APP_URL
+    || process.env.APP_URL;
+  if (!configured) return null;
+
+  const candidate = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "https:" && process.env.NODE_ENV === "production") return null;
+    return parsed.origin.replace(/\/$/, "");
+  } catch {
+    return null;
+  }
+}
+
+export function buildCustomerPortalUrl(portalSlug: string | null | undefined): string | null {
+  const slug = String(portalSlug || "").trim().toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/.test(slug)) return null;
+  const baseUrl = getCustomerPortalBaseUrl();
+  return baseUrl ? `${baseUrl}/returns/${encodeURIComponent(slug)}` : null;
 }
 
 export async function updateSettings(

@@ -1,6 +1,7 @@
 import { redirect, useLoaderData } from "react-router";
 import type { Route } from "./+types/portal";
 import { resolvePortalStore } from "../services/portalAccess.server";
+import { buildCustomerPortalUrl } from "../services/settings.server";
 
 /**
  * Legacy customer portal. Shoppers use the storefront app proxy.
@@ -10,8 +11,11 @@ export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const embedded = url.searchParams.get("embedded") === "1";
   if (embedded) {
-    const { shop } = await resolvePortalStore(url.searchParams.get("shop"));
-    return { embedded: true as const, storefrontUrl: `https://${shop}/apps/returns` };
+    const resolved = await resolvePortalStore(url.searchParams.get("shop"));
+    return {
+      embedded: true as const,
+      storefrontUrl: buildCustomerPortalUrl(resolved.portalSlug) || `https://${resolved.shop}/apps/returns`,
+    };
   }
 
   const shop = String(url.searchParams.get("shop") || "").trim().toLowerCase();
@@ -32,7 +36,7 @@ export default function LegacyPortalRedirect() {
         <div style={{ background: "#fff", border: "1px solid #e1e3e5", borderRadius: "8px", padding: "24px" }}>
           <h1 style={{ fontSize: "22px", margin: "0 0 8px" }}>Customer returns stay on your store</h1>
           <p style={{ color: "#5c5f62", marginTop: 0 }}>
-            Shoppers should not use this admin screen. Add the store link to the footer. It opens on the store website.
+            Shoppers should not use this admin screen. Add the hosted portal link to the store footer.
           </p>
           <p style={{ fontFamily: "monospace", wordBreak: "break-all" }}>{loaderData.storefrontUrl}</p>
           <a href={loaderData.storefrontUrl} target="_top">Open the store page</a>

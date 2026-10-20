@@ -2,25 +2,35 @@ import React from "react";
 import { useLoaderData, useFetcher } from "react-router";
 import type { Route } from "./+types/app.settings";
 import { requireTenantContext } from "../utils/tenant.server";
-import { getSettings, updateSettings } from "../services/settings.server";
+import { buildCustomerPortalUrl, getSettings, updateSettings } from "../services/settings.server";
 import { getReturnPolicyRule, saveReturnPolicyRule } from "../services/policyEngine.server";
 
 // ===== LOADER: Fetch settings & policy rules from database =====
 export async function loader({ request }: Route.LoaderArgs) {
   const { shop, shopifyStoreId, admin } = await requireTenantContext(request);
-  const portal = {
-    storefrontUrl: `https://${shop}/apps/returns`,
-  };
-
   try {
     const settings = await getSettings(shopifyStoreId, admin);
+    const hostedPortalUrl = buildCustomerPortalUrl(settings.portalSlug);
+    const portal = {
+      slug: settings.portalSlug || null,
+      storefrontUrl: hostedPortalUrl || "",
+      shopifyProxyUrl: `https://${shop}/apps/returns`,
+      baseUrlConfigured: Boolean(hostedPortalUrl),
+    };
     const policyRule = await getReturnPolicyRule(shopifyStoreId);
 
     return { settings, policyRule, portal };
   } catch (error) {
     console.error("Failed to fetch settings:", error);
+    const portal = {
+      slug: null,
+      storefrontUrl: "",
+      shopifyProxyUrl: `https://${shop}/apps/returns`,
+      baseUrlConfigured: false,
+    };
     return {
       settings: {
+        portalSlug: null,
         returnWindowDays: 30,
         restockingFeePercent: 0,
         exchangeWindowDays: 30,
@@ -188,7 +198,7 @@ export default function Settings() {
         <div className="bc-portal-link-block">
           <div className="bc-link-label-row">
             <label className="bc-field-label" htmlFor="bc-customer-portal-url">Customer portal URL</label>
-            <span className="bc-inline-status"><span className="bc-status-dot" /> Storefront link</span>
+            <span className="bc-inline-status"><span className="bc-status-dot" /> Hosted portal</span>
           </div>
           <div className="bc-copy">
             <input
@@ -212,15 +222,20 @@ export default function Settings() {
               </a>
             )}
           </div>
+          {!portal?.baseUrlConfigured && (
+            <p className="bc-hint" role="status">
+              Set CUSTOMER_PORTAL_BASE_URL to your public Railway service URL, or ensure RAILWAY_PUBLIC_DOMAIN is available, then redeploy to generate this link.
+            </p>
+          )}
           <p className="bc-copy-feedback" aria-live="polite">
-            {copied ? "Customer portal link copied to clipboard." : "Use this URL as the destination for your storefront footer link."}
+            {copied ? "Customer portal link copied to clipboard." : "Add this hosted BYNDCART URL to your Shopify storefront footer menu."}
           </p>
         </div>
 
         <div className="bc-note" role="note">
           <span className="bc-note-icon" aria-hidden="true">i</span>
           <p>
-            Customers enter their order number and email, verify their identity, then select items and submit a return or exchange request. The page stays on your store address. Make sure the app proxy is configured in your Shopify Partner dashboard so this URL opens the request form instead of a store 404 page.
+            Customers enter their order number and the email on the order, verify their identity, then submit a return or exchange request. This portal is hosted by BYNDCART on your Railway app domain. Add the link above to your Shopify footer menu. Your existing Shopify App Proxy URL remains available separately if you want a portal under your storefront domain.
           </p>
         </div>
       </section>
