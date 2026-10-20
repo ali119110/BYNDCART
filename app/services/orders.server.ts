@@ -18,6 +18,7 @@ interface MappedOrder {
   shopifyOrderId: string;
   orderNumber: string;
   customerEmail: string | null;
+  customerPhone: string | null;
   customerName: string | null;
   totalPrice: number;
   currency: string;
@@ -25,6 +26,13 @@ interface MappedOrder {
   fulfillmentStatus: string | null;
   lineItems: MappedLineItem[];
   shopifyCreatedAt: Date;
+}
+
+function normalizePhoneDigits(value: unknown): string | null {
+  let digits = String(value ?? "").replace(/\\D/g, "");
+  if (digits.startsWith("0092")) digits = digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("0")) digits = "92" + digits.slice(1);
+  return digits || null;
 }
 
 /**
@@ -36,6 +44,7 @@ function mapWebhookOrder(payload: any): MappedOrder {
     shopifyOrderId: `gid://shopify/Order/${payload.id}`,
     orderNumber: payload.name ?? `#${payload.order_number}`,
     customerEmail: payload.email ?? payload.customer?.email ?? null,
+    customerPhone: normalizePhoneDigits(payload.phone ?? payload.customer?.phone),
     customerName: payload.customer
       ? `${payload.customer.first_name ?? ""} ${payload.customer.last_name ?? ""}`.trim() || null
       : null,
@@ -63,6 +72,7 @@ function mapGraphqlOrder(node: any): MappedOrder {
     shopifyOrderId: node.id,
     orderNumber: node.name,
     customerEmail: node.customer?.email ?? node.email ?? null,
+    customerPhone: normalizePhoneDigits(node.phone ?? node.customer?.phone),
     customerName: node.customer
       ? `${node.customer.firstName ?? ""} ${node.customer.lastName ?? ""}`.trim() || null
       : null,
@@ -97,6 +107,7 @@ async function upsertOrder(shopifyStoreId: string, mapped: MappedOrder, payloadU
     update: {
       orderNumber: mapped.orderNumber,
       customerEmail: mapped.customerEmail,
+      customerPhone: mapped.customerPhone,
       customerName: mapped.customerName,
       totalPrice: mapped.totalPrice,
       currency: mapped.currency,
@@ -110,6 +121,7 @@ async function upsertOrder(shopifyStoreId: string, mapped: MappedOrder, payloadU
       shopifyOrderId: mapped.shopifyOrderId,
       orderNumber: mapped.orderNumber,
       customerEmail: mapped.customerEmail,
+      customerPhone: mapped.customerPhone,
       customerName: mapped.customerName,
       totalPrice: mapped.totalPrice,
       currency: mapped.currency,
@@ -163,11 +175,12 @@ export async function syncShopifyOrders({ shopifyStoreId, admin }: SyncOrdersInp
               id
               name
               email
+              phone
               createdAt
               displayFinancialStatus
               displayFulfillmentStatus
               totalPriceSet { shopMoney { amount currencyCode } }
-              customer { firstName lastName email }
+              customer { firstName lastName email phone }
               lineItems(first: 50) {
                 edges {
                   node {
@@ -186,7 +199,11 @@ export async function syncShopifyOrders({ shopifyStoreId, admin }: SyncOrdersInp
       { variables: { cursor } }
     );
 
-    const { data }: any = await response.json();
+    const payload: any = await response.json();
+    if (payload?.errors?.length) {
+      throw new Error("Shopify order sync failed: " + payload.errors.map((e: any) => e.message).join("; "));
+    }
+    const data = payload?.data;
     const edges = data?.orders?.edges ?? [];
 
     for (const edge of edges) {
@@ -196,9 +213,7 @@ export async function syncShopifyOrders({ shopifyStoreId, admin }: SyncOrdersInp
 
     hasNextPage = data?.orders?.pageInfo?.hasNextPage ?? false;
     cursor = data?.orders?.pageInfo?.endCursor ?? null;
-
-    // Safety cap so a bad loop can't run away in local testing.
-    if (synchronizedCount >= 500) break;
+    if (!edges.length || !cursor) break;
   }
 
   return { success: true, synchronizedCount };
@@ -245,18 +260,16 @@ export async function searchOrSyncOrders({ shopifyStoreId, admin, query }: SyncO
   const mappedOrders: MappedOrder[] = [];
   let cursor: string | null = null;
   let hasNextPage = true;
-  const maxSearchResults = 500;
-
-  while (hasNextPage && mappedOrders.length < maxSearchResults) {
+  while (hasNextPage) {
     const response: any = await admin.graphql(
       `#graphql
       query searchOrders($query: String!, $cursor: String) {
         orders(first: 100, after: $cursor, query: $query, sortKey: CREATED_AT, reverse: true) {
           pageInfo { hasNextPage endCursor }
           edges { node {
-            id name email createdAt displayFinancialStatus displayFulfillmentStatus
+            id name email phone createdAt displayFinancialStatus displayFulfillmentStatus
             totalPriceSet { shopMoney { amount currencyCode } }
-            customer { firstName lastName email }
+            customer { firstName lastName email phone }
             lineItems(first: 50) { edges { node {
               id title quantity originalUnitPriceSet { shopMoney { amount } }
               variant { id product { id } }

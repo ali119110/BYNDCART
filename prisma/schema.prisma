@@ -232,6 +232,7 @@ model Order {
   shopifyOrderId     String       @unique   // gid://shopify/Order/...
   orderNumber        String
   customerEmail      String?
+  customerPhone      String?
   customerName       String?
   totalPrice         Decimal      @db.Decimal(10, 2)
   currency           String       @default("USD")

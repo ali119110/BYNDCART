@@ -111,7 +111,11 @@ export async function syncShopifyCustomers(shopifyStoreId: string, admin: any) {
       { variables: { cursor } }
     );
 
-    const { data }: any = await response.json();
+    const payload: any = await response.json();
+    if (payload?.errors?.length) {
+      throw new Error("Shopify customer sync failed: " + payload.errors.map((e: any) => e.message).join("; "));
+    }
+    const data = payload?.data;
     const edges = data?.customers?.edges ?? [];
 
     for (const edge of edges) {
@@ -130,8 +134,7 @@ export async function syncShopifyCustomers(shopifyStoreId: string, admin: any) {
 
     hasNextPage = data?.customers?.pageInfo?.hasNextPage ?? false;
     cursor = data?.customers?.pageInfo?.endCursor ?? null;
-
-    if (synchronizedCount >= 500) break;
+    if (!edges.length || !cursor) break;
   }
 
   return { success: true, count: synchronizedCount };
