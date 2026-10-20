@@ -806,6 +806,14 @@ a.bc-btn svg {
   letter-spacing: 0.035em;
 }
 
+.bc-cod-row-unpaid td {
+  background: var(--bc-warn-bg);
+}
+
+.bc-cod-row-ignored td {
+  color: var(--bc-subtle);
+}
+
 .bc-table tbody tr:last-child td {
   border-bottom: 0;
 }

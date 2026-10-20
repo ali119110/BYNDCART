@@ -39,6 +39,8 @@ export async function loader({ request }: Route.LoaderArgs) {
         emailNotificationsEnabled: false,
         refundExecutionMode: "MANUAL",
         exchangeReplacementTiming: "AFTER_INSPECTION",
+        codTaxPercent: 4,
+        codDeliveryCharge: 280,
       },
       portal,
       policyRule: {
@@ -79,6 +81,14 @@ export async function action({ request }: Route.ActionArgs) {
   const fraudFlagReturnCount = Number(formData.get("fraudFlagReturnCount") || 5);
   const fraudFlagWindowDays = Number(formData.get("fraudFlagWindowDays") || 30);
   const fraudFlagWindowCount = Number(formData.get("fraudFlagWindowCount") || 3);
+  const codTaxPercent = Number(formData.get("codTaxPercent") ?? 4);
+  const codDeliveryCharge = Number(formData.get("codDeliveryCharge") ?? 280);
+  if (!Number.isFinite(codTaxPercent) || codTaxPercent < 0 || codTaxPercent > 100) {
+    return { error: "COD tax percent must be between 0 and 100." };
+  }
+  if (!Number.isFinite(codDeliveryCharge) || codDeliveryCharge < 0) {
+    return { error: "COD delivery charge must be zero or more." };
+  }
 
   // Policy Rule fields
   const returnsAllowed = formData.get("returnsAllowed") === "on";
@@ -108,6 +118,8 @@ export async function action({ request }: Route.ActionArgs) {
       fraudFlagReturnCount,
       fraudFlagWindowDays,
       fraudFlagWindowCount,
+      codTaxPercent,
+      codDeliveryCharge,
     });
 
     const updatedPolicyRule = await saveReturnPolicyRule(shopifyStoreId, {
@@ -465,6 +477,16 @@ export default function Settings() {
                 <option value="AFTER_INSPECTION">After the original item is received and inspected</option>
               </select>
               <span className="bc-hint">BYNDCART will not book a courier shipment. Merchants and customers manage shipping with their chosen carrier.</span>
+            </label>
+            <label>
+              <span className="bc-field-label">COD tax <span className="bc-unit">Percent</span></span>
+              <input type="number" name="codTaxPercent" defaultValue={Number(settings.codTaxPercent ?? 4)} min={0} max={100} step="0.01" />
+              <span className="bc-hint">Used on the COD page to estimate tax on unpaid and settled amounts.</span>
+            </label>
+            <label>
+              <span className="bc-field-label">COD delivery charge <span className="bc-unit">PKR</span></span>
+              <input type="number" name="codDeliveryCharge" defaultValue={Number(settings.codDeliveryCharge ?? 280)} min={0} step="0.01" />
+              <span className="bc-hint">Estimated charge for each delivered order that is still unpaid.</span>
             </label>
           </div>
         </section>

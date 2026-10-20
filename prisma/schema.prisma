@@ -221,6 +221,8 @@ model StoreSettings {
   fraudFlagReturnCount    Int         @default(5)
   fraudFlagWindowDays     Int         @default(30)
   fraudFlagWindowCount    Int         @default(3)
+  codTaxPercent          Decimal      @default(4.00) @db.Decimal(5, 2)
+  codDeliveryCharge      Decimal      @default(280.00) @db.Decimal(10, 2)
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
   shopifyStore           ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)

@@ -130,6 +130,8 @@ export async function updateSettings(
     fraudFlagReturnCount?: number;
     fraudFlagWindowDays?: number;
     fraudFlagWindowCount?: number;
+    codTaxPercent?: number;
+    codDeliveryCharge?: number;
   }
 ) {
   const updated = await db.storeSettings.upsert({
@@ -149,5 +151,7 @@ function serializeSettings(settings: any) {
     ...settings,
     restockingFeePercent: Number(settings.restockingFeePercent),
     exchangeShippingCost: Number(settings.exchangeShippingCost),
+    codTaxPercent: Number(settings.codTaxPercent ?? 4),
+    codDeliveryCharge: Number(settings.codDeliveryCharge ?? 280),
   };
 }

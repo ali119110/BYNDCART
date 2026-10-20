@@ -9,6 +9,9 @@ import {
   importCodCsv,
   listCodSettlements,
 } from "../services/cod.server";
+import { countPendingCodOrders, markVerifiedCodPaid, verifyCodBatch } from "../services/codVerification.server";
+import { getSettings } from "../services/settings.server";
+import { CodPaymentCheck } from "../components/CodPaymentCheck";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { shopifyStoreId } = await requireTenantContext(request);
@@ -23,16 +26,51 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
   }
   const settlements = await listCodSettlements(shopifyStoreId);
-  return { settlements };
+  const settings = await getSettings(shopifyStoreId).catch(() => null);
+  return {
+    settlements,
+    codTaxPercent: Number(settings?.codTaxPercent ?? 4),
+    codDeliveryCharge: Number(settings?.codDeliveryCharge ?? 280),
+  };
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  const { shopifyStoreId, session } = await requireTenantContext(request);
+  const { shopifyStoreId, session, admin } = await requireTenantContext(request);
   await assertPermission(shopifyStoreId, session, "cod");
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
 
   try {
+    if (intent === "VERIFY") {
+      const cursor = String(form.get("cursor") || "") || null;
+      const settings = await getSettings(shopifyStoreId).catch(() => null);
+      const [batch, totalPending] = await Promise.all([
+        verifyCodBatch(admin, shopifyStoreId, cursor, Number(settings?.codTaxPercent ?? 4)),
+        countPendingCodOrders(admin),
+      ]);
+      return { ok: true, intent: "VERIFY", mode: String(form.get("mode") || "replace"), totalPending, ...batch };
+    }
+    if (intent === "MARK") {
+      const orderIds = String(form.get("orderIds") || "").split(",").map((id) => id.trim()).filter(Boolean).slice(0, 20);
+      if (!orderIds.length) return { ok: false, intent: "MARK", message: "Select at least one settled order." };
+      const marked: Array<{ orderId: string; orderName: string }> = [];
+      const failed: Array<{ orderId: string; message: string }> = [];
+      for (const orderId of orderIds) {
+        try {
+          marked.push(await markVerifiedCodPaid(admin, shopifyStoreId, orderId));
+        } catch (error) {
+          failed.push({ orderId, message: error instanceof Error ? error.message : "Shopify did not mark this order paid." });
+        }
+      }
+      const failedNote = failed.length ? ` ${failed.length} could not be marked: ${failed.map((row) => row.message).join(" ")}` : "";
+      return {
+        ok: failed.length === 0,
+        intent: "MARK",
+        marked,
+        failed,
+        message: `Marked ${marked.length} of ${orderIds.length} orders paid in Shopify.${failedNote}`,
+      };
+    }
     if (intent === "CONFIRM") {
       await confirmCodSettlement(String(form.get("settlementId") || ""), shopifyStoreId);
       return { ok: true, message: "Settlement marked confirmed by a merchant." };
@@ -88,9 +126,10 @@ export default function ReconciliationPage() {
         <div className="bc-header-copy">
           <p className="bc-eyebrow">PAYMENTS</p>
           <h1>COD reconciliation</h1>
-          <p>Expected, imported, matched, disputed, and merchant-confirmed settlements. Imports and manual entries are the source of truth.</p>
+          <p>Check courier settlement for fulfilled unpaid orders, then keep the manual and imported settlement records below.</p>
         </div>
       </header>
+      <CodPaymentCheck taxPercent={Number(data && "codTaxPercent" in data ? data.codTaxPercent : 4)} deliveryCharge={Number(data && "codDeliveryCharge" in data ? data.codDeliveryCharge : 280)} />
       {actionData?.message && <div className={actionData.ok ? "bc-note ok" : "bc-note bad"}>{actionData.message}</div>}
       <div className="bc-split">
         <Form method="post" className="bc-form">
