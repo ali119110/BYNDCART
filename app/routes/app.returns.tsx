@@ -6,6 +6,7 @@ import prisma from "../db.server";
 import { getReturnRequests, updateReturnRequestStatus, createReturnRequest } from "../services/returns.server";
 import { getCustomerRiskFlagsForEmails } from "../services/fraud.server";
 import { searchOrSyncOrders } from "../services/orders.server";
+import { describeAuditEvent } from "../utils/auditSentence";
 
 // ===== LOADER: Fetch returns and store orders from database =====
 export async function loader({ request }: Route.LoaderArgs) {
@@ -254,12 +255,15 @@ export default function Returns() {
       reason: item.reason,
       price: 0,
     })),
-    timeline: (ret.auditHistory || []).map((entry: any) => ({
-      status: entry.action,
-      title: String(entry.action || "AUDIT EVENT").replaceAll("_", " "),
-      description: entry.metadata ? JSON.stringify(entry.metadata) : "Recorded in audit history",
-      date: new Date(entry.createdAt).toLocaleString(),
-    })).concat((ret.auditHistory || []).length ? [] : [{
+    timeline: (ret.auditHistory || []).map((entry: any) => {
+      const event = describeAuditEvent(entry.action, entry.metadata);
+      return {
+        status: entry.action,
+        title: event.title,
+        description: event.description,
+        date: new Date(entry.createdAt).toLocaleString(),
+      };
+    }).concat((ret.auditHistory || []).length ? [] : [{
       status: ret.status,
       title: `Return ${ret.status}`,
       description: `Current status: ${ret.status}`,

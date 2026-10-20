@@ -4,6 +4,7 @@ import type { Route } from "./+types/app.exchanges";
 import { requireTenantContext } from "../utils/tenant.server";
 import { getExchangeRequests, updateExchangeStatus, approveExchangeWithDraftOrder, createExchangeRequest } from "../services/exchanges.server";
 import { executeShopifyDraftOrderCreate } from "../services/shopifySync.server";
+import { describeAuditEvent } from "../utils/auditSentence";
 import { getCustomerRiskFlagsForEmails } from "../services/fraud.server";
 import { assertRateLimit } from "../utils/rateLimit.server";
 import { searchOrSyncOrders } from "../services/orders.server";
@@ -120,7 +121,12 @@ export async function action({ request }: Route.ActionArgs) {
       if (!replacement?.success || replacement.skipped || !createdOrderId.startsWith("gid://shopify/Order/")) {
         return { error: replacement?.reason || "Shopify did not create the replacement order." };
       }
-      return { success: true, message: `Replacement order ${replacement.replacementOrderNumber || createdOrderId} was created in Shopify.` };
+      const originalReturnError = (replacement as { originalReturnError?: string | null }).originalReturnError;
+      return {
+        success: true,
+        message: `Replacement order ${replacement.replacementOrderNumber || createdOrderId} was created in Shopify. The original order is marked return in progress.`,
+        warning: originalReturnError ? `The original order return was not opened: ${originalReturnError}` : undefined,
+      };
     } catch (error) {
       return { error: error instanceof Error ? error.message : "Shopify did not create the replacement order." };
     }
@@ -156,8 +162,13 @@ export async function action({ request }: Route.ActionArgs) {
           );
 
     const replacementError = (updated as { replacementError?: string | null }).replacementError;
-    if (newStatus === "APPROVED" && replacementError) {
-      return { success: true, exchange: updated, warning: `The exchange was approved, but Shopify did not create the replacement order: ${replacementError}` };
+    const originalReturnError = (updated as { originalReturnError?: string | null }).originalReturnError;
+    const warnings = [
+      replacementError ? `Shopify did not create the replacement order: ${replacementError}` : "",
+      originalReturnError ? `Shopify did not open the return on the original order: ${originalReturnError}` : "",
+    ].filter(Boolean);
+    if (warnings.length) {
+      return { success: true, exchange: updated, warning: `The exchange was updated, but ${warnings.join(" ")}` };
     }
     if (newStatus === "APPROVED" && updated.newOrderNumber) {
       return { success: true, exchange: updated, message: `Exchange approved. Replacement order ${updated.newOrderNumber} was created.` };
@@ -260,12 +271,15 @@ export default function Exchanges() {
       replacementTitle: item.replacementTitle,
       priceDifference: item.priceDifference,
     })),
-    timeline: (exc.auditHistory || []).map((entry: any) => ({
-      status: entry.action,
-      title: String(entry.action || "AUDIT EVENT").replaceAll("_", " "),
-      description: entry.metadata ? JSON.stringify(entry.metadata) : "Recorded in audit history",
-      date: new Date(entry.createdAt).toLocaleString(),
-    })).concat((exc.auditHistory || []).length ? [] : [{
+    timeline: (exc.auditHistory || []).map((entry: any) => {
+      const event = describeAuditEvent(entry.action, entry.metadata);
+      return {
+        status: entry.action,
+        title: event.title,
+        description: event.description,
+        date: new Date(entry.createdAt).toLocaleString(),
+      };
+    }).concat((exc.auditHistory || []).length ? [] : [{
       status: exc.status,
       title: `Exchange ${exc.status}`,
       description: `Current status: ${exc.status}`,
@@ -869,6 +883,8 @@ export default function Exchanges() {
                     </button>
                   </fetcher.Form>
                 ) : null}
+                {fetcher.formData?.get("exchangeId") === selectedExchange.id && fetcher.data?.error ? <p role="alert" style={{ color: "#b91c1c", margin: "8px 0 0" }}>{fetcher.data.error}</p> : null}
+                {fetcher.formData?.get("exchangeId") === selectedExchange.id && fetcher.data?.warning ? <p role="alert" style={{ color: "#b91c1c", margin: "8px 0 0" }}>{fetcher.data.warning}</p> : null}
               </div>
             </div>
             <div>

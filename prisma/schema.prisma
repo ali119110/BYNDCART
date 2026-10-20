@@ -145,6 +145,7 @@ model ExchangeRequest {
   adminNote      String?
   newOrderId     String?        // Replacement actual order ID in Shopify
   newOrderNumber String?        // Replacement order number
+  shopifyReturnId String?       // Return opened on the original order, gid://shopify/Return/...
   storeCreditStatus String?     // PENDING, ISSUED, FAILED; prevents duplicate customer credit
   storeCreditTransactionId String?
   storeCreditAmount Decimal?    @db.Decimal(10, 2)

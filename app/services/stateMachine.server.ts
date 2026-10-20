@@ -4,6 +4,8 @@ import {
   executeShopifyOrderTagAdd,
   executeShopifyRefundCreate,
   executeShopifyDraftOrderCreate,
+  executeShopifyExchangeOriginalReturn,
+  RETURN_IN_PROGRESS_TAG,
 } from "./shopifySync.server";
 import { enqueueJob } from "./jobs.server";
 import { getSettings } from "./settings.server";
@@ -163,7 +165,7 @@ export async function transitionReturnStatus({
         const tagResult = await executeShopifyOrderTagAdd({
           shopifyStoreId,
           orderId: result.updated.shopifyOrderId,
-          tags: ["return-in-progress", `byndcart-return-${id}`],
+          tags: [RETURN_IN_PROGRESS_TAG],
           entityId: id,
           admin,
         });
@@ -172,7 +174,7 @@ export async function transitionReturnStatus({
         }
       } catch (err: any) {
         console.error(`[StateMachine] Failed to tag order for Return ${id}:`, err?.message || err);
-        await prisma.auditLog.create({ data: { shopifyStoreId, action: "SHOPIFY_ORDER_TAG_ADD_FAILED", entityType: "ReturnRequest", entityId: id, metadata: { orderId: result.updated.shopifyOrderId, tags: ["return-in-progress", `byndcart-return-${id}`], error: String(err?.message || err) } } });
+        await prisma.auditLog.create({ data: { shopifyStoreId, action: "SHOPIFY_ORDER_TAG_ADD_FAILED", entityType: "ReturnRequest", entityId: id, metadata: { orderId: result.updated.shopifyOrderId, tags: [RETURN_IN_PROGRESS_TAG], error: String(err?.message || err) } } });
       }
     }
 
@@ -370,9 +372,19 @@ export async function transitionExchangeStatus({
       : targetStatus === "INSPECTED" && (settings?.exchangeReplacementTiming === "AFTER_INSPECTION" || hasIncompleteReplacementDraft);
 
     let replacementError: string | null = null;
+    let originalReturnError: string | null = null;
+    if (targetStatus === "APPROVED" && !(shouldCreateReplacement && !hasActualReplacementOrder)) {
+      try {
+        const originalReturn = await executeShopifyExchangeOriginalReturn({ shopifyStoreId, entityId: id, admin });
+        if (!originalReturn?.success) originalReturnError = originalReturn?.reason || "Shopify did not open the return on the original order.";
+      } catch (err: any) {
+        originalReturnError = err?.message || "Shopify did not open the return on the original order.";
+      }
+    }
     if (shouldCreateReplacement && !hasActualReplacementOrder) {
       try {
         const replacement = await executeShopifyDraftOrderCreate({ shopifyStoreId, entityId: id, admin });
+        originalReturnError = (replacement as { originalReturnError?: string | null })?.originalReturnError || null;
         const createdOrderId = String(replacement?.replacementOrderId || "");
         if (replacement?.success && !replacement?.skipped && createdOrderId.startsWith("gid://shopify/Order/")) {
           result.updated.newOrderId = createdOrderId;
@@ -398,6 +410,7 @@ export async function transitionExchangeStatus({
       }
     }
     (result.updated as any).replacementError = replacementError;
+    (result.updated as any).originalReturnError = originalReturnError;
 
     // Once inspection is complete, an already-created (AFTER_APPROVAL) or new
     // (AFTER_INSPECTION) replacement enters FULFILLED processing.

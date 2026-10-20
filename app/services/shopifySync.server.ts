@@ -42,11 +42,82 @@ export async function getShopifyAdminClient(shopifyStoreId: string, providedAdmi
   }
 }
 
-/** Adds order tags in Shopify. This is deliberately separate from returnCreate. */
+export const REPLACEMENT_ORDER_TAG = "replacement order";
+export const RETURN_IN_PROGRESS_TAG = "return in progress";
+const SHOPIFY_TAG_LIMIT = 40;
+const SHOPIFY_RETURN_REASONS = new Set(["COLOR", "DEFECTIVE", "NOT_AS_DESCRIBED", "OTHER", "SIZE_TOO_LARGE", "SIZE_TOO_SMALL", "STYLE", "UNKNOWN", "UNWANTED", "WRONG_ITEM"]);
+
+function shopifyTags(tags: string[]) {
+  return [...new Set(tags.map((tag) => String(tag).trim()).filter((tag) => tag.length > 0 && tag.length <= SHOPIFY_TAG_LIMIT))];
+}
+
+function shopifyReturnReason(reason?: string | null) {
+  const normalized = String(reason || "").trim().toUpperCase().replace(/[\s-]+/g, "_");
+  return SHOPIFY_RETURN_REASONS.has(normalized) ? normalized : "OTHER";
+}
+
+function graphqlErrorText(payload: any, label: string) {
+  const messages = Array.isArray(payload?.errors) ? payload.errors.map((error: any) => error?.message).filter(Boolean) : [];
+  return messages.length ? `${label}: ${messages.join("; ")}` : "";
+}
+
+async function loadFulfilledReturnLines(client: any, orderId: string) {
+  const response = await client.graphql(
+    `#graphql
+    query orderFulfillmentLines($id: ID!) {
+      order(id: $id) {
+        fulfillments {
+          fulfillmentLineItems(first: 50) {
+            nodes { id quantity lineItem { id } }
+          }
+        }
+      }
+    }`,
+    { variables: { id: orderId } },
+  );
+  const payload = await response.json();
+  const graphqlError = graphqlErrorText(payload, "Shopify could not read the original order fulfillments");
+  if (graphqlError) throw new Error(graphqlError);
+  const lines: Array<{ id: string; quantity: number; lineItemId: string }> = [];
+  for (const fulfillment of payload?.data?.order?.fulfillments ?? []) {
+    const connection = fulfillment?.fulfillmentLineItems;
+    const nodes = connection?.nodes ?? (connection?.edges ?? []).map((edge: any) => edge?.node).filter(Boolean);
+    for (const node of nodes) {
+      const quantity = Number(node?.quantity || 0);
+      if (node?.id && node?.lineItem?.id && quantity > 0) lines.push({ id: node.id, quantity, lineItemId: node.lineItem.id });
+    }
+  }
+  return lines;
+}
+
+function returnLineItemsForFulfilledQuantities(requested: Array<{ lineItemId: string; quantity: number; reason?: string | null; note?: string | null }>, fulfilled: Array<{ id: string; quantity: number; lineItemId: string }>) {
+  const returnLineItems: Array<{ fulfillmentLineItemId: string; quantity: number; returnReason: string; returnReasonNote: string }> = [];
+  for (const item of requested) {
+    let remaining = Number(item.quantity);
+    if (!Number.isInteger(remaining) || remaining < 1) throw new Error("The return quantity must be a whole number of at least 1.");
+    const matches = fulfilled.filter((line) => line.lineItemId === item.lineItemId && line.quantity > 0);
+    if (!matches.length) throw new Error("Shopify can open a return only after the original item is fulfilled. This item has no fulfilled quantity yet.");
+    for (const match of matches) {
+      if (remaining <= 0) break;
+      const quantity = Math.min(remaining, match.quantity);
+      returnLineItems.push({
+        fulfillmentLineItemId: match.id,
+        quantity,
+        returnReason: shopifyReturnReason(item.reason),
+        returnReasonNote: String(item.note || "Customer return").slice(0, 255),
+      });
+      remaining -= quantity;
+    }
+    if (remaining > 0) throw new Error("The fulfilled quantity on the original order is smaller than the requested quantity, so Shopify did not open the return.");
+  }
+  return returnLineItems;
+}
+
+/** Adds order tags in Shopify. Tags stay within Shopify's 40-character limit. */
 export async function executeShopifyOrderTagAdd(input: { shopifyStoreId: string; orderId: string; tags: string[]; entityId?: string; admin?: any }) {
   const client = await getShopifyAdminClient(input.shopifyStoreId, input.admin);
   if (!client) return { success: false, skipped: true, reason: "No admin client available" };
-  const tags = [...new Set(input.tags.map((tag) => String(tag).trim()).filter(Boolean))];
+  const tags = shopifyTags(input.tags);
   if (!tags.length) return { success: true, skipped: true, reason: "No tags provided" };
   const response = await client.graphql(
     `#graphql
@@ -96,27 +167,20 @@ export async function executeShopifyReturnCreate({ shopifyStoreId, entityId, adm
     return { success: false, skipped: true, reason: "No admin client available" };
   }
 
-  const returnLineItems = returnRequest.items.map((item) => ({
+  const fulfilled = await loadFulfilledReturnLines(client, returnRequest.shopifyOrderId);
+  const returnLineItems = returnLineItemsForFulfilledQuantities(returnRequest.items.map((item) => ({
     lineItemId: item.shopifyLineItemId,
     quantity: item.quantity,
-    returnReason: "SIZE_TOO_SMALL",
-    returnReasonNote: item.reasonNote || item.reason || "Customer return",
-  }));
+    reason: item.reason,
+    note: item.reasonNote || item.reason || "Customer return",
+  })), fulfilled);
 
   const response = await client.graphql(
     `#graphql
     mutation returnCreate($returnInput: ReturnInput!) {
       returnCreate(returnInput: $returnInput) {
-        return {
-          id
-          name
-          status
-        }
-        userErrors {
-          field
-          message
-          code
-        }
+        return { id name status }
+        userErrors { field message }
       }
     }`,
     {
@@ -129,7 +193,10 @@ export async function executeShopifyReturnCreate({ shopifyStoreId, entityId, adm
     }
   );
 
-  const { data } = await response.json();
+  const payload = await response.json();
+  const graphqlError = graphqlErrorText(payload, "Shopify returnCreate failed");
+  if (graphqlError) throw new Error(graphqlError);
+  const data = payload?.data;
   const userErrors = data?.returnCreate?.userErrors ?? [];
 
   if (userErrors.length > 0) {
@@ -341,6 +408,69 @@ query getRestockLocation { locations(first: 1) { edges { node { id } } } }`);
 }
 
 /**
+ * Opens a Shopify return on the original exchange order and tags it
+ * "return in progress". Safe to call again: an existing return id is reused.
+ */
+export async function executeShopifyExchangeOriginalReturn({ shopifyStoreId, entityId, admin }: ShopifySyncInput) {
+  const exchange = await prisma.exchangeRequest.findFirst({ where: { id: entityId, shopifyStoreId }, include: { items: true } });
+  if (!exchange) throw new Error(`Exchange request ${entityId} not found for store ${shopifyStoreId}`);
+  const client = await getShopifyAdminClient(shopifyStoreId, admin);
+  if (!client) return { success: false, skipped: true, reason: "No admin client available" };
+
+  try {
+    await executeShopifyOrderTagAdd({ shopifyStoreId, orderId: exchange.shopifyOrderId, tags: [RETURN_IN_PROGRESS_TAG], entityId, admin: client });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Shopify did not add the return in progress tag.";
+    await prisma.auditLog.create({ data: { shopifyStoreId, action: "SHOPIFY_ORDER_TAG_ADD_FAILED", entityType: "ExchangeRequest", entityId, metadata: { error: message.slice(0, 500) } } });
+  }
+
+  if (exchange.shopifyReturnId) return { success: true, shopifyReturnId: exchange.shopifyReturnId, idempotent: true };
+  const prior = await prisma.auditLog.findFirst({ where: { shopifyStoreId, entityType: "ExchangeRequest", entityId, action: "SHOPIFY_RETURN_CREATED" } });
+  const priorId = prior?.metadata && typeof prior.metadata === "object" ? String((prior.metadata as { shopifyReturnId?: string }).shopifyReturnId || "") : "";
+  if (priorId.startsWith("gid://shopify/Return/")) {
+    await prisma.exchangeRequest.update({ where: { id: entityId }, data: { shopifyReturnId: priorId } });
+    return { success: true, shopifyReturnId: priorId, idempotent: true };
+  }
+
+  try {
+    const fulfilled = await loadFulfilledReturnLines(client, exchange.shopifyOrderId);
+    const returnLineItems = returnLineItemsForFulfilledQuantities(exchange.items.map((item) => ({
+      lineItemId: item.originalLineItemId,
+      quantity: Number(item.originalQuantity),
+      reason: exchange.reason,
+      note: exchange.customerNote || exchange.reason || "Customer is returning this item for a replacement.",
+    })), fulfilled);
+    const response = await client.graphql(
+      `#graphql
+      mutation returnCreate($returnInput: ReturnInput!) {
+        returnCreate(returnInput: $returnInput) {
+          return { id name status }
+          userErrors { field message }
+        }
+      }`,
+      { variables: { returnInput: { orderId: exchange.shopifyOrderId, returnLineItems } } },
+    );
+    const payload = await response.json();
+    const graphqlError = graphqlErrorText(payload, "Shopify returnCreate failed");
+    if (graphqlError) throw new Error(graphqlError);
+    const userErrors = payload?.data?.returnCreate?.userErrors ?? [];
+    if (userErrors.length) {
+      const message = `Shopify returnCreate userErrors: ${userErrors.map((error: any) => `${error.field ? error.field.join(".") + ": " : ""}${error.message}`).join("; ")}`;
+      throw new Error(message);
+    }
+    const shopifyReturn = payload?.data?.returnCreate?.return;
+    if (!shopifyReturn?.id) throw new Error("Shopify returnCreate returned no return and no userErrors.");
+    await prisma.exchangeRequest.update({ where: { id: entityId }, data: { shopifyReturnId: shopifyReturn.id } });
+    await prisma.auditLog.create({ data: { shopifyStoreId, action: "SHOPIFY_RETURN_CREATED", entityType: "ExchangeRequest", entityId, metadata: { shopifyReturnId: shopifyReturn.id, name: shopifyReturn.name || null } } });
+    return { success: true, shopifyReturnId: shopifyReturn.id, idempotent: false };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Shopify did not open the return on the original order.";
+    await prisma.auditLog.create({ data: { shopifyStoreId, action: "SHOPIFY_RETURN_CREATE_FAILED", entityType: "ExchangeRequest", entityId, metadata: { error: message.slice(0, 500) } } });
+    return { success: false, reason: message };
+  }
+}
+
+/**
  * 4. Executes Shopify Admin GraphQL `draftOrderCreate` mutation for exchanges.
  * Idempotent: Skips if ExchangeRequest.newOrderId is already set.
  * Preserves originalOrderId and links replacement draft order.
@@ -359,6 +489,8 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
     return { success: true, replacementOrderId: alreadyCreatedOrderId, replacementOrderNumber: alreadyCreatedOrderNumber, idempotent: true };
   }
   if (!client) return { success: false, skipped: true, reason: "No admin client available" };
+  const originalReturn = await executeShopifyExchangeOriginalReturn({ shopifyStoreId, entityId, admin: client });
+  const originalReturnError = originalReturn?.success ? null : (originalReturn?.reason || "Shopify did not open the return on the original order.");
 
   const orderSnapshot = await prisma.order.findFirst({ where: { shopifyStoreId, shopifyOrderId: exchangeRequest.shopifyOrderId } });
   if (!orderSnapshot) throw new Error("Original Shopify order snapshot is missing; refresh/sync the order before creating a replacement.");
@@ -398,12 +530,12 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
       client, shopifyStoreId, exchangeRequest, originalOrderId: exchangeRequest.shopifyOrderId,
       replacementOrderId: alreadyCreatedOrderId, netDifference, currency: orderSnapshot.currency || "USD",
     });
-    return { success: true, replacementOrderId: alreadyCreatedOrderId, replacementOrderNumber: alreadyCreatedOrderNumber, idempotent: true, netDifference, settlement };
+    return { success: true, replacementOrderId: alreadyCreatedOrderId, replacementOrderNumber: alreadyCreatedOrderNumber, idempotent: true, netDifference, settlement, originalReturnError };
   }
   const input: any = {
     email: exchangeRequest.customerEmail || undefined,
     note: `BYNDCART exchange replacement for original order ${exchangeRequest.orderNumber} (request ${exchangeRequest.id}). Net difference: ${netDifference.toFixed(2)} ${orderSnapshot.currency}. A positive balance remains unpaid until collected by the merchant.`,
-    tags: ["exchange-replacement", `original-order-${exchangeRequest.orderNumber}`, `byndcart-exchange-${exchangeRequest.id}`],
+    tags: [REPLACEMENT_ORDER_TAG],
     lineItems,
   };
   if (credit > 0) input.appliedDiscount = { value: Number(credit.toFixed(2)), valueType: "FIXED_AMOUNT", title: "Exchange credit for returned items" };
@@ -468,7 +600,7 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
     replacementOrderId: replacementOrder.id, netDifference, currency: orderSnapshot.currency || "USD",
   });
 
-  return { success: true, draftOrderId, draftOrderName: completedDraft.name || draftOrderName, replacementOrderId: replacementOrder.id, replacementOrderNumber: replacementOrder.name || completedDraft.name || draftOrderName, idempotent: false, netDifference, settlement };
+  return { success: true, draftOrderId, draftOrderName: completedDraft.name || draftOrderName, replacementOrderId: replacementOrder.id, replacementOrderNumber: replacementOrder.name || completedDraft.name || draftOrderName, idempotent: false, netDifference, settlement, originalReturnError };
 }
 
 
