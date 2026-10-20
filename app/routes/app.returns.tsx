@@ -793,19 +793,15 @@ export default function Returns() {
         </>
       )}
 
-      {/* Basic Hover Row Styling */}
+      {/* Shared row and responsive manual-request modal styling */}
       <style>{`
-        .hover-row:hov      <style>{`
+        .hover-row:hover { background-color: #f9fafb !important; }
         .bc-manual-request-modal, .bc-manual-request-modal * { box-sizing: border-box; min-width: 0; }
         .bc-manual-request-modal { overscroll-behavior: contain; }
         .bc-manual-request-modal input, .bc-manual-request-modal select, .bc-manual-request-modal textarea { max-width: 100%; min-width: 0; }
         @media (max-width: 640px) {
           .bc-manual-request-modal { width: calc(100vw - 20px) !important; max-width: calc(100vw - 20px) !important; max-height: calc(100dvh - 20px) !important; padding: 16px !important; }
           .bc-manual-request-modal [style*="grid-column: span 2"] { grid-column: auto !important; }
-        }
-      `}</style>
-er {
-          background-color: #f9fafb !important;
         }
       `}</style>
     </div>

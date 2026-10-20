@@ -835,7 +835,11 @@ export default function Exchanges() {
             <div>
               <h3 style={{ fontSize: "13px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", margin: "0 0 8px 0" }}>Full audit history</h3>
               <div style={{ display: "grid", gap: 12 }}>{selectedExchange.timeline.map((event: any, index: number) => <div key={`${event.title}-${index}`} style={{ borderLeft: "2px solid #cbd5e1", paddingLeft: 12 }}><strong style={{ fontSize: 12 }}>{event.title}</strong><div style={{ color: "#64748b", fontSize: 11, marginTop: 3 }}>{event.date}</div><p style={{ color: "#334155", fontSize: 12, whiteSpace: "pre-wrap", overflowWrap: "anywhere", margin: "5px 0 0" }}>{event.description}</p></div>)}</div>
-            </div      <style>{`
+            </div>
+          </div>
+        </>
+      )}
+      <style>{`
         .bc-manual-request-modal, .bc-manual-request-modal * { box-sizing: border-box; min-width: 0; }
         .bc-manual-request-modal { overscroll-behavior: contain; }
         .bc-manual-request-modal input, .bc-manual-request-modal select, .bc-manual-request-modal textarea { max-width: 100%; min-width: 0; }
@@ -844,10 +848,6 @@ export default function Exchanges() {
           .bc-manual-request-modal [style*="grid-column: span 2"] { grid-column: auto !important; }
         }
       `}</style>
->
-          </div>
-        </>
-      )}
     </div>
   );
 }
