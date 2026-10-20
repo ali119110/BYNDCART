@@ -416,13 +416,17 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
       `#graphql
       mutation draftOrderCreate($input: DraftOrderInput!) {
         draftOrderCreate(input: $input) {
-          draftOrder { id name totalPrice }
-          userErrors { field message code }
+          draftOrder { id name }
+          userErrors { field message }
         }
       }`,
       { variables: { input } }
     );
     const createPayload = await createResponse.json();
+    const graphqlErrors = Array.isArray(createPayload?.errors) ? createPayload.errors.map((error: any) => error?.message).filter(Boolean) : [];
+    if (graphqlErrors.length) {
+      throw new Error(`Shopify draftOrderCreate failed: ${graphqlErrors.join("; ")}`);
+    }
     const createErrors = createPayload?.data?.draftOrderCreate?.userErrors ?? [];
     if (createErrors.length) {
       const message = `Shopify draftOrderCreate userErrors: ${createErrors.map((e: any) => `${e.field ? e.field.join(".") + ": " : ""}${e.message}`).join("; ")}`;
@@ -447,8 +451,10 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
     }`,
     { variables: { id: draftOrderId, paymentPending: netDifference > 0 } }
   );
-  const completePayload = await completeResponse.json();
-  const completeErrors = completePayload?.data?.draftOrderComplete?.userErrors ?? [];
+    const completePayload = await completeResponse.json();
+    const completeGraphqlErrors = Array.isArray(completePayload?.errors) ? completePayload.errors.map((error: any) => error?.message).filter(Boolean) : [];
+    if (completeGraphqlErrors.length) throw new Error(`Shopify draftOrderComplete failed: ${completeGraphqlErrors.join("; ")}`);
+    const completeErrors = completePayload?.data?.draftOrderComplete?.userErrors ?? [];
   if (completeErrors.length) throw new Error(`Shopify draftOrderComplete userErrors: ${completeErrors.map((e: any) => e.message).join("; ")}`);
   const completedDraft = completePayload?.data?.draftOrderComplete?.draftOrder;
   const replacementOrder = completedDraft?.order;
