@@ -29,7 +29,7 @@ interface MappedOrder {
 }
 
 function normalizePhoneDigits(value: unknown): string | null {
-  let digits = String(value ?? "").replace(/\\D/g, "");
+  let digits = String(value ?? "").replace(/\D/g, "");
   if (digits.startsWith("0092")) digits = digits.slice(2);
   if (digits.length === 11 && digits.startsWith("0")) digits = "92" + digits.slice(1);
   return digits || null;
