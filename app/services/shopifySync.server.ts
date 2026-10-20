@@ -406,7 +406,7 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
     tags: ["exchange-replacement", `original-order-${exchangeRequest.orderNumber}`, `byndcart-exchange-${exchangeRequest.id}`],
     lineItems,
   };
-  if (credit > 0) input.appliedDiscount = { value: credit.toFixed(2), valueType: "FIXED_AMOUNT", title: "Exchange credit for returned items" };
+  if (credit > 0) input.appliedDiscount = { value: Number(credit.toFixed(2)), valueType: "FIXED_AMOUNT", title: "Exchange credit for returned items" };
 
   let draftOrderId = exchangeRequest.newOrderId && exchangeRequest.newOrderId.startsWith("gid://shopify/DraftOrder/")
     ? exchangeRequest.newOrderId : null;
