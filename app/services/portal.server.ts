@@ -2,7 +2,10 @@ import prisma from "../db.server";
 import { getSettings } from "./settings.server";
 import { createReturnRequest } from "./returns.server";
 import { createExchangeRequest } from "./exchanges.server";
-import { verifyCustomerSessionToken } from "./otp.server";
+import { createCustomerSessionToken, normalizeCustomerOrderNumber, verifyCustomerSessionToken } from "./otp.server";
+import type { CustomerSessionPayload } from "./otp.server";
+import { syncCustomerOrder } from "./orders.server";
+import { rateLimit } from "../utils/rateLimit.server";
 import { checkReturnEligibility, EligibilityResult } from "./policyEngine.server";
 import { assertCanCreateReturn } from "./planGate.server";
 import { notifyStatusChange, triggerLifecycleNotification } from "./notifications.server";
@@ -48,16 +51,146 @@ export interface ShopperOrderLookupResult {
   };
 }
 
+function normalizePortalPhone(value: unknown): string {
+  let digits = String(value ?? "").replace(/\D/g, "");
+  if (digits.startsWith("0092")) digits = digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("0")) digits = "92" + digits.slice(1);
+  return digits;
+}
+
+async function findOrderForCustomerSession(shopifyStoreId: string, session: CustomerSessionPayload, orderNumber = session.orderNumber) {
+  const normalizedOrderNumber = normalizeCustomerOrderNumber(orderNumber);
+  const filters: any[] = [];
+  const email = String(session.customerEmail || "").trim().toLowerCase();
+  const phone = normalizePortalPhone(session.customerPhone);
+  if (email) filters.push({ customerEmail: { equals: email, mode: "insensitive" } });
+  if (phone) filters.push({ customerPhone: phone });
+  if (!filters.length || !normalizedOrderNumber) return null;
+
+  const baseWhere: any = {
+    shopifyStoreId,
+    orderNumber: { equals: normalizedOrderNumber, mode: "insensitive" },
+    OR: filters,
+  };
+  let order = await prisma.order.findFirst({ where: baseWhere });
+  if (!order && normalizedOrderNumber.startsWith("#")) {
+    order = await prisma.order.findFirst({
+      where: { ...baseWhere, orderNumber: { equals: normalizedOrderNumber.slice(1), mode: "insensitive" } },
+    });
+  }
+  return order;
+}
+
+export async function authenticateShopperOrder(
+  shopifyStoreId: string,
+  input: { orderNumber: string; identifierType: "EMAIL" | "PHONE"; identifier: string }
+) {
+  const rawOrderNumber = String(input.orderNumber || "").trim();
+  const orderNumber = normalizeCustomerOrderNumber(rawOrderNumber);
+  const identifierType = input.identifierType === "PHONE" ? "PHONE" : "EMAIL";
+  const rawIdentifier = String(input.identifier || "").trim();
+  const identifier = identifierType === "EMAIL" ? rawIdentifier.toLowerCase() : normalizePortalPhone(rawIdentifier);
+
+  if (!orderNumber) throw new Error("Enter your order number.");
+  if (identifierType === "EMAIL" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier)) {
+    throw new Error("Enter a valid email address used at checkout.");
+  }
+  if (identifierType === "PHONE" && (identifier.length < 7 || identifier.length > 15)) {
+    throw new Error("Enter the phone number used at checkout, including the country code if needed.");
+  }
+
+  const attempts = rateLimit("customer-portal-login:" + shopifyStoreId + ":" + identifierType + ":" + identifier, {
+    limit: 10,
+    windowMs: 15 * 60 * 1000,
+  });
+  if (!attempts.allowed) throw new Error("Too many attempts. Please wait a few minutes before trying again.");
+
+  const findOrder = async () => {
+    let result = await prisma.order.findFirst({
+      where: { shopifyStoreId, orderNumber: { equals: orderNumber, mode: "insensitive" } },
+    });
+    if (!result && orderNumber.startsWith("#")) {
+      result = await prisma.order.findFirst({
+        where: { shopifyStoreId, orderNumber: { equals: orderNumber.slice(1), mode: "insensitive" } },
+      });
+    }
+    return result;
+  };
+
+  const matchesIdentifier = async (candidate: any): Promise<boolean> => {
+    if (!candidate) return false;
+    if (identifierType === "EMAIL") {
+      return String(candidate.customerEmail || "").trim().toLowerCase() === identifier;
+    }
+
+    const savedPhone = normalizePortalPhone(candidate.customerPhone);
+    if (savedPhone) return savedPhone === identifier;
+
+    if (candidate.customerEmail) {
+      const cachedCustomer = await prisma.customerCache.findFirst({
+        where: { shopifyStoreId, email: { equals: String(candidate.customerEmail).trim(), mode: "insensitive" } },
+      });
+      if (normalizePortalPhone(cachedCustomer?.phone) === identifier) {
+        await prisma.order.update({
+          where: { shopifyOrderId: candidate.shopifyOrderId },
+          data: { customerPhone: identifier },
+        });
+        candidate.customerPhone = identifier;
+        return true;
+      }
+    }
+    return false;
+  };
+
+  let order = await findOrder();
+  let matched = await matchesIdentifier(order);
+  if (!matched) {
+    try {
+      await syncCustomerOrder(shopifyStoreId, rawOrderNumber);
+    } catch (error) {
+      console.warn("[CustomerPortal] Could not refresh order details before login:", error);
+    }
+    order = await findOrder();
+    matched = await matchesIdentifier(order);
+  }
+
+  if (!order || !matched) {
+    throw new Error("We could not find an order matching those details. Check the order number and the email or phone used at checkout.");
+  }
+
+  const sessionEmail = String(order.customerEmail || (identifierType === "EMAIL" ? identifier : "")).trim().toLowerCase();
+  const sessionPhone = normalizePortalPhone(order.customerPhone) || (identifierType === "PHONE" ? identifier : "");
+  const sessionToken = createCustomerSessionToken({
+    shopifyStoreId,
+    orderNumber: order.orderNumber,
+    customerEmail: sessionEmail,
+    customerPhone: sessionPhone,
+    durationMinutes: 30,
+  });
+
+  const maskedIdentifier = identifierType === "EMAIL"
+    ? identifier.replace(/^(.).+(@.*)$/, "$1***$2")
+    : "***" + identifier.slice(-4);
+  await prisma.auditLog.create({
+    data: {
+      shopifyStoreId,
+      action: "CUSTOMER_PORTAL_LOGIN",
+      entityType: "Order",
+      entityId: order.shopifyOrderId,
+      metadata: { orderNumber: order.orderNumber, identifierType, maskedIdentifier },
+    },
+  }).catch((error) => console.warn("[CustomerPortal] Login audit could not be saved:", error));
+
+  return { success: true as const, sessionToken, orderNumber: order.orderNumber };
+}
+
 export async function lookupShopperOrder(shopifyStoreId: string, sessionToken: string): Promise<ShopperOrderLookupResult> {
   const session = verifyCustomerSessionToken(sessionToken, shopifyStoreId);
   if (!session) throw new Error("Unauthorized access. Please authenticate with a valid OTP code.");
-  const normalizedEmail = session.customerEmail.trim().toLowerCase();
-  const rawOrderNumber = session.orderNumber.trim();
-  const normalizedOrderNumber = rawOrderNumber.startsWith("#") ? rawOrderNumber : `#${rawOrderNumber}`;
-  const order = await prisma.order.findFirst({
-    where: { shopifyStoreId, orderNumber: { equals: normalizedOrderNumber, mode: "insensitive" }, customerEmail: { equals: normalizedEmail, mode: "insensitive" } },
-  });
-  if (!order) throw new Error(`Order ${normalizedOrderNumber} with email '${normalizedEmail}' was not found.`);
+  const normalizedOrderNumber = normalizeCustomerOrderNumber(session.orderNumber);
+  const order = await findOrderForCustomerSession(shopifyStoreId, session, normalizedOrderNumber);
+  if (!order) throw new Error("We could not reload this order. Return to the portal and try again.");
+  const normalizedEmail = String(order.customerEmail || session.customerEmail || "").trim().toLowerCase();
 
   const [settings, returnEligibility, exchangeEligibility, productRows, returns, exchanges] = await Promise.all([
     getSettings(shopifyStoreId),
@@ -147,13 +280,8 @@ export async function submitShopperReturn(input: SubmitShopperReturnInput) {
   const session = verifyCustomerSessionToken(input.sessionToken, input.shopifyStoreId, input.orderNumber);
   if (!session) throw new Error("Unauthorized request submission. Your session has expired or is invalid.");
   await assertCanCreateReturn(input.shopifyStoreId);
-  const sessionEmail = session.customerEmail.trim().toLowerCase();
-  const sessionOrderNumber = session.orderNumber.trim().replace(/^#/, "");
-  const order = await prisma.order.findFirst({ where: {
-    shopifyStoreId: input.shopifyStoreId,
-    orderNumber: { equals: `#${sessionOrderNumber}`, mode: "insensitive" },
-    customerEmail: { equals: sessionEmail, mode: "insensitive" },
-  } });
+  const sessionEmail = String(session.customerEmail || "").trim().toLowerCase();
+  const order = await findOrderForCustomerSession(input.shopifyStoreId, session, input.orderNumber);
   if (!order || order.shopifyOrderId !== input.shopifyOrderId) throw new Error("The verified order could not be matched to this request. Verify the order again.");
   if (!Array.isArray(input.items) || !input.items.length) throw new Error("Choose at least one item.");
   const orderLines = Array.isArray(order.lineItems) ? order.lineItems as any[] : [];
@@ -217,17 +345,13 @@ export async function submitCustomerTracking(input: {
   if (carrier.length < 2) throw new Error("Enter the carrier or courier name.");
   if (!/^[A-Za-z0-9][A-Za-z0-9 ./_-]{2,119}$/.test(trackingNumber)) throw new Error("Enter a valid carrier tracking number or airway bill.");
 
-  const normalizedOrder = session.orderNumber.trim().replace(/^#/, "");
-  const order = await prisma.order.findFirst({ where: {
-    shopifyStoreId: input.shopifyStoreId,
-    orderNumber: { equals: `#${normalizedOrder}`, mode: "insensitive" },
-    customerEmail: { equals: session.customerEmail.trim().toLowerCase(), mode: "insensitive" },
-  } });
+  const order = await findOrderForCustomerSession(input.shopifyStoreId, session);
   if (!order) throw new Error("Verified order was not found.");
+  const sessionEmail = String(order.customerEmail || session.customerEmail || "").trim().toLowerCase();
 
   const request = input.requestType === "RETURN"
-    ? await prisma.returnRequest.findFirst({ where: { id: input.requestId, shopifyStoreId: input.shopifyStoreId, shopifyOrderId: order.shopifyOrderId, status: "APPROVED", customerEmail: { equals: session.customerEmail.trim().toLowerCase(), mode: "insensitive" } } })
-    : await prisma.exchangeRequest.findFirst({ where: { id: input.requestId, shopifyStoreId: input.shopifyStoreId, shopifyOrderId: order.shopifyOrderId, status: "APPROVED", customerEmail: { equals: session.customerEmail.trim().toLowerCase(), mode: "insensitive" } } });
+    ? await prisma.returnRequest.findFirst({ where: { id: input.requestId, shopifyStoreId: input.shopifyStoreId, shopifyOrderId: order.shopifyOrderId, status: "APPROVED", customerEmail: { equals: sessionEmail, mode: "insensitive" } } })
+    : await prisma.exchangeRequest.findFirst({ where: { id: input.requestId, shopifyStoreId: input.shopifyStoreId, shopifyOrderId: order.shopifyOrderId, status: "APPROVED", customerEmail: { equals: sessionEmail, mode: "insensitive" } } });
   if (!request) throw new Error("Tracking can only be submitted for an approved request belonging to this verified order.");
 
   const priorShipment = await prisma.shipmentTrack.findFirst({ where: input.requestType === "RETURN"
@@ -262,7 +386,7 @@ export async function submitCustomerTracking(input: {
   });
 
   await Promise.all([
-    triggerLifecycleNotification({ shopifyStoreId: input.shopifyStoreId, eventType: "TRACKING_UPDATE", entityId: shipment.id, recipientEmail: session.customerEmail, variables: { customer_name: order.customerName || "Customer", order_number: order.orderNumber, tracking_number: trackingNumber, status: "Tracking details received by the store" } }),
+    triggerLifecycleNotification({ shopifyStoreId: input.shopifyStoreId, eventType: "TRACKING_UPDATE", entityId: shipment.id, recipientEmail: order.customerEmail || session.customerEmail, variables: { customer_name: order.customerName || "Customer", order_number: order.orderNumber, tracking_number: trackingNumber, status: "Tracking details received by the store" } }),
     notifyStatusChange({ shopifyStoreId: input.shopifyStoreId, entity: `${input.requestType} TRACKING`, orderNumber: order.orderNumber, previousStatus: "APPROVED", newStatus: "TRACKING_PROVIDED", adminNote: `${carrier}: ${trackingNumber}` }),
   ]);
   return { success: true, idempotent: false, shipmentId: shipment.id, trackingNumber, carrier, requestId: input.requestId };

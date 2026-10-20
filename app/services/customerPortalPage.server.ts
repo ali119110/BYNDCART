@@ -1,6 +1,5 @@
-import { lookupShopperOrder, submitCustomerTracking, submitShopperReturn } from "./portal.server";
+import { authenticateShopperOrder, lookupShopperOrder, submitCustomerTracking, submitShopperReturn } from "./portal.server";
 import type { ShopperOrderLookupResult } from "./portal.server";
-import { requestCustomerOTP, verifyCustomerOTP } from "./otp.server";
 
 export interface CustomerPortalPageOptions {
   shopifyStoreId: string;
@@ -15,31 +14,21 @@ export async function renderCustomerPortalPage(request: Request, options: Custom
   let notice = "";
   let error = "";
   const storeId = options.shopifyStoreId;
-  let body = requestForm("", "", options.actionPath);
+  let body = requestForm("", "", options.actionPath, "EMAIL");
   let sessionToken = "";
   let lastLookup: ShopperOrderLookupResult | null = null;
 
   try {
 
-    if (intent === "REQUEST_OTP" && form) {
+    if (intent === "LOGIN" && form) {
       const orderNumber = String(form.get("orderNumber") || "");
-      const customerEmail = String(form.get("customerEmail") || "");
-      const result = await requestCustomerOTP(storeId, orderNumber, customerEmail);
-      notice = result.message;
-      body = result.emailSent ? codeForm(orderNumber, customerEmail, options.actionPath) : requestForm(orderNumber, customerEmail, options.actionPath);
-    } else if (intent === "VERIFY_OTP" && form) {
-      const orderNumber = String(form.get("orderNumber") || "");
-      const customerEmail = String(form.get("customerEmail") || "");
-      const otpCode = String(form.get("otpCode") || "");
-      const verified = await verifyCustomerOTP(storeId, orderNumber, customerEmail, otpCode);
-      if (!verified.success || !verified.sessionToken) {
-        error = verified.error || "The verification code was not accepted.";
-        body = codeForm(orderNumber, customerEmail, options.actionPath);
-      } else {
-        sessionToken = verified.sessionToken;
-        lastLookup = await lookupShopperOrder(storeId, sessionToken);
-        body = orderForm(lastLookup, sessionToken, options.actionPath);
-      }
+      const identifierType = String(form.get("identifierType") || "EMAIL").toUpperCase() === "PHONE" ? "PHONE" : "EMAIL";
+      const identifier = String(form.get("identifier") || "");
+      const authenticated = await authenticateShopperOrder(storeId, { orderNumber, identifierType, identifier });
+      sessionToken = authenticated.sessionToken;
+      lastLookup = await lookupShopperOrder(storeId, sessionToken);
+      notice = "Order " + lastLookup.order.orderNumber + " found. You can now submit a return or exchange request.";
+      body = orderForm(lastLookup, sessionToken, options.actionPath);
     } else if ((intent === "SUBMIT_REQUEST" || intent === "SUBMIT_RETURN") && form) {
       sessionToken = String(form.get("sessionToken") || "");
       lastLookup = await lookupShopperOrder(storeId, sessionToken);
@@ -98,34 +87,28 @@ export async function renderCustomerPortalPage(request: Request, options: Custom
           lastLookup = await lookupShopperOrder(storeId, sessionToken);
           body = orderForm(lastLookup, sessionToken, options.actionPath);
         } else {
-          body = requestForm(String(form.get("orderNumber") || ""), String(form.get("customerEmail") || ""), options.actionPath);
+          body = requestForm(String(form.get("orderNumber") || ""), String(form.get("identifier") || ""), options.actionPath, String(form.get("identifierType") || "EMAIL") === "PHONE" ? "PHONE" : "EMAIL");
         }
       } catch {
-        body = requestForm(String(form.get("orderNumber") || ""), String(form.get("customerEmail") || ""), options.actionPath);
+        body = requestForm(String(form.get("orderNumber") || ""), String(form.get("identifier") || ""), options.actionPath, String(form.get("identifierType") || "EMAIL") === "PHONE" ? "PHONE" : "EMAIL");
       }
     }
   }
   return htmlPage(options.brandName, "Returns and exchanges", `${banner(error, notice)}${body}`);
 }
 
-function requestForm(orderNumber = "", email = "", actionPath = "/apps/returns") {
-  return `<form method="post" action="${escapeHtml(actionPath)}">
-    <h2>Start a return or exchange</h2>
-    <label>Order number<input name="orderNumber" required value="${escapeHtml(orderNumber)}" placeholder="#1001"></label>
-    <label>Email on the order<input type="email" name="customerEmail" required value="${escapeHtml(email)}"></label>
-    <input type="hidden" name="intent" value="REQUEST_OTP">
-    <button type="submit">Email me a verification code</button>
-  </form>`;
-}
-
-function codeForm(orderNumber: string, email: string, actionPath = "/apps/returns") {
-  return `<form method="post" action="${escapeHtml(actionPath)}">
-    <h2>Enter the verification code</h2>
-    <input type="hidden" name="intent" value="VERIFY_OTP">
-    <input type="hidden" name="orderNumber" value="${escapeHtml(orderNumber)}">
-    <input type="hidden" name="customerEmail" value="${escapeHtml(email)}">
-    <label>6-digit code<input name="otpCode" required inputmode="numeric" maxlength="6" autocomplete="one-time-code"></label>
-    <button type="submit">Verify and view items</button>
+function requestForm(orderNumber = "", identifier = "", actionPath = "/apps/returns", identifierType: "EMAIL" | "PHONE" = "EMAIL") {
+  return `<form method="post" action="${escapeHtml(actionPath)}" class="portal-login-form">
+    <h2>Find your order</h2>
+    <p class="muted">Enter the order number and the contact detail used at checkout. No verification code is required.</p>
+    <label>Order number<input name="orderNumber" required value="${escapeHtml(orderNumber)}" placeholder="#1001" autocomplete="off"></label>
+    <label>Find order using<select name="identifierType">
+      <option value="EMAIL" ${identifierType === "EMAIL" ? "selected" : ""}>Email address</option>
+      <option value="PHONE" ${identifierType === "PHONE" ? "selected" : ""}>Phone number</option>
+    </select></label>
+    <label>Email address or phone number<input name="identifier" required value="${escapeHtml(identifier)}" placeholder="you@example.com or +92 300 1234567" autocomplete="off"></label>
+    <input type="hidden" name="intent" value="LOGIN">
+    <button type="submit">Find my order</button>
   </form>`;
 }
 
@@ -180,9 +163,9 @@ function htmlPage(brandName: string, title: string, body: string, status = 200) 
     header{background:#fff;border-bottom:1px solid #e4e8ee;padding:20px 16px;text-align:center;font-weight:800;letter-spacing:.03em;color:#111827}header small{display:block;font-size:11px;font-weight:600;color:#667085;letter-spacing:.12em;margin-top:5px}main{max-width:760px;margin:0 auto;padding:28px 16px 64px} h1{font-size:26px;letter-spacing:-.03em;margin:0 0 8px} h2{font-size:18px;margin:0 0 12px} h3{font-size:15px;margin:0 0 10px}
     form,.ok,.bad,.warn,.order-panel,section{background:#fff;border:1px solid #e4e8ee;border-radius:14px;padding:16px;margin:14px 0} p{line-height:1.5}.muted{color:#5c6779;font-size:13px}.policy{background:#f8fafc;padding:10px;border-radius:9px;font-size:13px}
     label{display:grid;gap:6px;margin:12px 0;font-size:13px;font-weight:650} input,select,textarea,button{font:inherit;min-height:42px;border-radius:8px} input,select,textarea{width:100%;border:1px solid #c9d0d9;padding:9px 11px;background:#fff;color:#142033} button{background:#1f4b99;color:#fff;border:0;padding:0 15px;cursor:pointer;font-weight:650}button:disabled{opacity:.45;cursor:not-allowed}
-    .item-card{border:1px solid #e6eaf0;border-radius:12px;padding:12px;margin:12px 0}.item-select{display:flex;grid-template-columns:auto 1fr;align-items:center;gap:10px}.item-select input{width:18px;min-height:18px}.item-select small{display:block;color:#667085;font-weight:400;margin-top:3px}.item-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px}.item-fields label{margin:8px 0}.item-fields label:nth-child(3){grid-column:span 2}.ok{background:#e7f6ee;color:#0f7b4c}.bad,.warn{background:#fff0ef;color:#b42318}.history-row{padding:10px 0;border-bottom:1px solid #eef0f3}.tracking-form{background:#f8fafc}.tracking-form button{width:100%}
+    .item-card{border:1px solid #e6eaf0;border-radius:12px;padding:12px;margin:12px 0}.item-select{display:flex;grid-template-columns:auto 1fr;align-items:center;gap:10px}.item-select input{width:18px;min-height:18px}.item-select small{display:block;color:#667085;font-weight:400;margin-top:3px}.item-fields{display:grid;grid-template-columns:1fr 1fr;gap:8px}.item-fields label{margin:8px 0}.item-fields label:nth-child(3){grid-column:span 2}.ok{background:#e7f6ee;color:#0f7b4c}.bad,.warn{background:#fff0ef;color:#b42318}.history-row{padding:10px 0;border-bottom:1px solid #eef0f3}.tracking-form{background:#f8fafc}.tracking-form button{width:100%}.portal-login-form button{width:100%;min-height:46px}
     @media(max-width:520px){.item-fields{grid-template-columns:1fr}.item-fields label:nth-child(3){grid-column:auto}main{padding:20px 12px 40px}}
-  </style></head><body><header>${escapeHtml(brandName || "STORE")}<small>RETURNS &amp; EXCHANGES</small></header><main><h1>Returns and exchanges</h1><p class="muted">Verify your order, submit a request, and arrange shipping only after approval.</p>${body}</main></body></html>`;
+  </style></head><body><header>${escapeHtml(brandName || "STORE")}<small>RETURNS &amp; EXCHANGES</small></header><main><h1>Returns and exchanges</h1><p class="muted">Find your order, submit a request, and arrange shipping only after approval.</p>${body}</main></body></html>`;
   return new Response(html, { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
 }
 
