@@ -56,7 +56,7 @@ function mapWebhookOrder(payload: any): MappedOrder {
       lineItemId: `gid://shopify/LineItem/${li.id}`,
       variantId: li.variant_id ? `gid://shopify/ProductVariant/${li.variant_id}` : null,
       productId: li.product_id ? `gid://shopify/Product/${li.product_id}` : null,
-      title: li.title ?? li.name ?? "Unknown Item",
+      title: li.name ?? [li.title, li.variant_title].filter(Boolean).join(" - ") ?? "Unknown Item",
       quantity: li.quantity ?? 1,
       price: parseFloat(li.price ?? "0"),
     })),
@@ -84,7 +84,7 @@ function mapGraphqlOrder(node: any): MappedOrder {
       lineItemId: edge.node.id,
       variantId: edge.node.variant?.id ?? null,
       productId: edge.node.variant?.product?.id ?? null,
-      title: edge.node.title,
+      title: edge.node.name || [edge.node.title, edge.node.variantTitle || edge.node.variant?.title].filter(Boolean).join(" - ") || "Unknown Item",
       quantity: edge.node.quantity,
       price: parseFloat(edge.node.originalUnitPriceSet?.shopMoney?.amount ?? "0"),
     })),
@@ -186,6 +186,8 @@ export async function syncShopifyOrders({ shopifyStoreId, admin }: SyncOrdersInp
                   node {
                     id
                     title
+                    name
+                    variantTitle
                     quantity
                     originalUnitPriceSet { shopMoney { amount } }
                     variant { id product { id } }
@@ -271,7 +273,7 @@ export async function searchOrSyncOrders({ shopifyStoreId, admin, query }: SyncO
             totalPriceSet { shopMoney { amount currencyCode } }
             customer { firstName lastName email phone }
             lineItems(first: 50) { edges { node {
-              id title quantity originalUnitPriceSet { shopMoney { amount } }
+              id title name variantTitle quantity originalUnitPriceSet { shopMoney { amount } }
               variant { id product { id } }
             } } }
           } }
