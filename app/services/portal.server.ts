@@ -57,6 +57,10 @@ export interface ShopperOrderLookupResult {
     returnMessage: string;
     exchangeEligible: boolean;
     exchangeMessage: string;
+    fulfillmentStatus?: string | null;
+    trackingNumber?: string | null;
+    courier?: string | null;
+    trackingUrl?: string | null;
   }>;
   accountRequests: Array<{
     id: string;
@@ -76,6 +80,26 @@ export interface ShopperOrderLookupResult {
     exchangeShippingCost: number;
     exchangeReplacementTiming: "AFTER_APPROVAL" | "AFTER_INSPECTION";
   };
+  store?: {
+    name: string;
+    logoUrl?: string | null;
+    supportEmail?: string | null;
+    whatsappNumber?: string | null;
+    returnAddress?: string | null;
+    policies?: Record<string, { title: string; url: string }> | null;
+  };
+}
+
+export function getCourierTrackingUrl(courier?: string | null, trackingNumber?: string | null): string | null {
+  if (!trackingNumber) return null;
+  const tn = encodeURIComponent(String(trackingNumber).trim());
+  const c = (courier || "").toUpperCase();
+  if (c.includes("POSTEX")) return `https://postex.pk/tracking?trackingNumber=${tn}`;
+  if (c.includes("LEOPARD")) return `https://www.leopardscourier.com/tracking?track_numbers=${tn}`;
+  if (c.includes("TCS")) return `https://www.tcsexpress.com/tracking?consignmentNo=${tn}`;
+  if (c.includes("DHL")) return `https://www.dhl.com/en/express/tracking.html?AWB=${tn}`;
+  if (c.includes("FEDEX")) return `https://www.fedex.com/fedextrack/?trknbr=${tn}`;
+  return `https://www.google.com/search?q=${encodeURIComponent(`${courier || "courier"} tracking ${trackingNumber}`)}`;
 }
 
 function normalizePortalPhone(value: unknown): string {
@@ -269,11 +293,29 @@ export async function lookupShopperOrder(shopifyStoreId: string, sessionToken: s
       sku: line.sku || product?.sku || null,
     };
   });
+  const historyOrderNumbers = customerOrders.map((row: any) => row.orderNumber).filter(Boolean);
+  const historyOrderShipments = historyOrderNumbers.length
+    ? await prisma.shipmentTrack.findMany({
+        where: { shopifyStoreId, orderNumber: { in: historyOrderNumbers } },
+        orderBy: { createdAt: "desc" },
+      })
+    : [];
+
+  const storeInfo = await prisma.shopifyStore.findUnique({
+    where: { id: shopifyStoreId },
+    select: { shop: true, merchant: { select: { name: true } } },
+  }).catch(() => null);
+
   const orderHistory = await Promise.all(customerOrders.map(async (historyOrder: any) => {
     const [returnResult, exchangeResult] = await Promise.all([
       checkReturnEligibility({ shopifyStoreId, orderId: historyOrder.shopifyOrderId, orderNumber: historyOrder.orderNumber, customerEmail: historyOrder.customerEmail || normalizedEmail, requestType: "RETURN" }),
       checkReturnEligibility({ shopifyStoreId, orderId: historyOrder.shopifyOrderId, orderNumber: historyOrder.orderNumber, customerEmail: historyOrder.customerEmail || normalizedEmail, requestType: "EXCHANGE" }),
     ]);
+    const forwardShipment = historyOrderShipments.find((s: any) => s.orderNumber === historyOrder.orderNumber);
+    const trackingUrl = forwardShipment?.trackingNumber
+      ? getCourierTrackingUrl(forwardShipment.courier, forwardShipment.trackingNumber)
+      : null;
+
     return {
       shopifyOrderId: historyOrder.shopifyOrderId,
       orderNumber: historyOrder.orderNumber,
@@ -285,6 +327,10 @@ export async function lookupShopperOrder(shopifyStoreId: string, sessionToken: s
       returnMessage: returnResult.message,
       exchangeEligible: exchangeResult.eligible,
       exchangeMessage: exchangeResult.message,
+      fulfillmentStatus: historyOrder.fulfillmentStatus || null,
+      trackingNumber: forwardShipment?.trackingNumber || null,
+      courier: forwardShipment?.courier || null,
+      trackingUrl: forwardShipment?.labelUrl || trackingUrl || null,
     };
   }));
   const accountFilter: any[] = [];
@@ -329,6 +375,14 @@ export async function lookupShopperOrder(shopifyStoreId: string, sessionToken: s
       exchangeWindowDays: exchangeEligibility.policy.exchangeWindowDays || settings.exchangeWindowDays,
       exchangeShippingCost: Number(settings.exchangeShippingCost),
       exchangeReplacementTiming: settings.exchangeReplacementTiming === "AFTER_APPROVAL" ? "AFTER_APPROVAL" : "AFTER_INSPECTION",
+    },
+    store: {
+      name: storeInfo?.merchant?.name || storeInfo?.shop?.replace(/\.myshopify\.com$/i, "") || "Store",
+      logoUrl: (settings as any).storeLogoUrl || null,
+      supportEmail: (settings as any).supportEmail || null,
+      whatsappNumber: (settings as any).whatsappNumber || null,
+      returnAddress: (settings as any).returnAddress || null,
+      policies: ((settings as any).policies as Record<string, { title: string; url: string }>) || null,
     },
   };
 }

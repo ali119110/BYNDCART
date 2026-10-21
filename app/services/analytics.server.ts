@@ -89,21 +89,23 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
     // this returns [] until then.
     db.$queryRaw<{ line_item_id: string; title: string; return_count: bigint }[]>`
       SELECT
-        li->>'lineItemId' AS line_item_id,
-        li->>'title' AS title,
+        COALESCE(NULLIF(TRIM(li->>'title'), ''), 'Unknown Product') AS title,
+        MAX(li->>'lineItemId') AS line_item_id,
         COUNT(*)::int AS return_count
       FROM "ReturnItem" ri
       JOIN "ReturnRequest" rr
         ON rr.id = ri."returnRequestId"
         AND rr."shopifyStoreId" = ${shopifyStoreId}
+        AND (${filters.startDate ? filters.startDate : new Date(0)} <= rr."createdAt")
+        AND (${filters.endDate ? filters.endDate : new Date("2100-01-01")} >= rr."createdAt")
       JOIN "Order" o
         ON o."shopifyOrderId" = rr."shopifyOrderId"
         AND o."shopifyStoreId" = ${shopifyStoreId}
       CROSS JOIN LATERAL jsonb_array_elements(o."lineItems") AS li
       WHERE li->>'lineItemId' = ri."shopifyLineItemId"
-      GROUP BY li->>'lineItemId', li->>'title'
+      GROUP BY COALESCE(NULLIF(TRIM(li->>'title'), ''), 'Unknown Product')
       ORDER BY return_count DESC
-      LIMIT 10;
+      LIMIT 5;
     `,
   ]);
 

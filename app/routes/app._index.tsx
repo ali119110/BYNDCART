@@ -1,5 +1,5 @@
 import React from "react";
-import { useLoaderData } from "react-router";
+import { useLoaderData, useSearchParams, Link } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { requireTenantContext } from "../utils/tenant.server";
 import prisma from "../db.server";
@@ -8,7 +8,21 @@ import { executeInitialShopifySync } from "../services/shopifySync.server";
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const { shopifyStoreId, admin } = await requireTenantContext(request);
-    
+    const url = new URL(request.url);
+    const range = url.searchParams.get("range") || "30d";
+
+    let startDate: Date | undefined;
+    const now = Date.now();
+    if (range === "7d") {
+      startDate = new Date(now - 7 * 24 * 60 * 60 * 1000);
+    } else if (range === "30d") {
+      startDate = new Date(now - 30 * 24 * 60 * 60 * 1000);
+    } else if (range === "90d") {
+      startDate = new Date(now - 90 * 24 * 60 * 60 * 1000);
+    } // "all" leaves startDate undefined
+
+    const dateFilter = startDate ? { createdAt: { gte: startDate } } : {};
+
     let store = await prisma.shopifyStore.findUnique({
       where: { id: shopifyStoreId },
       select: {
@@ -58,62 +72,71 @@ export async function loader({ request }: LoaderFunctionArgs) {
         console.warn("[Dashboard Loader] Could not determine historical-order access:", scopeError);
       }
     }
-    // Query real counts from Database
-    const [ordersCount, returnsCount, exchangesCount, customerCacheCount, exchangeItems, recentReturnsDb, recentExchangesDb, pendingReturns, pendingExchanges, inTransit, awaitingInspection, pendingRefunds, unreconciledCod, failedShipments] = await Promise.all([
-      prisma.order.count({ where: { shopifyStoreId } }),
-      prisma.returnRequest.count({ where: { shopifyStoreId } }),
-      prisma.exchangeRequest.count({ where: { shopifyStoreId } }),
-      prisma.customerCache.count({ where: { shopifyStoreId } }),
-      prisma.exchangeItem.findMany({
-        where: { exchangeRequest: { shopifyStoreId, status: "COMPLETED" } },
-        select: { priceDifference: true },
+
+    // Query real counts from Database with date filter where relevant
+    const [
+      returnsCount,
+      exchangesCount,
+      incomingExchanges,
+      outgoingExchanges,
+      returnIntake,
+      recentReturnsDb,
+      recentExchangesDb,
+      pendingReturns,
+      pendingExchanges,
+      inTransit,
+      awaitingInspection,
+      pendingRefunds,
+      failedShipments,
+    ] = await Promise.all([
+      // Total return requests in range
+      prisma.returnRequest.count({ where: { shopifyStoreId, ...dateFilter } }),
+      // Total exchange requests in range
+      prisma.exchangeRequest.count({ where: { shopifyStoreId, ...dateFilter } }),
+      // Incoming Exchanges: customer parcels returning to warehouse (APPROVED or RECEIVED)
+      prisma.exchangeRequest.count({
+        where: { shopifyStoreId, status: { in: ["APPROVED", "RECEIVED"] }, ...dateFilter },
       }),
+      // Outgoing Exchanges: replacement parcels sent to customers (FULFILLED or COMPLETED)
+      prisma.exchangeRequest.count({
+        where: { shopifyStoreId, status: { in: ["FULFILLED", "COMPLETED"] }, ...dateFilter },
+      }),
+      // Return Intake: return parcels received at warehouse awaiting inspection
+      prisma.returnRequest.count({
+        where: { shopifyStoreId, status: "RECEIVED", ...dateFilter },
+      }),
+      // Recent returns
       prisma.returnRequest.findMany({
         where: { shopifyStoreId },
         take: 5,
         orderBy: { createdAt: "desc" },
       }),
+      // Recent exchanges
       prisma.exchangeRequest.findMany({
         where: { shopifyStoreId },
         take: 5,
         orderBy: { createdAt: "desc" },
         include: { items: true },
       }),
+      // Operational queues
       prisma.returnRequest.count({ where: { shopifyStoreId, status: "PENDING" } }),
       prisma.exchangeRequest.count({ where: { shopifyStoreId, status: "PENDING" } }),
-      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "IN_TRANSIT" } }),
+      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: { in: ["IN_TRANSIT", "OUT_FOR_DELIVERY"] } } }),
       prisma.warehouseIntake.count({ where: { shopifyStoreId, status: "RECEIVED" } }),
       prisma.refundRecord.count({ where: { shopifyStoreId, status: "PENDING" } }),
-      prisma.codSettlement.count({ where: { shopifyStoreId, status: { in: ["EXPECTED", "IMPORTED", "DISPUTED"] } } }),
       prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "FAILED" } }),
     ]);
 
-    // Calculate revenue retained from exchanges
-    const revenueRetained = exchangeItems.reduce((acc, item) => {
-      const val = item.priceDifference ? Number(item.priceDifference) : 0;
-      return acc + (Number.isFinite(val) ? Math.max(0, val) : 0);
-    }, 0);
-
-    // If customerCacheCount is 0, count unique customer emails from Orders
-    let customersCount = customerCacheCount;
-    if (customersCount === 0) {
-      const distinctCustomers = await prisma.order.findMany({
-        where: { shopifyStoreId, customerEmail: { not: null } },
-        select: { customerEmail: true },
-        distinct: ["customerEmail"],
-      });
-      customersCount = distinctCustomers.length;
-    }
-
     return {
       shop: store?.shop ?? "Connected Store",
+      range,
       historicalOrdersAccess,
       metrics: {
-        ordersCount,
         returnsCount,
         exchangesCount,
-        customersCount,
-        revenueRetained,
+        incomingExchanges,
+        outgoingExchanges,
+        returnIntake,
       },
       operations: {
         pendingReturns,
@@ -121,7 +144,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
         inTransit,
         awaitingInspection,
         pendingRefunds,
-        unreconciledCod,
         failedShipments,
       },
       recentReturns: recentReturnsDb.map((r) => ({
@@ -144,13 +166,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
     console.error("[Dashboard Loader] Error:", error);
     return {
       shop: "Connected Store",
+      range: "30d",
       historicalOrdersAccess: { checked: false, hasReadAllOrders: false },
       metrics: {
-        ordersCount: 0,
         returnsCount: 0,
         exchangesCount: 0,
-        customersCount: 0,
-        revenueRetained: 0,
+        incomingExchanges: 0,
+        outgoingExchanges: 0,
+        returnIntake: 0,
       },
       operations: {
         pendingReturns: 0,
@@ -158,7 +181,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
         inTransit: 0,
         awaitingInspection: 0,
         pendingRefunds: 0,
-        unreconciledCod: 0,
         failedShipments: 0,
       },
       recentReturns: [],
@@ -184,15 +206,17 @@ function getStatusTone(status: string): "success" | "warning" | "danger" | "neut
 
 export default function Dashboard() {
   const loaderData = useLoaderData<typeof loader>();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const shop = loaderData?.shop ?? "Connected Store";
+  const currentRange = loaderData?.range ?? "30d";
   const historicalOrdersAccess = loaderData?.historicalOrdersAccess ?? { checked: false, hasReadAllOrders: false };
   const metrics = loaderData?.metrics ?? {
-    ordersCount: 0,
     returnsCount: 0,
     exchangesCount: 0,
-    customersCount: 0,
-    revenueRetained: 0,
+    incomingExchanges: 0,
+    outgoingExchanges: 0,
+    returnIntake: 0,
   };
   const operations = loaderData?.operations ?? {
     pendingReturns: 0,
@@ -200,148 +224,159 @@ export default function Dashboard() {
     inTransit: 0,
     awaitingInspection: 0,
     pendingRefunds: 0,
-    unreconciledCod: 0,
     failedShipments: 0,
   };
   const recentReturns = loaderData?.recentReturns ?? [];
   const recentExchanges = loaderData?.recentExchanges ?? [];
 
-  const revenueRetained = `PKR ${Number(metrics.revenueRetained || 0).toLocaleString("en-PK", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
+  const handleRangeChange = (range: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (range === "30d") next.delete("range");
+    else next.set("range", range);
+    setSearchParams(next);
+  };
 
   return (
     <main className="bc-page bc-dashboard">
       <header className="bc-dashboard-header">
         <div className="bc-dashboard-header-copy">
-          <p className="bc-eyebrow">OPERATIONS OVERVIEW</p>
           <h1>Dashboard</h1>
-          <p>Monitor store activity, manage open requests, and keep fulfilment moving.</p>
+          <p>Monitor reverse logistics, manage open requests, and keep fulfilment moving.</p>
         </div>
 
-        <div className="bc-dashboard-store" title={shop}>
-          <span className="bc-store-avatar" aria-hidden="true">
-            {String(shop || "S").trim().slice(0, 1).toUpperCase() || "S"}
-          </span>
-          <span className="bc-store-copy">
-            <span className="bc-store-label">STORE</span>
-            <strong>{shop}</strong>
-          </span>
+        <div className="bc-dashboard-controls">
+          <div className="bc-range-filter" role="group" aria-label="Date range filter">
+            {[
+              { id: "7d", label: "7 days" },
+              { id: "30d", label: "30 days" },
+              { id: "90d", label: "90 days" },
+              { id: "all", label: "All time" },
+            ].map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                className={`bc-range-btn ${currentRange === option.id ? "active" : ""}`}
+                onClick={() => handleRangeChange(option.id)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="bc-dashboard-store" title={shop}>
+            <span className="bc-store-avatar" aria-hidden="true">
+              {String(shop || "S").trim().slice(0, 1).toUpperCase() || "S"}
+            </span>
+            <span className="bc-store-copy">
+              <span className="bc-store-label">STORE</span>
+              <strong>{shop}</strong>
+            </span>
+          </div>
         </div>
       </header>
 
       {historicalOrdersAccess.checked && !historicalOrdersAccess.hasReadAllOrders && (
-        <section role="status" aria-label="Historical order access notice" style={{ margin: "18px 0", padding: "16px 18px", borderRadius: "12px", border: "1px solid #f6d28b", background: "#fffbeb", color: "#78350f" }}>
-          <strong>Historical order access is not enabled</strong>
-          <p style={{ margin: "6px 0 0", lineHeight: 1.5 }}>Shopify currently grants BYNDCART order access without the read_all_orders permission. Older orders may be missing from dashboard totals and manual return/exchange search. Request read_all_orders access in the Shopify Partner Dashboard; after Shopify approves it, enable the scope for this app and run a full store sync.</p>
+        <section role="status" aria-label="Historical order access notice" style={{ margin: "14px 0", padding: "12px 16px", borderRadius: "8px", border: "1px solid #e4e4e7", background: "#f4f4f5", color: "#18181b" }}>
+          <strong>Historical order access note</strong>
+          <p style={{ margin: "4px 0 0", lineHeight: 1.45, fontSize: "13px" }}>Shopify grants order access without read_all_orders scope. Older orders may need partner approval for full store history.</p>
         </section>
       )}
 
+      {/* KPI Cards: Linked to relevant operational pages */}
       <section className="bc-dashboard-section" aria-labelledby="bc-overview-title">
         <div className="bc-dashboard-section-heading">
           <div>
-            <h2 id="bc-overview-title">Store overview</h2>
-            <p>Your store totals and retained exchange revenue.</p>
+            <h2 id="bc-overview-title">Overview</h2>
+            <p>Operational summary for the selected period.</p>
           </div>
-          <span className="bc-dashboard-section-tag">SUMMARY</span>
         </div>
 
         <div className="bc-kpi-grid">
-          <article className="bc-kpi-card bc-kpi-orders">
-            <div className="bc-kpi-card-top">
-              <span className="bc-kpi-label">{historicalOrdersAccess.checked && !historicalOrdersAccess.hasReadAllOrders ? "Orders synced / available" : "Total store orders"}</span>
-              <span className="bc-kpi-marker" aria-hidden="true">#</span>
-            </div>
-            <p className="bc-kpi-value">{metrics.ordersCount.toLocaleString("en-PK")}</p>
-          </article>
-
-          <article className="bc-kpi-card bc-kpi-returns">
+          <Link to="/app/returns" className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Return requests</span>
-              <span className="bc-kpi-marker" aria-hidden="true">↩</span>
             </div>
             <p className="bc-kpi-value">{metrics.returnsCount.toLocaleString("en-PK")}</p>
-          </article>
+            <span className="bc-kpi-sub">View returns</span>
+          </Link>
 
-          <article className="bc-kpi-card bc-kpi-exchanges">
+          <Link to="/app/exchanges" className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Exchange requests</span>
-              <span className="bc-kpi-marker" aria-hidden="true">⇄</span>
             </div>
             <p className="bc-kpi-value">{metrics.exchangesCount.toLocaleString("en-PK")}</p>
-          </article>
+            <span className="bc-kpi-sub">View exchanges</span>
+          </Link>
 
-          <article className="bc-kpi-card bc-kpi-customers">
+          <Link to="/app/warehouse" className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
-              <span className="bc-kpi-label">Registered customers</span>
-              <span className="bc-kpi-marker" aria-hidden="true">◎</span>
+              <span className="bc-kpi-label">Incoming exchanges</span>
             </div>
-            <p className="bc-kpi-value">{metrics.customersCount.toLocaleString("en-PK")}</p>
-          </article>
+            <p className="bc-kpi-value">{metrics.incomingExchanges.toLocaleString("en-PK")}</p>
+            <span className="bc-kpi-sub">Parcels returning to warehouse</span>
+          </Link>
 
-          <article className="bc-kpi-card bc-kpi-revenue">
+          <Link to="/app/warehouse?tab=EXCHANGES&filter=EXCHANGED" className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
-              <span className="bc-kpi-label">Revenue retained</span>
-              <span className="bc-kpi-marker" aria-hidden="true">₨</span>
+              <span className="bc-kpi-label">Outgoing exchanges</span>
             </div>
-            <p className="bc-kpi-value bc-kpi-value-currency">{revenueRetained}</p>
-          </article>
+            <p className="bc-kpi-value">{metrics.outgoingExchanges.toLocaleString("en-PK")}</p>
+            <span className="bc-kpi-sub">Replacements fulfilled</span>
+          </Link>
+
+          <Link to="/app/warehouse?tab=RETURNS&filter=WAREHOUSE" className="bc-kpi-card bc-kpi-link">
+            <div className="bc-kpi-card-top">
+              <span className="bc-kpi-label">Return intake</span>
+            </div>
+            <p className="bc-kpi-value">{metrics.returnIntake.toLocaleString("en-PK")}</p>
+            <span className="bc-kpi-sub">Received at warehouse</span>
+          </Link>
         </div>
       </section>
 
+      {/* Operational Queue */}
       <section className="bc-dashboard-section" aria-labelledby="bc-operations-title">
         <div className="bc-dashboard-section-heading">
           <div>
             <h2 id="bc-operations-title">Operational queue</h2>
-            <p>Select a queue to review the records that need attention.</p>
+            <p>Action items requiring attention.</p>
           </div>
         </div>
 
         <div className="bc-ops-grid">
-          <a className={`bc-ops-card ${operations.pendingReturns > 0 ? "has-attention" : ""}`} href="/app/returns">
+          <Link className={`bc-ops-card ${operations.pendingReturns > 0 ? "has-attention" : ""}`} to="/app/returns">
             <span className="bc-ops-label">Pending returns</span>
             <span className="bc-ops-value">{operations.pendingReturns.toLocaleString("en-PK")}</span>
-            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
-          </a>
-          <a className={`bc-ops-card ${operations.pendingExchanges > 0 ? "has-attention" : ""}`} href="/app/exchanges">
+          </Link>
+          <Link className={`bc-ops-card ${operations.pendingExchanges > 0 ? "has-attention" : ""}`} to="/app/exchanges">
             <span className="bc-ops-label">Pending exchanges</span>
             <span className="bc-ops-value">{operations.pendingExchanges.toLocaleString("en-PK")}</span>
-            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
-          </a>
-          <a className="bc-ops-card" href="/app/shipments">
+          </Link>
+          <Link className="bc-ops-card" to="/app/shipments?type=All">
             <span className="bc-ops-label">Parcels in transit</span>
             <span className="bc-ops-value">{operations.inTransit.toLocaleString("en-PK")}</span>
-            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
-          </a>
-          <a className="bc-ops-card" href="/app/warehouse">
+          </Link>
+          <Link className="bc-ops-card" to="/app/warehouse">
             <span className="bc-ops-label">Awaiting inspection</span>
             <span className="bc-ops-value">{operations.awaitingInspection.toLocaleString("en-PK")}</span>
-            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
-          </a>
-          <a className={`bc-ops-card ${operations.pendingRefunds > 0 ? "has-attention" : ""}`} href="/app/refunds">
+          </Link>
+          <Link className={`bc-ops-card ${operations.pendingRefunds > 0 ? "has-attention" : ""}`} to="/app/refunds">
             <span className="bc-ops-label">Refunds pending</span>
             <span className="bc-ops-value">{operations.pendingRefunds.toLocaleString("en-PK")}</span>
-            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
-          </a>
-          <a className={`bc-ops-card ${operations.unreconciledCod > 0 ? "has-attention" : ""}`} href="/app/reconciliation">
-            <span className="bc-ops-label">Unreconciled COD</span>
-            <span className="bc-ops-value">{operations.unreconciledCod.toLocaleString("en-PK")}</span>
-            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
-          </a>
-          <a className={`bc-ops-card ${operations.failedShipments > 0 ? "has-error" : ""}`} href="/app/shipments">
+          </Link>
+          <Link className={`bc-ops-card ${operations.failedShipments > 0 ? "has-error" : ""}`} to="/app/shipments">
             <span className="bc-ops-label">Failed shipments</span>
             <span className="bc-ops-value">{operations.failedShipments.toLocaleString("en-PK")}</span>
-            <span className="bc-ops-arrow" aria-hidden="true">↗</span>
-          </a>
+          </Link>
         </div>
       </section>
 
+      {/* Recent Activity */}
       <section className="bc-dashboard-section" aria-labelledby="bc-activity-title">
         <div className="bc-dashboard-section-heading">
           <div>
             <h2 id="bc-activity-title">Recent activity</h2>
-            <p>The latest return and exchange requests recorded in BYNDCART.</p>
+            <p>Latest return and exchange requests.</p>
           </div>
         </div>
 
@@ -352,12 +387,11 @@ export default function Dashboard() {
                 <h3 id="bc-recent-returns-title">Recent returns</h3>
                 <p>Latest return requests</p>
               </div>
-              <a className="bc-text-link" href="/app/returns">View all <span aria-hidden="true">→</span></a>
+              <Link className="bc-text-link" to="/app/returns">View all</Link>
             </header>
 
             {recentReturns.length === 0 ? (
               <div className="bc-empty-state">
-                <span className="bc-empty-symbol" aria-hidden="true">↩</span>
                 <strong>No returns yet</strong>
                 <p>New return requests will appear here.</p>
               </div>
@@ -393,12 +427,11 @@ export default function Dashboard() {
                 <h3 id="bc-recent-exchanges-title">Recent exchanges</h3>
                 <p>Latest exchange requests</p>
               </div>
-              <a className="bc-text-link" href="/app/exchanges">View all <span aria-hidden="true">→</span></a>
+              <Link className="bc-text-link" to="/app/exchanges">View all</Link>
             </header>
 
             {recentExchanges.length === 0 ? (
               <div className="bc-empty-state">
-                <span className="bc-empty-symbol" aria-hidden="true">⇄</span>
                 <strong>No exchanges yet</strong>
                 <p>New exchange requests will appear here.</p>
               </div>

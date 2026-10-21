@@ -226,6 +226,11 @@ model StoreSettings {
   notificationEmail      String?
   emailNotificationsEnabled Boolean @default(false)
   portalSlug            String?      @unique
+  storeLogoUrl          String?
+  supportEmail          String?
+  whatsappNumber        String?
+  returnAddress         String?
+  policies              Json?
   refundExecutionMode   String       @default("MANUAL") // SHOPIFY_API or MANUAL
   exchangeReplacementTiming String   @default("AFTER_INSPECTION") // AFTER_APPROVAL or AFTER_INSPECTION
   fraudFlagReturnCount    Int         @default(5)

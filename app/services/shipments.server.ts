@@ -407,6 +407,53 @@ export async function syncShipmentTrackingStatus(trackingNumber: string, shopify
     });
   }
 
+  // Automated Exchange Delivery Transition:
+  // When courier tracking indicates delivery (DELIVERED), automatically transition
+  // linked FULFILLED exchange requests to COMPLETED without requiring manual clicks.
+  if (normalizedStatus === "DELIVERED") {
+    let exchangeIdToComplete = shipment.exchangeRequestId;
+    if (!exchangeIdToComplete && (shipment.type === "EXCHANGE" || shipment.type === "FORWARD")) {
+      const match = await prisma.exchangeRequest.findFirst({
+        where: {
+          shopifyStoreId: shipment.shopifyStoreId,
+          status: "FULFILLED",
+          OR: [
+            { shopifyOrderId: shipment.shopifyOrderId },
+            { orderNumber: shipment.orderNumber },
+            ...(shipment.orderNumber ? [{ newOrderNumber: shipment.orderNumber }] : []),
+          ],
+        },
+        select: { id: true },
+      });
+      if (match) exchangeIdToComplete = match.id;
+    }
+
+    if (exchangeIdToComplete) {
+      const exchange = await prisma.exchangeRequest.findFirst({
+        where: { id: exchangeIdToComplete, shopifyStoreId: shipment.shopifyStoreId },
+      });
+      if (exchange && exchange.status === "FULFILLED") {
+        try {
+          const { transitionExchangeStatus } = await import("./stateMachine.server");
+          await transitionExchangeStatus({
+            id: exchange.id,
+            shopifyStoreId: shipment.shopifyStoreId,
+            targetStatus: "COMPLETED",
+            adminNote: `Automated: Courier ${adapter.displayName} confirmed delivery for tracking ${trackingNumber}.`,
+          });
+          if (!shipment.exchangeRequestId) {
+            await prisma.shipmentTrack.update({
+              where: { id: shipment.id },
+              data: { exchangeRequestId: exchange.id },
+            }).catch(() => null);
+          }
+        } catch (err) {
+          console.error(`[Shipment Service] Automatic delivery transition failed for exchange ${exchange.id}:`, err);
+        }
+      }
+    }
+  }
+
   return {
     success: true,
     trackingNumber,
@@ -469,20 +516,31 @@ export async function cancelShipmentTrack(shopifyStoreId: string, shipmentId: st
 
 export interface GetShipmentsOptions {
   type?: string;
+  statusFilter?: "ALL" | "ACTIVE" | "COMPLETED";
   search?: string;
+  page?: number;
+  pageSize?: number;
   limit?: number;
 }
 
 /**
- * Retrieves tenant-scoped track lists from PostgreSQL.
+ * Retrieves tenant-scoped track lists from PostgreSQL with server-side filtering and pagination.
  */
 export async function getStoreShipments(shopifyStoreId: string, options: GetShipmentsOptions = {}) {
-  const { type, search, limit = 50 } = options;
+  const { type, statusFilter = "ALL", search } = options;
+  const page = Math.max(1, Number(options.page || 1));
+  const pageSize = Math.max(1, Number(options.pageSize || options.limit || 10));
 
   const where: any = { shopifyStoreId };
 
   if (type && type !== "All") {
     where.type = type.toUpperCase();
+  }
+
+  if (statusFilter === "ACTIVE") {
+    where.status = { in: ["LABEL_CREATED", "IN_TRANSIT", "OUT_FOR_DELIVERY"] };
+  } else if (statusFilter === "COMPLETED") {
+    where.status = { in: ["DELIVERED"] };
   }
 
   if (search && search.trim()) {
@@ -494,14 +552,23 @@ export async function getStoreShipments(shopifyStoreId: string, options: GetShip
     ];
   }
 
-  const shipments = await prisma.shipmentTrack.findMany({
-    where,
-    include: { events: true },
-    orderBy: { createdAt: "desc" },
-    take: limit,
-  });
+  const [totalCount, shipments] = await Promise.all([
+    typeof (prisma.shipmentTrack as any).count === "function"
+      ? (prisma.shipmentTrack as any).count({ where }).catch(() => 0)
+      : Promise.resolve(0),
+    prisma.shipmentTrack.findMany({
+      where,
+      include: { events: true },
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+  ]);
 
-  return shipments.map((s) => ({
+  const effectiveTotal = Math.max(Number(totalCount) || 0, shipments.length);
+  const totalPages = Math.max(1, Math.ceil(effectiveTotal / pageSize));
+
+  const mapped: any = shipments.map((s) => ({
     id: s.id,
     orderNumber: s.orderNumber,
     type: s.type,
@@ -513,5 +580,41 @@ export async function getStoreShipments(shopifyStoreId: string, options: GetShip
     date: s.createdAt.toISOString().split("T")[0],
     eventsCount: s.events?.length || 0,
   }));
+
+  Object.assign(mapped, {
+    pagination: {
+      page,
+      pageSize,
+      totalCount: effectiveTotal,
+      totalPages,
+    },
+    totalCount: effectiveTotal,
+    totalPages,
+    page,
+    pageSize,
+  });
+
+  return mapped;
+}
+
+/**
+ * Automatically synchronizes shipment tracking statuses for all active (in-transit/pending) shipments.
+ */
+export async function syncAllActiveShipments(shopifyStoreId: string) {
+  const activeShipments = await prisma.shipmentTrack.findMany({
+    where: {
+      shopifyStoreId,
+      status: { in: ["LABEL_CREATED", "IN_TRANSIT", "OUT_FOR_DELIVERY"] },
+    },
+    select: { trackingNumber: true },
+    take: 25,
+  });
+
+  const results = await Promise.allSettled(
+    activeShipments.map((s) => syncShipmentTrackingStatus(s.trackingNumber, shopifyStoreId))
+  );
+
+  const syncedCount = results.filter((r) => r.status === "fulfilled").length;
+  return { success: true, total: activeShipments.length, syncedCount };
 }
 

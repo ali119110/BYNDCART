@@ -64,7 +64,7 @@ export async function action({ request }: Route.ActionArgs) {
     return { error: "Method not allowed" };
   }
 
-  const { shopifyStoreId } = await requireTenantContext(request);
+  const { shopifyStoreId, admin } = await requireTenantContext(request);
   const formData = await request.formData();
 
   const returnWindowDays = Number(formData.get("returnWindowDays"));
@@ -105,7 +105,19 @@ export async function action({ request }: Route.ActionArgs) {
     .map((c) => c.trim())
     .filter(Boolean);
 
+  const storeLogoUrl = String(formData.get("storeLogoUrl") || "").trim() || null;
+  const supportEmail = String(formData.get("supportEmail") || "").trim() || null;
+  const whatsappNumber = String(formData.get("whatsappNumber") || "").trim() || null;
+  const returnAddress = String(formData.get("returnAddress") || "").trim() || null;
+
   try {
+    let freshPolicies = undefined;
+    if (admin) {
+      const { fetchShopPolicies } = await import("../services/settings.server");
+      const p = await fetchShopPolicies(admin);
+      if (p) freshPolicies = p;
+    }
+
     const updatedSettings = await updateSettings(shopifyStoreId, {
       returnWindowDays,
       restockingFeePercent,
@@ -120,6 +132,11 @@ export async function action({ request }: Route.ActionArgs) {
       fraudFlagWindowCount,
       codTaxPercent,
       codDeliveryCharge,
+      storeLogoUrl,
+      supportEmail,
+      whatsappNumber,
+      returnAddress,
+      ...(freshPolicies ? { policies: freshPolicies } : {}),
     });
 
     const updatedPolicyRule = await saveReturnPolicyRule(shopifyStoreId, {
@@ -527,6 +544,87 @@ export default function Settings() {
               />
               <span className="bc-hint">Use an inbox monitored by your store team.</span>
             </label>
+          </div>
+        </section>
+
+        <section className="bc-card bc-form" aria-labelledby="bc-merchant-branding-title">
+          <div className="bc-section-heading">
+            <div className="bc-section-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none">
+                <path d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z" stroke="currentColor" strokeWidth="1.7" />
+                <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor" />
+                <path d="m20 15-5-5-8 8" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <div>
+              <h2 className="bc-title" id="bc-merchant-branding-title">Customer portal branding &amp; support</h2>
+              <p className="bc-muted">Configure your logo, customer contacts, return address, and view auto-synced Shopify store policies.</p>
+            </div>
+          </div>
+
+          <div className="bc-fields">
+            <label>
+              <span className="bc-field-label">Store logo URL</span>
+              <input
+                type="url"
+                name="storeLogoUrl"
+                defaultValue={settings.storeLogoUrl || ""}
+                placeholder="https://example.com/logo.png"
+              />
+              <span className="bc-hint">Direct link to your store logo (PNG, SVG, or JPG) for the portal header.</span>
+            </label>
+            <label>
+              <span className="bc-field-label">Customer support email</span>
+              <input
+                type="email"
+                name="supportEmail"
+                defaultValue={settings.supportEmail || ""}
+                placeholder="support@yourstore.com"
+                autoComplete="email"
+              />
+              <span className="bc-hint">Shown in the customer portal footer for shopper inquiries.</span>
+            </label>
+            <label>
+              <span className="bc-field-label">WhatsApp support number</span>
+              <input
+                type="text"
+                name="whatsappNumber"
+                defaultValue={settings.whatsappNumber || ""}
+                placeholder="+92 300 1234567"
+              />
+              <span className="bc-hint">Direct WhatsApp link rendered in the portal footer.</span>
+            </label>
+          </div>
+
+          <div className="bc-fields bc-fields-full">
+            <label>
+              <span className="bc-field-label">Warehouse return address</span>
+              <textarea
+                name="returnAddress"
+                defaultValue={settings.returnAddress || ""}
+                rows={3}
+                placeholder="Warehouse name, Street address, City, Postal code, Pakistan"
+              />
+              <span className="bc-hint">The physical return address displayed to customers for sending back items after approval.</span>
+            </label>
+          </div>
+
+          <div className="bc-policies-preview">
+            <span className="bc-field-label">Shopify store policies</span>
+            <p className="bc-hint">Retrieved automatically from your Shopify store settings. Displayed in the customer portal footer.</p>
+            <div className="bc-policies-tags">
+              {settings.policies && typeof settings.policies === "object" && Object.keys(settings.policies).length > 0 ? (
+                Object.entries(settings.policies as Record<string, { title?: string; url?: string }>).map(([key, policy]) => (
+                  policy?.url ? (
+                    <a key={key} href={policy.url} target="_blank" rel="noopener noreferrer" className="bc-policy-tag">
+                      {policy.title || key} ↗
+                    </a>
+                  ) : null
+                ))
+              ) : (
+                <span className="bc-muted">No policies detected yet. Policies set in Shopify Admin → Settings → Policies will appear here.</span>
+              )}
+            </div>
           </div>
         </section>
 

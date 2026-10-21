@@ -305,7 +305,7 @@ export default function Exchanges() {
 
   const handleUpdateStatus = (id: string, newStatus: string) => {
     if (newStatus === "COMPLETED") {
-      const confirmation = window.prompt("Confirm the replacement has been delivered. Add a note or reference:", "") || "";
+      const confirmation = window.prompt("Manual delivery override: confirm replacement delivery. Enter courier receipt or reference note:", "") || "";
       if (confirmation.trim().length < 2) return;
       fetcher.submit({ exchangeId: id, status: newStatus, adminNote: confirmation }, { method: "POST" });
       return;
@@ -500,7 +500,7 @@ export default function Exchanges() {
                           <button type="button" className="bc-btn primary" onClick={() => handleUpdateStatus(exc.id, "APPROVED")}>Approve</button>
                           <button type="button" className="bc-btn" onClick={() => handleUpdateStatus(exc.id, "REJECTED")}>Reject</button>
                         </> : null}
-                        {exc.status === "FULFILLED" ? <button type="button" className="bc-btn primary" onClick={() => handleUpdateStatus(exc.id, "COMPLETED")}>Mark delivered</button> : null}
+                        {exc.status === "FULFILLED" ? <button type="button" className="bc-btn" title="Manual delivery override when courier tracking is unavailable" onClick={() => handleUpdateStatus(exc.id, "COMPLETED")}>Mark delivered (override)</button> : null}
                       </div>
                     </td>
                   </tr>

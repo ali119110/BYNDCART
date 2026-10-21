@@ -35,7 +35,94 @@ export async function getSettings(shopifyStoreId: string, admin?: any) {
     if (refreshed?.portalSlug === portalSlug) settings = refreshed;
   }
 
+  if (admin && process.env.NODE_ENV !== "test" && (!settings.policies || Object.keys(settings.policies as object || {}).length === 0)) {
+    const policies = await fetchShopPolicies(admin);
+    if (policies) {
+      await db.storeSettings.update({
+        where: { shopifyStoreId },
+        data: { policies: policies as any },
+      }).catch(() => null);
+      settings.policies = policies;
+    }
+  }
+
   return serializeSettings(settings);
+}
+
+export type ShopPolicyItem = {
+  title: string;
+  url: string;
+};
+
+export type StorePolicies = {
+  privacyPolicy?: ShopPolicyItem | null;
+  refundPolicy?: ShopPolicyItem | null;
+  termsOfService?: ShopPolicyItem | null;
+  shippingPolicy?: ShopPolicyItem | null;
+  legalNotice?: ShopPolicyItem | null;
+  subscriptionPolicy?: ShopPolicyItem | null;
+};
+
+export async function fetchShopPolicies(admin?: any): Promise<StorePolicies | null> {
+  if (!admin) return null;
+  try {
+    const response = await admin.graphql(
+      `#graphql
+      query getShopPolicies {
+        shop {
+          privacyPolicy { title url }
+          refundPolicy { title url }
+          termsOfService { title url }
+          shippingPolicy { title url }
+          legalNotice { title url }
+          subscriptionPolicy { title url }
+        }
+      }`
+    );
+    const { data } = await response.json();
+    if (!data?.shop) return null;
+    const policies: StorePolicies = {};
+    if (data.shop.privacyPolicy?.url) {
+      policies.privacyPolicy = {
+        title: data.shop.privacyPolicy.title || "Privacy Policy",
+        url: data.shop.privacyPolicy.url,
+      };
+    }
+    if (data.shop.refundPolicy?.url) {
+      policies.refundPolicy = {
+        title: data.shop.refundPolicy.title || "Refund Policy",
+        url: data.shop.refundPolicy.url,
+      };
+    }
+    if (data.shop.termsOfService?.url) {
+      policies.termsOfService = {
+        title: data.shop.termsOfService.title || "Terms of Service",
+        url: data.shop.termsOfService.url,
+      };
+    }
+    if (data.shop.shippingPolicy?.url) {
+      policies.shippingPolicy = {
+        title: data.shop.shippingPolicy.title || "Shipping Policy",
+        url: data.shop.shippingPolicy.url,
+      };
+    }
+    if (data.shop.legalNotice?.url) {
+      policies.legalNotice = {
+        title: data.shop.legalNotice.title || "Legal Notice",
+        url: data.shop.legalNotice.url,
+      };
+    }
+    if (data.shop.subscriptionPolicy?.url) {
+      policies.subscriptionPolicy = {
+        title: data.shop.subscriptionPolicy.title || "Subscription Policy",
+        url: data.shop.subscriptionPolicy.url,
+      };
+    }
+    return Object.keys(policies).length > 0 ? policies : null;
+  } catch (error) {
+    console.error("[Settings] Failed to fetch Shopify shop policies:", error);
+    return null;
+  }
 }
 
 async function fetchShopMetadata(admin?: any): Promise<ShopMetadata | null> {
@@ -132,6 +219,11 @@ export async function updateSettings(
     fraudFlagWindowCount?: number;
     codTaxPercent?: number;
     codDeliveryCharge?: number;
+    storeLogoUrl?: string | null;
+    supportEmail?: string | null;
+    whatsappNumber?: string | null;
+    returnAddress?: string | null;
+    policies?: any;
   }
 ) {
   const updated = await db.storeSettings.upsert({

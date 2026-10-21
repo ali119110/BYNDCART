@@ -1170,6 +1170,65 @@ a.bc-btn svg {
   letter-spacing: -0.035em;
 }
 
+.bc-dashboard-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.bc-range-filter {
+  display: inline-flex;
+  background: var(--bc-surface-subtle);
+  border: 1px solid var(--bc-line);
+  padding: 3px;
+  border-radius: var(--bc-radius-sm);
+  gap: 2px;
+}
+
+.bc-range-btn {
+  border: none;
+  background: transparent;
+  padding: 5px 11px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--bc-muted);
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.bc-range-btn:hover {
+  color: var(--bc-ink);
+}
+
+.bc-range-btn.active {
+  background: var(--bc-surface);
+  color: var(--bc-ink);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.bc-kpi-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.bc-kpi-link:hover {
+  border-color: #cbd5e1;
+  box-shadow: var(--bc-shadow-raised);
+  transform: translateY(-1px);
+}
+
+.bc-kpi-sub {
+  display: block;
+  font-size: 11px;
+  color: var(--bc-muted);
+  margin-top: 6px;
+}
+
 .bc-ops-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1632,6 +1691,29 @@ a.bc-btn svg {
   border-color: #202223;
 }
 
+.bc-shipments-pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--bc-border);
+}
+
+.bc-pager-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bc-pager-info,
+.bc-pager-current {
+  font-size: 13px;
+  color: var(--bc-ink-muted);
+}
+
+
 @media (max-width: 720px) {
   .bc-customers-toolbar {
     grid-template-columns: 1fr;
@@ -1988,4 +2070,37 @@ a.bc-btn svg {
 
 .bc-shipment-row-actions form {
   margin: 0;
+}
+
+.bc-policies-preview {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--bc-border);
+}
+
+.bc-policies-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.bc-policy-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--bc-ink);
+  background: var(--bc-surface-subtle);
+  border: 1px solid var(--bc-border);
+  border-radius: 6px;
+  text-decoration: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.bc-policy-tag:hover {
+  background: var(--bc-surface);
+  border-color: var(--bc-ink-muted);
 }
