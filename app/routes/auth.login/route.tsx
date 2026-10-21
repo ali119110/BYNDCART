@@ -7,14 +7,12 @@ import { login } from "../../shopify.server";
 import { loginErrorMessage } from "./error.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  if (process.env.SHOPIFY_SHOP) throw redirect("/app");
   const errors = loginErrorMessage(await login(request));
 
   return { errors };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  if (process.env.SHOPIFY_SHOP) throw redirect("/app");
   const errors = loginErrorMessage(await login(request));
 
   return {

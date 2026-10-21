@@ -9,15 +9,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (process.env.SKIP_AUTH === "true") {
     return { apiKey: "mock-api-key", isOffline: true };
   }
-  try {
-    await authenticate.admin(request);
-    return { apiKey: process.env.SHOPIFY_API_KEY || "", isOffline: false };
-  } catch (error) {
-    if (process.env.SHOPIFY_SHOP && error instanceof Response) {
-      return { apiKey: process.env.SHOPIFY_API_KEY || "", isOffline: true };
-    }
-    throw error;
-  }
+  await authenticate.admin(request);
+  return { apiKey: process.env.SHOPIFY_API_KEY || "", isOffline: false };
 };
 
 const navigationItems = [

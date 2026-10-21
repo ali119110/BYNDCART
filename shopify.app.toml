@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "252648044723f8dd1b39be58eb856035"
+client_id = "bbded2a5a5891b5a874d58aff9899bc4"
 name = "BYNDCART"
 application_url = "https://byndcart-production-23f7.up.railway.app/"
 embedded = true
@@ -31,12 +31,14 @@ api_version = "2026-10"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_customers,write_draft_orders,write_inventory,read_inventory,read_orders,write_orders,read_products,write_products,read_returns,write_returns,write_store_credit_account_transactions"
+scopes = "read_all_orders,read_customers,write_draft_orders,write_inventory,read_inventory,read_orders,write_orders,read_products,write_products,read_returns,write_returns,write_store_credit_account_transactions"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
 [auth]
 redirect_urls = [
+  "https://byndcart-production-23f7.up.railway.app/auth/callback",
+  "https://byndcart-production-23f7.up.railway.app/auth/shopify/callback",
   "https://byndcart-production-23f7.up.railway.app/api/auth/callback"
 ]
 

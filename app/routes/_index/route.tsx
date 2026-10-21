@@ -6,13 +6,14 @@ import { login } from "../../shopify.server";
 import styles from "./styles.module.css";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  if (process.env.SKIP_AUTH === "true" || process.env.SHOPIFY_SHOP) {
-    throw redirect("/app");
-  }
   const url = new URL(request.url);
 
   if (url.searchParams.get("shop")) {
     throw redirect(`/app?${url.searchParams.toString()}`);
+  }
+
+  if (process.env.SKIP_AUTH === "true") {
+    throw redirect("/app");
   }
 
   return { showForm: Boolean(login) };
