@@ -537,5 +537,15 @@ export async function markVerifiedCodPaid(admin: any, shopifyStoreId: string, or
   if (errors.length) {
     throw new Error(errors.map((error: { message?: string }) => error.message || "Shopify refused to mark the order paid.").join(" "));
   }
-  return { orderId, orderName: marked?.orderMarkAsPaid?.order?.name || order.name };
+  return {
+    orderId,
+    orderName: marked?.orderMarkAsPaid?.order?.name || order.name,
+    courier: checked.courier,
+    tracking: checked.tracking,
+    shopifyAmount: checked.shopifyAmount,
+    courierAmount: checked.courierAmount,
+    deliveryCharges: checked.deliveryCharges,
+    paymentDate: checked.paymentDate,
+    amountMatched: checked.amountMatched,
+  };
 }

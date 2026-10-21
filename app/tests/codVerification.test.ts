@@ -82,3 +82,24 @@ test("Courier detection follows the tracking company and PostEx airway bill pref
   assert.strictEqual(detectCourier("CX9988", ""), "PostEx");
   assert.strictEqual(detectCourier("7788", ""), "PostEx");
 });
+
+test("Discrepancy detection flags when courier collected amount differs from Shopify total", () => {
+  const differing = parsePostExResult(
+    order,
+    "CX123",
+    { dist: { transactionStatus: "Delivered", invoicePayment: "3200", transactionFee: "180" } },
+    { dist: { settle: true } },
+  );
+  assert.strictEqual(differing.amountMatched, false);
+  assert.strictEqual(differing.courierAmount, 3200);
+  assert.strictEqual(differing.shopifyAmount, 3500);
+
+  const matched = parsePostExResult(
+    order,
+    "CX123",
+    { dist: { transactionStatus: "Delivered", invoicePayment: "3500", transactionFee: "180" } },
+    { dist: { settle: true } },
+  );
+  assert.strictEqual(matched.amountMatched, true);
+});
+

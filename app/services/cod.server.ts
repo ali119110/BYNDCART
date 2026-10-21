@@ -154,9 +154,32 @@ function toDecimal(value: number) {
   return value.toFixed(2);
 }
 
-export async function listCodSettlements(shopifyStoreId: string) {
+export interface ListCodSettlementsOptions {
+  courier?: string;
+  status?: string;
+  search?: string;
+}
+
+export async function listCodSettlements(shopifyStoreId: string, options?: ListCodSettlementsOptions) {
+  const where: any = { shopifyStoreId };
+  if (options?.courier && options.courier !== "ALL") {
+    where.courier = { equals: options.courier, mode: "insensitive" };
+  }
+  if (options?.status && options.status !== "ALL") {
+    where.status = options.status;
+  }
+  if (options?.search) {
+    const s = options.search.trim();
+    if (s) {
+      where.OR = [
+        { orderNumber: { contains: s, mode: "insensitive" } },
+        { trackingNumber: { contains: s, mode: "insensitive" } },
+        { courierReference: { contains: s, mode: "insensitive" } },
+      ];
+    }
+  }
   return prisma.codSettlement.findMany({
-    where: { shopifyStoreId },
+    where,
     orderBy: { createdAt: "desc" },
     take: 200,
   });
@@ -273,8 +296,106 @@ export async function importCodCsv(shopifyStoreId: string, fileName: string, con
   }
 }
 
-export async function exportCodCsv(shopifyStoreId: string) {
-  const rows = await listCodSettlements(shopifyStoreId);
+export interface AutoReconcileSettlementInput {
+  courier: string;
+  orderNumber?: string;
+  trackingNumber?: string;
+  expectedAmount: number;
+  collectedAmount: number;
+  shippingCharge?: number;
+  reverseCharge?: number;
+  fees?: number;
+  adjustments?: number;
+  settlementDate?: Date | string | null;
+  courierReference?: string;
+  bankReference?: string;
+  batchReference?: string;
+  notes?: string;
+  status?: CodStatus;
+}
+
+export async function recordAutoReconciledSettlement(
+  shopifyStoreId: string,
+  input: AutoReconcileSettlementInput
+) {
+  try {
+    const net = settlementNet({
+      expectedAmount: input.expectedAmount,
+      collectedAmount: input.collectedAmount,
+      shippingCharge: input.shippingCharge || 0,
+      reverseCharge: input.reverseCharge || 0,
+      fees: input.fees || 0,
+      adjustments: input.adjustments || 0,
+    });
+
+    const calculatedStatus: CodStatus = input.status || (
+      input.expectedAmount > 0 && input.collectedAmount === input.expectedAmount
+        ? "CONFIRMED"
+        : input.expectedAmount !== input.collectedAmount
+          ? "DISPUTED"
+          : "MATCHED"
+    );
+
+    // Search for existing settlement for this orderNumber or trackingNumber to avoid duplicate rows
+    const existing = await prisma.codSettlement.findFirst({
+      where: {
+        shopifyStoreId,
+        OR: [
+          ...(input.orderNumber ? [{ orderNumber: input.orderNumber }] : []),
+          ...(input.trackingNumber ? [{ trackingNumber: input.trackingNumber }] : []),
+        ],
+      },
+    });
+
+    if (existing) {
+      return await prisma.codSettlement.update({
+        where: { id: existing.id },
+        data: {
+          courier: input.courier.toUpperCase(),
+          trackingNumber: input.trackingNumber || existing.trackingNumber,
+          expectedAmount: toDecimal(input.expectedAmount),
+          collectedAmount: toDecimal(input.collectedAmount),
+          shippingCharge: toDecimal(input.shippingCharge || 0),
+          fees: toDecimal(input.fees || 0),
+          netAmount: toDecimal(net),
+          settlementDate: input.settlementDate ? new Date(input.settlementDate) : existing.settlementDate,
+          status: calculatedStatus,
+          source: "AUTO_RECONCILE",
+          notes: input.notes || existing.notes || `Auto-reconciled from ${input.courier}`,
+        },
+      });
+    }
+
+    return await prisma.codSettlement.create({
+      data: {
+        shopifyStoreId,
+        courier: input.courier.toUpperCase(),
+        trackingNumber: input.trackingNumber,
+        orderNumber: input.orderNumber,
+        expectedAmount: toDecimal(input.expectedAmount),
+        collectedAmount: toDecimal(input.collectedAmount),
+        shippingCharge: toDecimal(input.shippingCharge || 0),
+        reverseCharge: toDecimal(input.reverseCharge || 0),
+        fees: toDecimal(input.fees || 0),
+        adjustments: toDecimal(input.adjustments || 0),
+        netAmount: toDecimal(net),
+        settlementDate: input.settlementDate ? new Date(input.settlementDate) : new Date(),
+        batchReference: input.batchReference,
+        courierReference: input.courierReference,
+        bankReference: input.bankReference,
+        notes: input.notes || `Auto-reconciled from ${input.courier} courier check`,
+        status: calculatedStatus,
+        source: "AUTO_RECONCILE",
+      },
+    });
+  } catch (error) {
+    console.error("[COD Auto-Reconcile] Error persisting settlement record:", error);
+    return null;
+  }
+}
+
+export async function exportCodCsv(shopifyStoreId: string, courierFilter?: string) {
+  const rows = await listCodSettlements(shopifyStoreId, { courier: courierFilter });
   const header = [
     "courier",
     "orderNumber",

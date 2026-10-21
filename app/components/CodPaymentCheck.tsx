@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher } from "react-router";
 import type { CodVerificationResult } from "../services/codVerification.server";
 
-
 interface VerifyPayload {
   ok: boolean;
   intent: "VERIFY";
@@ -19,7 +18,16 @@ interface MarkPayload {
   ok: boolean;
   intent: "MARK";
   message?: string;
-  marked?: Array<{ orderId: string; orderName: string }>;
+  marked?: Array<{
+    orderId: string;
+    orderName: string;
+    courier?: string;
+    tracking?: string;
+    shopifyAmount?: number;
+    courierAmount?: number;
+    deliveryCharges?: number;
+    amountMatched?: boolean;
+  }>;
   failed?: Array<{ orderId: string; message: string }>;
 }
 
@@ -31,6 +39,10 @@ function isSafe(item: CodVerificationResult) {
   return item.delivered && item.paymentReceived && item.matched && !item.returned && !item.ignored && !item.cancelled && !item.unassigned && item.relevant;
 }
 
+function hasDiscrepancy(item: CodVerificationResult) {
+  return item.courierAmount > 0 && !item.amountMatched;
+}
+
 function summaryAmount(item: CodVerificationResult) {
   return item.courierAmount > 0 ? item.courierAmount : item.shopifyAmount;
 }
@@ -39,22 +51,37 @@ function money(value: number) {
   return `PKR ${Math.round(value).toLocaleString("en-PK")}`;
 }
 
-export function CodPaymentCheck({ taxPercent = 4, deliveryCharge = 280 }: { taxPercent?: number; deliveryCharge?: number }) {
+type CourierFilter = "ALL" | "POSTEX" | "LEOPARD";
+type StatusFilter = "ALL" | "SETTLED" | "UNPAID_DELIVERED" | "DISCREPANCY" | "RETURNED" | "IGNORED";
+
+export function CodPaymentCheck({
+  taxPercent = 4,
+  deliveryCharge = 280,
+}: {
+  taxPercent?: number;
+  deliveryCharge?: number;
+}) {
   const verifyFetcher = useFetcher<VerifyPayload>();
   const markFetcher = useFetcher<MarkPayload>();
+
   const [rows, setRows] = useState<CodVerificationResult[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasNext, setHasNext] = useState(false);
   const [batch, setBatch] = useState(0);
   const [pendingTotal, setPendingTotal] = useState<number | null>(null);
-  const [status, setStatus] = useState("Check the first 20 fulfilled orders that Shopify still shows as unpaid.");
+  const [status, setStatus] = useState("Verify the first 20 fulfilled orders that Shopify shows as unpaid, or verify all to reconcile courier remittances automatically.");
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [unpaidOnly, setUnpaidOnly] = useState(false);
-  const [showIgnored, setShowIgnored] = useState(false);
+
+  const [courierFilter, setCourierFilter] = useState<CourierFilter>("ALL");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+
   const [selected, setSelected] = useState<string[]>([]);
   const [paidIds, setPaidIds] = useState<string[]>([]);
   const [autoRunning, setAutoRunning] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
+  const [autoReconcileOnVerify, setAutoReconcileOnVerify] = useState(false);
+
   const stopAuto = useRef(false);
   const verifyWait = useRef<((data: VerifyPayload) => void) | null>(null);
   const markWait = useRef<((data: MarkPayload) => void) | null>(null);
@@ -77,25 +104,24 @@ export function CodPaymentCheck({ taxPercent = 4, deliveryCharge = 280 }: { taxP
 
   function applyBatch(data: VerifyPayload, append: boolean) {
     const nextRows = data.results || [];
-    setRows((current) => append ? [...current, ...nextRows] : nextRows);
+    setRows((current) => (append ? [...current, ...nextRows] : nextRows));
     setCursor(data.nextCursor || null);
     setHasNext(data.hasNextPage === true);
-    setBatch((current) => append ? current + 1 : 1);
+    setBatch((current) => (append ? current + 1 : 1));
     if (typeof data.totalPending === "number") setPendingTotal(data.totalPending);
+
     if (!append) {
       setSelected([]);
-      setSearch("");
-      setUnpaidOnly(false);
-      setShowIgnored(false);
     }
-    if (!data.ok) setError(data.message || "The courier check failed.");
+
+    if (!data.ok) setError(data.message || "Courier verification check failed.");
     else setError("");
   }
 
   function submitVerify(nextCursor: string | null, mode: "replace" | "append") {
     return new Promise<VerifyPayload>((resolve, reject) => {
       if (verifyWait.current) {
-        reject(new Error("A courier check is already running."));
+        reject(new Error("A courier verification check is already running."));
         return;
       }
       verifyWait.current = resolve;
@@ -108,13 +134,25 @@ export function CodPaymentCheck({ taxPercent = 4, deliveryCharge = 280 }: { taxP
 
   async function verify(append: boolean) {
     setError("");
-    setStatus(append ? `Checking batch ${batch + 1}…` : "Checking the first 20 orders…");
+    setStatus(append ? `Verifying batch ${batch + 1}…` : "Verifying the first 20 orders…");
     const data = await submitVerify(append ? cursor : null, append ? "append" : "replace");
     applyBatch(data, append);
+
     const loaded = append ? rows.length + (data.results?.length || 0) : data.results?.length || 0;
-    setStatus(data.ok
-      ? `Batch ${append ? batch + 1 : 1}: ${data.results?.length || 0} orders checked. ${loaded} loaded${pendingTotal ? ` of ${pendingTotal}` : ""}.`
-      : data.message || "The courier check failed.");
+    setStatus(
+      data.ok
+        ? `Batch ${append ? batch + 1 : 1}: ${data.results?.length || 0} orders verified. ${loaded} loaded${pendingTotal ? ` of ${pendingTotal}` : ""}.`
+        : data.message || "Courier check failed.",
+    );
+
+    // If auto-reconcile on verify is enabled, reconcile safely matched orders
+    if (autoReconcileOnVerify && data.ok && data.results?.length) {
+      const safeIds = data.results.filter(isSafe).map((r) => r.orderId);
+      if (safeIds.length > 0) {
+        await executeReconciliation(safeIds, false);
+      }
+    }
+
     return data;
   }
 
@@ -126,6 +164,7 @@ export function CodPaymentCheck({ taxPercent = 4, deliveryCharge = 280 }: { taxP
     stopAuto.current = false;
     setAutoRunning(true);
     setError("");
+
     try {
       let data = await submitVerify(null, "replace");
       applyBatch(data, false);
@@ -133,17 +172,25 @@ export function CodPaymentCheck({ taxPercent = 4, deliveryCharge = 280 }: { taxP
       let page = 1;
       let next = data.nextCursor || null;
       let more = data.hasNextPage === true;
-      setStatus(`Batch 1 complete. ${loaded} orders loaded.`);
+      setStatus(`Batch 1 verified. ${loaded} orders loaded.`);
+
+      if (autoReconcileOnVerify && data.ok && data.results?.length) {
+        const safeIds = data.results.filter(isSafe).map((r) => r.orderId);
+        if (safeIds.length > 0) await executeReconciliation(safeIds, false);
+      }
+
       while (more && next && !stopAuto.current) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await new Promise((resolve) => setTimeout(resolve, 1500));
         if (stopAuto.current) break;
+
         page += 1;
-        setStatus(`Checking batch ${page}…`);
+        setStatus(`Verifying batch ${page}…`);
         data = await submitVerify(next, "append");
         if (!data.ok) {
           setError(data.message || `Batch ${page} failed.`);
           break;
         }
+
         const count = data.results?.length || 0;
         loaded += count;
         setRows((current) => [...current, ...(data.results || [])]);
@@ -152,26 +199,119 @@ export function CodPaymentCheck({ taxPercent = 4, deliveryCharge = 280 }: { taxP
         setCursor(next);
         setHasNext(more);
         setBatch(page);
-        setStatus(`Batch ${page} complete. ${loaded} orders loaded.`);
+        setStatus(`Batch ${page} verified. ${loaded} orders loaded.`);
+
+        if (autoReconcileOnVerify && data.ok && data.results?.length) {
+          const safeIds = data.results.filter(isSafe).map((r) => r.orderId);
+          if (safeIds.length > 0) await executeReconciliation(safeIds, false);
+        }
       }
-      if (stopAuto.current) setStatus(`Stopped. ${loaded} orders stay on screen.`);
+
+      if (stopAuto.current) {
+        setStatus(`Verification stopped. ${loaded} orders loaded.`);
+      } else {
+        setStatus(`All ${loaded} pending fulfilled orders verified against couriers.`);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Auto verify stopped.");
+      setError(err instanceof Error ? err.message : "Auto-verification stopped.");
     } finally {
       setAutoRunning(false);
       stopAuto.current = false;
     }
   }
 
+  function submitMark(orderIds: string[]) {
+    return new Promise<MarkPayload>((resolve, reject) => {
+      if (markWait.current) {
+        reject(new Error("Orders are already being reconciled."));
+        return;
+      }
+      markWait.current = resolve;
+      markFetcher.submit({ intent: "MARK", orderIds: orderIds.join(",") }, { method: "post" });
+    });
+  }
+
+  async function executeReconciliation(orderIds: string[], confirmWithUser = true) {
+    if (!orderIds.length) return;
+    const count = orderIds.length;
+    if (confirmWithUser) {
+      const confirmed = window.confirm(
+        `Auto-reconcile ${count} delivered and settled order${count === 1 ? "" : "s"}? This will mark them paid in Shopify and automatically log confirmed settlement records in your ledger.`,
+      );
+      if (!confirmed) return;
+    }
+
+    setError("");
+    setReconciling(true);
+    let markedCount = 0;
+
+    try {
+      for (let index = 0; index < orderIds.length; index += 20) {
+        const chunk = orderIds.slice(index, index + 20);
+        const data = await submitMark(chunk);
+        const marked = data.marked || [];
+        markedCount += marked.length;
+
+        if (marked.length) {
+          setPaidIds((current) => [...new Set([...current, ...marked.map((row) => row.orderId)])]);
+          setSelected((current) => current.filter((id) => !marked.some((row) => row.orderId === id)));
+        }
+
+        if (!data.ok) {
+          setError(data.message || "Some orders could not be marked paid in Shopify.");
+          break;
+        }
+
+        if (index + 20 < orderIds.length) {
+          await new Promise((resolve) => setTimeout(resolve, 800));
+        }
+      }
+
+      setStatus(`Successfully reconciled ${markedCount} of ${orderIds.length} orders into Shopify & database ledger.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Auto-reconciliation encountered an issue.");
+    } finally {
+      setReconciling(false);
+    }
+  }
+
+  // Detect available couriers and counts
+  const courierCounts = useMemo(() => {
+    let postex = 0;
+    let leopard = 0;
+    for (const r of rows) {
+      if (r.courier.toUpperCase().includes("POSTEX")) postex += 1;
+      else if (r.courier.toUpperCase().includes("LEOPARD")) leopard += 1;
+    }
+    return { postex, leopard };
+  }, [rows]);
+
+  // Compute financial totals per courier or overall
   const totals = useMemo(() => {
+    const targetRows = courierFilter === "ALL"
+      ? rows
+      : rows.filter((r) =>
+          courierFilter === "POSTEX"
+            ? r.courier.toUpperCase().includes("POSTEX")
+            : r.courier.toUpperCase().includes("LEOPARD"),
+        );
+
+    let count = targetRows.length;
     let unpaidCount = 0;
     let unpaidAmount = 0;
     let receivedCount = 0;
     let receivedAmount = 0;
     let charges = 0;
     let matched = 0;
-    for (const item of rows) {
+    let discrepanciesCount = 0;
+    let discrepanciesAmount = 0;
+
+    for (const item of targetRows) {
       if (item.relevant && item.matched) matched += 1;
+      if (hasDiscrepancy(item)) {
+        discrepanciesCount += 1;
+        discrepanciesAmount += Math.abs(item.courierAmount - item.shopifyAmount);
+      }
       if (isDeliveredUnpaid(item)) {
         unpaidCount += 1;
         unpaidAmount += item.shopifyAmount;
@@ -182,129 +322,385 @@ export function CodPaymentCheck({ taxPercent = 4, deliveryCharge = 280 }: { taxP
         charges += item.deliveryCharges || 0;
       }
     }
-    return { unpaidCount, unpaidAmount, receivedCount, receivedAmount, charges, matched };
-  }, [rows]);
 
-  const visible = rows.filter((item) => {
-    const shown = item.relevant || (showIgnored && item.ignored);
-    if (!shown) return false;
-    if (unpaidOnly && !isDeliveredUnpaid(item)) return false;
-    const query = search.trim().toLowerCase();
-    if (!query) return true;
-    return item.orderName.toLowerCase().includes(query) || item.tracking.toLowerCase().includes(query);
-  });
+    const rate = Math.min(100, Math.max(0, Number(taxPercent) || 0)) / 100;
+    const tax = Math.round(receivedAmount * rate);
+    const expectedNet = receivedAmount - tax - charges;
 
-  const visibleUnpaid = visible.filter(isDeliveredUnpaid).length;
-  const taxRate = Math.min(100, Math.max(0, Number(taxPercent) || 0)) / 100;
-  const chargeEach = Math.max(0, Number(deliveryCharge) || 0);
-  const expectedTax = Math.round(totals.unpaidAmount * taxRate);
-  const expectedCharges = visibleUnpaid * chargeEach;
-  const expectedNet = totals.unpaidAmount - expectedTax - expectedCharges;
-  const checking = verifyFetcher.state !== "idle" || autoRunning;
-  const marking = markFetcher.state !== "idle";
+    return {
+      count,
+      unpaidCount,
+      unpaidAmount,
+      receivedCount,
+      receivedAmount,
+      charges,
+      matched,
+      tax,
+      expectedNet,
+      discrepanciesCount,
+      discrepanciesAmount,
+    };
+  }, [rows, courierFilter, taxPercent]);
+
+  // Filter rows based on courier, status, and search query
+  const visible = useMemo(() => {
+    return rows.filter((item) => {
+      // Courier filter
+      if (courierFilter === "POSTEX" && !item.courier.toUpperCase().includes("POSTEX")) return false;
+      if (courierFilter === "LEOPARD" && !item.courier.toUpperCase().includes("LEOPARD")) return false;
+
+      // Status filter
+      if (statusFilter === "SETTLED" && !isSafe(item)) return false;
+      if (statusFilter === "UNPAID_DELIVERED" && !isDeliveredUnpaid(item)) return false;
+      if (statusFilter === "DISCREPANCY" && !hasDiscrepancy(item)) return false;
+      if (statusFilter === "RETURNED" && !item.returned) return false;
+      if (statusFilter === "IGNORED" && !item.ignored) return false;
+      if (statusFilter === "ALL" && item.ignored) return false;
+
+      // Search query
+      const query = search.trim().toLowerCase();
+      if (!query) return true;
+      return item.orderName.toLowerCase().includes(query) || item.tracking.toLowerCase().includes(query);
+    });
+  }, [rows, courierFilter, statusFilter, search]);
+
+  const safeVisibleUnreconciled = useMemo(() => {
+    return visible.filter(isSafe).filter((item) => !paidIds.includes(item.orderId));
+  }, [visible, paidIds]);
 
   function toggle(orderId: string) {
-    setSelected((current) => current.includes(orderId) ? current.filter((id) => id !== orderId) : [...current, orderId]);
+    setSelected((current) =>
+      current.includes(orderId) ? current.filter((id) => id !== orderId) : [...current, orderId],
+    );
   }
 
-  function selectMatched() {
-    setSelected(visible.filter(isSafe).filter((item) => !paidIds.includes(item.orderId)).map((item) => item.orderId));
-  }
-
-  function submitMark(orderIds: string[]) {
-    return new Promise<MarkPayload>((resolve, reject) => {
-      if (markWait.current) {
-        reject(new Error("Orders are already being marked paid."));
-        return;
-      }
-      markWait.current = resolve;
-      markFetcher.submit({ intent: "MARK", orderIds: orderIds.join(",") }, { method: "post" });
-    });
-  }
-
-  async function mark(orderIds: string[]) {
-    if (!orderIds.length) return;
-    if (!window.confirm(`Mark ${orderIds.length} delivered and settled order${orderIds.length === 1 ? "" : "s"} as paid in Shopify?`)) return;
-    setError("");
-    let markedCount = 0;
-    try {
-      for (let index = 0; index < orderIds.length; index += 20) {
-        const data = await submitMark(orderIds.slice(index, index + 20));
-        const marked = data.marked || [];
-        markedCount += marked.length;
-        if (marked.length) {
-          setPaidIds((current) => [...new Set([...current, ...marked.map((row) => row.orderId)])]);
-          setSelected((current) => current.filter((id) => !marked.some((row) => row.orderId === id)));
-        }
-        if (!data.ok) {
-          setError(data.message || "Shopify did not mark every order paid.");
-          break;
-        }
-        if (index + 20 < orderIds.length) await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-      setStatus(`Marked ${markedCount} of ${orderIds.length} orders paid in Shopify.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Shopify did not mark the orders paid.");
+  function toggleSelectAll() {
+    if (selected.length === safeVisibleUnreconciled.length && safeVisibleUnreconciled.length > 0) {
+      setSelected([]);
+    } else {
+      setSelected(safeVisibleUnreconciled.map((r) => r.orderId));
     }
   }
+
+  const checking = verifyFetcher.state !== "idle" || autoRunning;
+  const busy = checking || reconciling || markFetcher.state !== "idle";
 
   return (
     <section className="bc-card bc-stack">
       <div>
-        <p className="bc-kicker">COURIER SETTLEMENT</p>
-        <h2 className="bc-title">Check PostEx and Leopards before marking COD paid</h2>
-        <p className="bc-muted">This reads fulfilled Shopify orders that are still unpaid, asks the courier whether the parcel was delivered and settled, and marks an order paid only after that check passes.</p>
+        <p className="bc-kicker">AUTOMATED RECONCILIATION</p>
+        <h2 className="bc-title">Verify courier settlements and auto-reconcile COD</h2>
+        <p className="bc-muted">
+          Queries PostEx and Leopards courier APIs to verify parcel delivery, payment collection, and deductions, then automatically reconciles settled orders in Shopify and your ledger.
+        </p>
       </div>
+
+      {/* Main verification & auto-reconcile toolbar */}
       <div className="bc-actions">
-        <button type="button" className="bc-btn primary" disabled={checking || marking} onClick={() => verify(false)}>Check first 20</button>
-        <button type="button" className="bc-btn" disabled={checking || marking || !hasNext} onClick={() => verify(true)}>Next 20</button>
-        <button type="button" className="bc-btn" disabled={marking} onClick={autoVerify}>{autoRunning ? "Stop" : "Check all"}</button>
-        <button type="button" className="bc-btn" disabled={checking || marking || rows.length === 0} onClick={selectMatched}>Select settled</button>
-        <button type="button" className="bc-btn" disabled={checking || marking || selected.length === 0} onClick={() => mark(selected)}>Mark selected paid</button>
-        <button type="button" className={`bc-btn ${unpaidOnly ? "primary" : ""}`} onClick={() => setUnpaidOnly((value) => !value)}>Delivered and unpaid</button>
-        <button type="button" className={`bc-btn ${showIgnored ? "primary" : ""}`} onClick={() => setShowIgnored((value) => !value)}>Show ignored</button>
+        <button
+          type="button"
+          className="bc-btn primary"
+          disabled={busy}
+          onClick={() => verify(false)}
+        >
+          Verify first 20
+        </button>
+
+        <button
+          type="button"
+          className="bc-btn"
+          disabled={busy || !hasNext}
+          onClick={() => verify(true)}
+        >
+          Verify next 20
+        </button>
+
+        <button
+          type="button"
+          className="bc-btn"
+          disabled={reconciling}
+          onClick={autoVerify}
+        >
+          {autoRunning ? "Stop verification" : "Verify all"}
+        </button>
+
+        <button
+          type="button"
+          className="bc-btn primary"
+          disabled={busy || safeVisibleUnreconciled.length === 0}
+          onClick={() => executeReconciliation(safeVisibleUnreconciled.map((r) => r.orderId))}
+        >
+          {courierFilter === "ALL"
+            ? `Auto-reconcile matched (${safeVisibleUnreconciled.length})`
+            : `Auto-reconcile ${courierFilter === "POSTEX" ? "PostEx" : "Leopards"} (${safeVisibleUnreconciled.length})`}
+        </button>
+
+        {selected.length > 0 && (
+          <button
+            type="button"
+            className="bc-btn"
+            disabled={busy}
+            onClick={() => executeReconciliation(selected)}
+          >
+            Reconcile selected ({selected.length})
+          </button>
+        )}
+
+        <label style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--bc-ink)", cursor: "pointer", marginLeft: "auto" }}>
+          <input
+            type="checkbox"
+            checked={autoReconcileOnVerify}
+            onChange={(e) => setAutoReconcileOnVerify(e.target.checked)}
+          />
+          Auto-reconcile settled orders on verify
+        </label>
       </div>
-      <label className="bc-field-label" htmlFor="cod-search">Search loaded orders
-        <input id="cod-search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Order number or tracking number" />
-      </label>
+
+      {/* Courier Filter Switcher */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px", borderTop: "1px solid var(--bc-line)", borderBottom: "1px solid var(--bc-line)", padding: "10px 0" }}>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+          <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--bc-muted)" }}>Courier filter:</span>
+          <div className="bc-range-filter" role="group" aria-label="Filter orders by courier">
+            <button
+              type="button"
+              className={`bc-range-btn ${courierFilter === "ALL" ? "active" : ""}`}
+              onClick={() => setCourierFilter("ALL")}
+            >
+              All Couriers ({rows.length})
+            </button>
+            <button
+              type="button"
+              className={`bc-range-btn ${courierFilter === "POSTEX" ? "active" : ""}`}
+              onClick={() => setCourierFilter("POSTEX")}
+            >
+              PostEx ({courierCounts.postex})
+            </button>
+            <button
+              type="button"
+              className={`bc-range-btn ${courierFilter === "LEOPARD" ? "active" : ""}`}
+              onClick={() => setCourierFilter("LEOPARD")}
+            >
+              Leopards ({courierCounts.leopard})
+            </button>
+          </div>
+        </div>
+
+        {/* Status Filter */}
+        <div style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
+          <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--bc-muted)" }}>View:</span>
+          <div className="bc-range-filter" role="group" aria-label="Filter orders by status">
+            <button
+              type="button"
+              className={`bc-range-btn ${statusFilter === "ALL" ? "active" : ""}`}
+              onClick={() => setStatusFilter("ALL")}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              className={`bc-range-btn ${statusFilter === "SETTLED" ? "active" : ""}`}
+              onClick={() => setStatusFilter("SETTLED")}
+            >
+              Settled
+            </button>
+            <button
+              type="button"
+              className={`bc-range-btn ${statusFilter === "UNPAID_DELIVERED" ? "active" : ""}`}
+              onClick={() => setStatusFilter("UNPAID_DELIVERED")}
+            >
+              Delivered unpaid
+            </button>
+            <button
+              type="button"
+              className={`bc-range-btn ${statusFilter === "DISCREPANCY" ? "active" : ""}`}
+              onClick={() => setStatusFilter("DISCREPANCY")}
+            >
+              Discrepancies
+            </button>
+            <button
+              type="button"
+              className={`bc-range-btn ${statusFilter === "RETURNED" ? "active" : ""}`}
+              onClick={() => setStatusFilter("RETURNED")}
+            >
+              Returned
+            </button>
+            <button
+              type="button"
+              className={`bc-range-btn ${statusFilter === "IGNORED" ? "active" : ""}`}
+              onClick={() => setStatusFilter("IGNORED")}
+            >
+              Ignored
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Dynamic Courier & Reconciliation Metrics Grid */}
       <div className="bc-grid">
-        <article className="bc-card"><p className="bc-kicker">Loaded</p><span className="bc-metric">{rows.length}{pendingTotal ? ` / ${pendingTotal}` : ""}</span></article>
-        <article className="bc-card"><p className="bc-kicker">Settled</p><span className="bc-metric">{rows.length ? totals.matched : "—"}</span></article>
-        <article className="bc-card"><p className="bc-kicker">Payment received</p><span className="bc-metric">{rows.length ? money(totals.receivedAmount) : "—"}</span><p className="bc-muted">{totals.receivedCount} orders</p></article>
-        <article className="bc-card"><p className="bc-kicker">Unpaid delivered</p><span className="bc-metric">{rows.length ? visibleUnpaid : "—"}</span></article>
-        <article className="bc-card"><p className="bc-kicker">All unpaid COD</p><span className="bc-metric">{rows.length ? money(totals.unpaidAmount) : "—"}</span><p className="bc-muted">{totals.unpaidCount} orders</p></article>
-        <article className="bc-card"><p className="bc-kicker">Expected tax {taxPercent}%</p><span className="bc-metric">{rows.length ? money(expectedTax) : "—"}</span></article>
-        <article className="bc-card"><p className="bc-kicker">Expected delivery</p><span className="bc-metric">{rows.length ? money(expectedCharges) : "—"}</span><p className="bc-muted">PKR {chargeEach} each</p></article>
-        <article className="bc-card"><p className="bc-kicker">Expected net</p><span className="bc-metric">{rows.length ? money(expectedNet) : "—"}</span></article>
-        <article className="bc-card"><p className="bc-kicker">Courier charges</p><span className="bc-metric">{rows.length ? money(totals.charges) : "—"}</span></article>
-        <article className="bc-card"><p className="bc-kicker">Courier tax {taxPercent}%</p><span className="bc-metric">{rows.length ? money(Math.round(totals.receivedAmount * taxRate)) : "—"}</span></article>
+        <article className="bc-card">
+          <p className="bc-kicker">{courierFilter === "ALL" ? "Loaded" : `${courierFilter} Orders`}</p>
+          <span className="bc-metric">{totals.count}{courierFilter === "ALL" && pendingTotal ? ` / ${pendingTotal}` : ""}</span>
+          <p className="bc-muted">{totals.matched} ready to reconcile</p>
+        </article>
+
+        <article className="bc-card">
+          <p className="bc-kicker">Courier Collected</p>
+          <span className="bc-metric">{rows.length ? money(totals.receivedAmount) : "—"}</span>
+          <p className="bc-muted">{totals.receivedCount} parcels settled</p>
+        </article>
+
+        <article className="bc-card">
+          <p className="bc-kicker">Courier Charges</p>
+          <span className="bc-metric">{rows.length ? money(totals.charges) : "—"}</span>
+          <p className="bc-muted">Delivery & service fees</p>
+        </article>
+
+        <article className="bc-card">
+          <p className="bc-kicker">Estimated Tax {taxPercent}%</p>
+          <span className="bc-metric">{rows.length ? money(totals.tax) : "—"}</span>
+          <p className="bc-muted">GST deduction</p>
+        </article>
+
+        <article className="bc-card">
+          <p className="bc-kicker">Net Remittance</p>
+          <span className="bc-metric">{rows.length ? money(totals.expectedNet) : "—"}</span>
+          <p className="bc-muted">Collected minus deductions</p>
+        </article>
+
+        <article className="bc-card">
+          <p className="bc-kicker">Delivered Unpaid</p>
+          <span className="bc-metric">{rows.length ? totals.unpaidCount : "—"}</span>
+          <p className="bc-muted">{rows.length ? money(totals.unpaidAmount) : "—"}</p>
+        </article>
+
+        <article className="bc-card">
+          <p className="bc-kicker">Discrepancies</p>
+          <span className="bc-metric">{rows.length ? totals.discrepanciesCount : "—"}</span>
+          <p className="bc-muted">{rows.length ? money(totals.discrepanciesAmount) : "—"}</p>
+        </article>
       </div>
+
+      {/* Search Bar */}
+      <label className="bc-field-label" htmlFor="cod-search">
+        Search loaded orders
+        <input
+          id="cod-search"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Order number (#1001) or tracking number"
+        />
+      </label>
+
+      {/* Status banner */}
       <p className="bc-muted">{status}{batch > 0 ? ` Batch ${batch}.` : ""}</p>
       {error && <p className="bc-note bad">{error}</p>}
+
+      {/* Orders Table */}
       <div className="bc-table-wrap">
         <table className="bc-table">
           <thead>
             <tr>
-              <th>Select</th><th>Order</th><th>Tracking</th><th>Courier</th><th>Amount</th><th>Status</th><th>Payment</th><th>Match</th><th></th>
+              <th style={{ width: "40px" }}>
+                <input
+                  type="checkbox"
+                  checked={safeVisibleUnreconciled.length > 0 && selected.length === safeVisibleUnreconciled.length}
+                  disabled={safeVisibleUnreconciled.length === 0}
+                  onChange={toggleSelectAll}
+                  aria-label="Select all reconcileable orders"
+                />
+              </th>
+              <th>Order</th>
+              <th>Tracking</th>
+              <th>Courier</th>
+              <th>Amounts</th>
+              <th>Courier status</th>
+              <th>Payment settlement</th>
+              <th>Match</th>
+              <th>Reconciliation</th>
             </tr>
           </thead>
           <tbody>
-            {visible.length === 0 && <tr><td colSpan={9}>{rows.length === 0 ? "No orders checked yet." : "No orders match this view."}</td></tr>}
+            {visible.length === 0 && (
+              <tr>
+                <td colSpan={9}>
+                  {rows.length === 0 ? "No orders verified yet. Click 'Verify first 20' or 'Verify all' above." : "No orders match the current filter."}
+                </td>
+              </tr>
+            )}
             {visible.map((item) => {
               const safe = isSafe(item);
               const paid = paidIds.includes(item.orderId);
-              const rowClass = isDeliveredUnpaid(item) ? "bc-cod-row-unpaid" : item.ignored ? "bc-cod-row-ignored" : undefined;
+              const diff = item.courierAmount - item.shopifyAmount;
+              const hasDiff = item.courierAmount > 0 && !item.amountMatched;
+
+              const rowClass = isDeliveredUnpaid(item)
+                ? "bc-cod-row-unpaid"
+                : item.ignored
+                  ? "bc-cod-row-ignored"
+                  : undefined;
+
               return (
                 <tr key={item.orderId} className={rowClass}>
-                  <td>{safe && !paid ? <input type="checkbox" checked={selected.includes(item.orderId)} onChange={() => toggle(item.orderId)} aria-label={`Select ${item.orderName}`} /> : "—"}</td>
-                  <td>{item.orderName}</td>
+                  <td>
+                    {safe && !paid ? (
+                      <input
+                        type="checkbox"
+                        checked={selected.includes(item.orderId)}
+                        onChange={() => toggle(item.orderId)}
+                        aria-label={`Select ${item.orderName}`}
+                      />
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                  <td>
+                    <strong>{item.orderName}</strong>
+                  </td>
                   <td>{item.tracking || "—"}</td>
-                  <td>{item.courier}</td>
-                  <td>Shopify {money(item.shopifyAmount)}<br />Courier {money(item.courierAmount)}{!item.amountMatched && item.courierAmount > 0 ? <><br />Amount differs</> : null}</td>
+                  <td>
+                    <span className="bc-badge">{item.courier}</span>
+                  </td>
+                  <td>
+                    <div>Shopify: {money(item.shopifyAmount)}</div>
+                    <div>Courier: {money(item.courierAmount)}</div>
+                    {hasDiff && (
+                      <span className="bc-badge bad" style={{ marginTop: "3px", display: "inline-block" }}>
+                        {diff > 0 ? `+${money(diff)}` : `-${money(Math.abs(diff))}`} discrepancy
+                      </span>
+                    )}
+                  </td>
                   <td>{item.courierStatus}</td>
-                  <td><span className={item.paymentReceived ? "bc-badge ok" : item.ignored ? "bc-badge" : item.returned ? "bc-badge bad" : "bc-badge warn"}>{item.paymentStatus}</span><br />{item.paymentDate}</td>
-                  <td><span className={item.matched && item.amountMatched ? "bc-badge ok" : "bc-badge bad"}>{item.matched && item.amountMatched ? "Matched" : item.matched ? "Amount differs" : "Not matched"}</span></td>
-                  <td>{safe && (paid ? "Paid" : <button type="button" className="bc-btn" disabled={marking || checking} onClick={() => mark([item.orderId])}>Mark paid</button>)}</td>
+                  <td>
+                    <span className={item.paymentReceived ? "bc-badge ok" : item.ignored ? "bc-badge" : item.returned ? "bc-badge bad" : "bc-badge warn"}>
+                      {item.paymentStatus}
+                    </span>
+                    {item.paymentDate && item.paymentDate !== "-" && (
+                      <div style={{ fontSize: "11px", color: "var(--bc-muted)", marginTop: "2px" }}>
+                        {item.paymentDate}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    <span className={item.matched && item.amountMatched ? "bc-badge ok" : item.matched ? "bc-badge warn" : "bc-badge bad"}>
+                      {item.matched && item.amountMatched ? "Matched" : item.matched ? "Amount differs" : "Not matched"}
+                    </span>
+                  </td>
+                  <td>
+                    {paid ? (
+                      <span className="bc-badge ok">Reconciled</span>
+                    ) : safe ? (
+                      <button
+                        type="button"
+                        className="bc-btn"
+                        disabled={busy}
+                        onClick={() => executeReconciliation([item.orderId])}
+                      >
+                        Reconcile
+                      </button>
+                    ) : (
+                      <span style={{ color: "var(--bc-muted)", fontSize: "12px" }}>Pending settlement</span>
+                    )}
+                  </td>
                 </tr>
               );
             })}
