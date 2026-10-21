@@ -16,7 +16,7 @@ import {
   upsertNotificationTemplate,
   getStoreNotificationTemplates,
 } from "../services/notifications.server";
-import { WhatsAppRegistry, MockWhatsAppAdapter } from "../services/whatsapp.server";
+import { WhatsAppRegistry, MockWhatsAppAdapter, formatPhoneForMeta, seedDefaultWhatsAppTemplates, MetaWhatsAppCloudAdapter } from "../services/whatsapp.server";
 import { transitionReturnStatus } from "../services/stateMachine.server";
 
 // In-Memory Mock Database Storage
@@ -332,3 +332,43 @@ test("Notifications Engine — Notification Failure Does Not Block State Machine
 
   assert.equal(updated.status, "APPROVED");
 });
+
+test("WhatsApp Engine — Phone Number Formatting for Meta Cloud API", () => {
+  // Local Pakistani mobile with leading 0
+  assert.equal(formatPhoneForMeta("03001234567"), "923001234567");
+  assert.equal(formatPhoneForMeta("0321-9876543"), "923219876543");
+
+  // International format with +92 or 0092
+  assert.equal(formatPhoneForMeta("+923001234567"), "923001234567");
+  assert.equal(formatPhoneForMeta("00923001234567"), "923001234567");
+
+  // 10-digit format starting with 3
+  assert.equal(formatPhoneForMeta("3001234567"), "923001234567");
+});
+
+test("WhatsApp Engine — Auto-seed default templates and query WhatsApp channel", async () => {
+  const storeId = "store-whatsapp-seed-test";
+
+  const seedResult = await seedDefaultWhatsAppTemplates(storeId);
+  assert.equal(seedResult.success, true);
+  assert.equal(seedResult.count, 10);
+
+  // Retrieve WhatsApp templates for this store
+  const waTemplates = await getStoreNotificationTemplates(storeId, "WHATSAPP");
+  assert.equal(waTemplates.length, 10);
+  assert.ok(waTemplates.some((t) => t.eventType === "COURIER_PICKUP_BOOKED"));
+  assert.ok(waTemplates.some((t) => t.eventType === "RETURN_APPROVED"));
+  assert.ok(waTemplates.some((t) => t.eventType === "REFUND_INITIATED"));
+});
+
+test("WhatsApp Engine — Meta Cloud Adapter rejects empty credentials cleanly", async () => {
+  const adapterWithoutCreds = new MetaWhatsAppCloudAdapter("", "");
+  const result = await adapterWithoutCreds.sendWhatsAppMessage({
+    to: "03001234567",
+    message: "Test message",
+  });
+
+  assert.equal(result.success, false);
+  assert.ok(result.error?.includes("missing"));
+});
+

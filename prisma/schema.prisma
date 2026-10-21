@@ -75,6 +75,7 @@ model ShopifyStore {
   codSettlements        CodSettlement[]
   codImportBatches      CodImportBatch[]
   loadsheets            Loadsheet[]
+  whatsappConfig        WhatsAppConfig?
 }
 
 model User {
@@ -656,4 +657,23 @@ model Loadsheet {
 
   @@index([shopifyStoreId])
   @@index([shopifyStoreId, courier])
+}
+
+model WhatsAppConfig {
+  id                 String       @id @default(uuid())
+  shopifyStoreId     String       @unique
+  enabled            Boolean      @default(false)
+  phoneNumberId      String?
+  wabaId             String?      // WhatsApp Business Account ID
+  accessToken        String?      // Encrypted Access Token
+  displayPhoneNumber String?      // e.g. "+92 300 1234567"
+  verifiedName       String?      // Business display name approved by Meta
+  qualityRating      String?      @default("UNKNOWN") // GREEN, YELLOW, RED, UNKNOWN
+  connectionType     String       @default("EMBEDDED_SIGNUP") // EMBEDDED_SIGNUP, MANUAL_TOKEN
+  connectedAt        DateTime?
+  createdAt          DateTime     @default(now())
+  updatedAt          DateTime     @updatedAt
+  shopifyStore       ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+
+  @@index([shopifyStoreId])
 }

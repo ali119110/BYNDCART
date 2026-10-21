@@ -1,7 +1,7 @@
 import prisma from "../db.server";
 import { getSettings } from "./settings.server";
 import { enqueueJob } from "./jobs.server";
-import { WhatsAppRegistry } from "./whatsapp.server";
+import { WhatsAppRegistry, dispatchWhatsAppNotification, getWhatsAppConfig, DEFAULT_WHATSAPP_AUTOMATIONS } from "./whatsapp.server";
 
 export interface SendEmailInput {
   to: string;
@@ -350,10 +350,10 @@ export async function processNotificationJob(payload: {
         html: renderedBody,
       });
     } else if (channel === "WHATSAPP") {
-      const adapter = WhatsAppRegistry.getAdapter();
-      sendResult = await adapter.sendWhatsAppMessage({
+      sendResult = await dispatchWhatsAppNotification({
         to: recipient,
         message: renderedBody,
+        shopifyStoreId,
       });
     }
 
@@ -399,10 +399,25 @@ export async function processNotificationJob(payload: {
 /**
  * Merchant template management service handlers
  */
-export async function getStoreNotificationTemplates(shopifyStoreId: string) {
+export async function getStoreNotificationTemplates(shopifyStoreId: string, channel: string = "EMAIL") {
   const dbTemplates = await prisma.notificationTemplate.findMany({
-    where: { shopifyStoreId },
+    where: { shopifyStoreId, channel },
   });
+
+  if (channel === "WHATSAPP") {
+    return DEFAULT_WHATSAPP_AUTOMATIONS.map((def) => {
+      const custom = dbTemplates.find((t) => t.eventType === def.eventType);
+      return {
+        eventType: def.eventType as NotificationEventType,
+        label: def.subject,
+        channel: "WHATSAPP",
+        enabled: custom ? custom.enabled : true,
+        subject: custom ? custom.subject : def.subject,
+        body: custom ? custom.body : def.body,
+        isCustomized: Boolean(custom),
+      };
+    });
+  }
 
   return Object.values(DEFAULT_TEMPLATES).map((def) => {
     const custom = dbTemplates.find((t) => t.eventType === def.eventType && t.channel === "EMAIL");

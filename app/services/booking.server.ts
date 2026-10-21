@@ -1,6 +1,7 @@
 import prisma from "../db.server";
 import { CourierRegistry, getDecryptedCourierCredentials, type LabelResult } from "./courier.server";
 import { logAction } from "./audit.server";
+import { triggerLifecycleNotification } from "./notifications.server";
 import {
   matchPakistaniCity,
   normalizePakistaniMobile,
@@ -413,6 +414,26 @@ export async function bookCourierShipment(
         },
       });
 
+      // Trigger optional WhatsApp booking alert
+      if (input.customerPhone) {
+        triggerLifecycleNotification({
+          shopifyStoreId,
+          eventType: "COURIER_PICKUP_BOOKED",
+          channel: "WHATSAPP",
+          entityId: trackingNumber,
+          recipientPhone: input.customerPhone,
+          recipientEmail: "",
+          variables: {
+            customer_name: input.customerName || "Customer",
+            order_number: input.orderNumber,
+            courier_name: "In-House Rider",
+            tracking_number: trackingNumber,
+            tracking_url: courierTrackingUrl("RIDER", trackingNumber),
+            cod_amount: input.codAmountPKR.toFixed(0),
+          },
+        }).catch((err) => console.warn("[Booking] WhatsApp trigger skipped/error:", err));
+      }
+
       return {
         success: true,
         orderId: input.orderId,
@@ -529,6 +550,26 @@ export async function bookCourierShipment(
         fulfillmentSuccess: fulfillment.success,
       },
     });
+
+    // Trigger optional WhatsApp booking alert
+    if (input.customerPhone) {
+      triggerLifecycleNotification({
+        shopifyStoreId,
+        eventType: "COURIER_PICKUP_BOOKED",
+        channel: "WHATSAPP",
+        entityId: trackingNumber,
+        recipientPhone: input.customerPhone,
+        recipientEmail: "",
+        variables: {
+          customer_name: input.customerName || "Customer",
+          order_number: input.orderNumber,
+          courier_name: normCourier,
+          tracking_number: trackingNumber,
+          tracking_url: courierTrackingUrl(normCourier, trackingNumber),
+          cod_amount: input.codAmountPKR.toFixed(0),
+        },
+      }).catch((err) => console.warn("[Booking] WhatsApp trigger skipped/error:", err));
+    }
 
     return {
       success: true,
