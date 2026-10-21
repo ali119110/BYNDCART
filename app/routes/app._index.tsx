@@ -88,6 +88,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       awaitingInspection,
       pendingRefunds,
       failedShipments,
+      bookedParcels,
     ] = await Promise.all([
       // Total return requests in range
       prisma.returnRequest.count({ where: { shopifyStoreId, ...dateFilter } }),
@@ -125,6 +126,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       prisma.warehouseIntake.count({ where: { shopifyStoreId, status: "RECEIVED" } }),
       prisma.refundRecord.count({ where: { shopifyStoreId, status: "PENDING" } }),
       prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "FAILED" } }),
+      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "LABEL_CREATED" } }),
     ]);
 
     return {
@@ -145,6 +147,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         awaitingInspection,
         pendingRefunds,
         failedShipments,
+        bookedParcels,
       },
       recentReturns: recentReturnsDb.map((r) => ({
         id: r.id,
@@ -182,6 +185,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         awaitingInspection: 0,
         pendingRefunds: 0,
         failedShipments: 0,
+        bookedParcels: 0,
       },
       recentReturns: [],
       recentExchanges: [],
@@ -225,6 +229,7 @@ export default function Dashboard() {
     awaitingInspection: 0,
     pendingRefunds: 0,
     failedShipments: 0,
+    bookedParcels: 0,
   };
   const recentReturns = loaderData?.recentReturns ?? [];
   const recentExchanges = loaderData?.recentExchanges ?? [];
@@ -344,6 +349,10 @@ export default function Dashboard() {
         </div>
 
         <div className="bc-ops-grid">
+          <Link className="bc-ops-card" to="/app/bookings">
+            <span className="bc-ops-label">Bookings ready</span>
+            <span className="bc-ops-value">{operations.bookedParcels.toLocaleString("en-PK")}</span>
+          </Link>
           <Link className={`bc-ops-card ${operations.pendingReturns > 0 ? "has-attention" : ""}`} to="/app/returns">
             <span className="bc-ops-label">Pending returns</span>
             <span className="bc-ops-value">{operations.pendingReturns.toLocaleString("en-PK")}</span>

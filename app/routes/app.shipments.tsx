@@ -275,11 +275,14 @@ export default function Shipments() {
                       </span>
                     </td>
                     <td>
-                      {shipment.labelUrl ? (
-                        <a className="bc-text-link" href={shipment.labelUrl} target="_blank" rel="noopener noreferrer">Open label</a>
-                      ) : shipment.courier === "POSTEX" ? (
-                        <a className="bc-text-link" href={`/app/shipments-label?trackingNumber=${encodeURIComponent(shipment.trackingNumber)}`}>Download invoice</a>
-                      ) : "—"}
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                        <a className="bc-text-link" href={`/app/awb?ids=${shipment.id}`} target="_blank" rel="noopener noreferrer">Print AWB</a>
+                        {shipment.labelUrl ? (
+                          <a className="bc-text-link" href={shipment.labelUrl} target="_blank" rel="noopener noreferrer">Carrier label</a>
+                        ) : shipment.courier === "POSTEX" ? (
+                          <a className="bc-text-link" href={`/app/shipments-label?trackingNumber=${encodeURIComponent(shipment.trackingNumber)}`}>Download invoice</a>
+                        ) : null}
+                      </div>
                     </td>
                     <td>
                       <div className="bc-shipment-row-actions">

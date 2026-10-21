@@ -15,6 +15,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       slug: settings.portalSlug || null,
       storefrontUrl: hostedPortalUrl || "",
       shopifyProxyUrl: `https://${shop}/apps/returns`,
+      orderTrackingUrl: `https://${shop}/apps/track`,
       baseUrlConfigured: Boolean(hostedPortalUrl),
     };
     const policyRule = await getReturnPolicyRule(shopifyStoreId);
@@ -26,6 +27,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       slug: null,
       storefrontUrl: "",
       shopifyProxyUrl: `https://${shop}/apps/returns`,
+      orderTrackingUrl: `https://${shop}/apps/track`,
       baseUrlConfigured: false,
     };
     return {
@@ -163,6 +165,7 @@ export default function Settings() {
   const { settings, policyRule, portal } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   const [copied, setCopied] = React.useState(false);
+  const [copiedTracking, setCopiedTracking] = React.useState(false);
 
   const isSaving = fetcher.state === "submitting";
   const savedRecently = fetcher.state === "idle" && fetcher.data?.success;
@@ -175,6 +178,17 @@ export default function Settings() {
       setCopied(true);
     } catch {
       setCopied(false);
+    }
+  };
+
+  const copyTrackingLink = async () => {
+    if (!portal?.orderTrackingUrl) return;
+
+    try {
+      await navigator.clipboard.writeText(portal.orderTrackingUrl);
+      setCopiedTracking(true);
+    } catch {
+      setCopiedTracking(false);
     }
   };
 
@@ -265,6 +279,47 @@ export default function Settings() {
           <span className="bc-note-icon" aria-hidden="true">i</span>
           <p>
             Customers enter their order number and the email on the order, verify their identity, then submit a return or exchange request. This portal is hosted by BYNDCART on your Railway app domain. Add the link above to your Shopify footer menu. Your existing Shopify App Proxy URL remains available separately if you want a portal under your storefront domain.
+          </p>
+        </div>
+      </section>
+
+      {/* Storefront Order Tracking Proxy */}
+      <section className="bc-card bc-portal-card bc-stack" aria-labelledby="bc-tracking-title">
+        <div className="bc-portal-heading">
+          <div className="bc-portal-heading-copy">
+            <p className="bc-kicker">STOREFRONT TRACKING</p>
+            <h2 className="bc-title" id="bc-tracking-title">Customer Order Tracking Page</h2>
+            <p className="bc-muted">
+              Live branded order tracking on your store. Customers can enter their Shopify order number or courier tracking number to see delivery milestones and live courier events.
+            </p>
+          </div>
+        </div>
+
+        <div className="bc-portal-link-block">
+          <div className="bc-link-label-row">
+            <label className="bc-field-label" htmlFor="bc-tracking-page-url">Storefront tracking URL</label>
+            <span className="bc-inline-status"><span className="bc-status-dot" /> App Proxy</span>
+          </div>
+          <div className="bc-copy">
+            <input
+              id="bc-tracking-page-url"
+              type="text"
+              readOnly
+              value={portal?.orderTrackingUrl || ""}
+              aria-label="Storefront order tracking link"
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            <button type="button" className="bc-btn" onClick={copyTrackingLink}>
+              {copiedTracking ? "Copied" : "Copy link"}
+            </button>
+            {portal?.orderTrackingUrl && (
+              <a className="bc-btn primary" href={portal.orderTrackingUrl} target="_blank" rel="noreferrer">
+                Open tracking page
+              </a>
+            )}
+          </div>
+          <p className="bc-copy-feedback" aria-live="polite">
+            {copiedTracking ? "Tracking link copied to clipboard." : "Add this App Proxy URL to your navigation menu or order confirmation emails."}
           </p>
         </div>
       </section>

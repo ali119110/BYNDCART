@@ -15,6 +15,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 const navigationItems = [
   { label: "Dashboard", href: "/app" },
+  { label: "Bookings", href: "/app/bookings" },
+  { label: "Shipments", href: "/app/shipments" },
   { label: "Returns", href: "/app/returns" },
   { label: "Exchanges", href: "/app/exchanges" },
   { label: "Customers", href: "/app/customers" },

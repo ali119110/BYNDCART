@@ -74,6 +74,7 @@ model ShopifyStore {
   evidenceAttachments   EvidenceAttachment[]
   codSettlements        CodSettlement[]
   codImportBatches      CodImportBatch[]
+  loadsheets            Loadsheet[]
 }
 
 model User {
@@ -331,9 +332,13 @@ model ShipmentTrack {
   estimatedDelivery  DateTime?
   returnRequestId    String?
   exchangeRequestId  String?
+  destinationCity    String?
+  codAmount          Decimal?      @db.Decimal(12, 2)
+  loadsheetId        String?
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
   shopifyStore       ShopifyStore @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+  loadsheet          Loadsheet?   @relation(fields: [loadsheetId], references: [id], onDelete: SetNull)
   warehouseIntakes   WarehouseIntake[]
   events             ShipmentEvent[]
   documents          ShipmentDocument[]
@@ -341,6 +346,7 @@ model ShipmentTrack {
   @@index([shopifyStoreId])
   @@index([shopifyStoreId, type])
   @@index([shopifyStoreId, status])
+  @@index([shopifyStoreId, loadsheetId])
 }
 
 model ShipmentDocument {
@@ -630,4 +636,24 @@ model CodSettlement {
   @@index([shopifyStoreId])
   @@index([shopifyStoreId, status])
   @@index([shopifyStoreId, courierReference])
+}
+
+model Loadsheet {
+  id              String          @id @default(uuid())
+  shopifyStoreId  String
+  loadsheetNumber String          @unique
+  courier         String          // POSTEX, LEOPARDS, TCS, RIDER
+  parcelCount     Int             @default(0)
+  totalCodAmount  Decimal         @default(0) @db.Decimal(12, 2)
+  status          String          @default("GENERATED") // GENERATED, HANDED_OVER, CANCELLED
+  riderName       String?
+  riderPhone      String?
+  notes           String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  shopifyStore    ShopifyStore    @relation(fields: [shopifyStoreId], references: [id], onDelete: Cascade)
+  shipments       ShipmentTrack[]
+
+  @@index([shopifyStoreId])
+  @@index([shopifyStoreId, courier])
 }
