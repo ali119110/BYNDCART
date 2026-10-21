@@ -571,7 +571,7 @@ export default function Exchanges() {
                     </label>
                     <input
                       type="text"
-                      placeholder="🔍 Type Order #, Customer Name, Email, or Product title..."
+                      placeholder="Search by order #, customer name, email, or product title..."
                       value={orderSearchQuery}
                       onChange={(e) => setOrderSearchQuery(e.target.value)}
                       style={{

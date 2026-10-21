@@ -8,12 +8,12 @@ import { updateExchangeStatus } from "../services/exchanges.server";
 import { executeShopifyDraftOrderCreate } from "../services/shopifySync.server";
 
 const conditions = [
-  { value: "RESTOCKABLE", label: "Restockable", description: "Resaleable, tags intact & like new", tone: "success", icon: "✨" },
-  { value: "DAMAGED", label: "Damaged", description: "Transit or handling damage", tone: "warning", icon: "⚠️" },
-  { value: "DEFECTIVE", label: "Defective", description: "Manufacturing flaw / faulty", tone: "critical", icon: "❌" },
-  { value: "WRONG_ITEM", label: "Wrong Item", description: "Customer returned different item", tone: "critical", icon: "🔄" },
-  { value: "MISSING_ITEM", label: "Missing Item", description: "Package was empty or incomplete", tone: "critical", icon: "❓" },
-  { value: "DISCARD", label: "Discard / Scrap", description: "Unusable, dispose safely", tone: "critical", icon: "🗑️" },
+  { value: "RESTOCKABLE", label: "Restockable" },
+  { value: "DAMAGED", label: "Damaged" },
+  { value: "DEFECTIVE", label: "Defective" },
+  { value: "WRONG_ITEM", label: "Wrong item" },
+  { value: "MISSING_ITEM", label: "Missing item" },
+  { value: "DISCARD", label: "Discard" },
 ] as const;
 
 export async function loader({ request }: Route.LoaderArgs) {
@@ -163,7 +163,7 @@ export async function action({ request }: Route.ActionArgs) {
         scannedAwb: String(form.get("scannedAwb") || ""),
         notes: String(form.get("notes") || ""),
       });
-      return { success: true, message: "Warehouse receipt recorded successfully.", result };
+      return { success: true, message: "Receipt recorded.", result };
     }
 
     if (actionType === "RETRY_REPLACEMENT") {
@@ -188,7 +188,7 @@ export async function action({ request }: Route.ActionArgs) {
         admin,
         "Replacement order creation retried after inspection."
       );
-      return { success: true, message: `Replacement order ${updated.newOrderNumber || replacement.replacementOrderNumber || "created"} is now linked.`, result: updated };
+      return { success: true, message: `Replacement order ${updated.newOrderNumber || replacement.replacementOrderNumber || "created"} linked.`, result: updated };
     }
 
     if (actionType === "COMPLETE_INSPECTION") {
@@ -238,7 +238,7 @@ export async function action({ request }: Route.ActionArgs) {
         items,
       });
 
-      return { success: true, message: "Inspection completed successfully! Workflow updated.", result };
+      return { success: true, message: "Inspection completed.", result };
     }
 
     return { error: "Unknown warehouse action." };
@@ -271,8 +271,7 @@ function ReceiveModal({
       <div className="bc-modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="bc-modal-header">
           <div>
-            <span className="bc-modal-eyebrow">RECEIVING PARCEL</span>
-            <h2 className="bc-modal-title">Order #{request.orderNumber}</h2>
+            <h2 className="bc-modal-title">Receive parcel · #{request.orderNumber}</h2>
           </div>
           <button type="button" className="bc-modal-close" onClick={onClose} aria-label="Close">
             ✕
@@ -287,7 +286,7 @@ function ReceiveModal({
           <div className="bc-meta-banner">
             <div>
               <span className="bc-meta-label">Customer</span>
-              <strong>{request.customerName || "Customer"}</strong>
+              <span>{request.customerName || "Customer"}</span>
             </div>
             <div>
               <span className="bc-meta-label">Courier</span>
@@ -297,7 +296,7 @@ function ReceiveModal({
 
           <div className="bc-form-group">
             <label htmlFor="scannedAwb" className="bc-label">
-              Tracking / Airway Bill (AWB) Number <span className="bc-req">*</span>
+              Tracking / AWB <span className="bc-req">*</span>
             </label>
             <input
               id="scannedAwb"
@@ -306,18 +305,18 @@ function ReceiveModal({
               required
               minLength={3}
               defaultValue={request.customerTracking || ""}
-              placeholder="e.g. 2781739123"
+              placeholder="Tracking number"
               autoFocus
             />
           </div>
 
           <div className="bc-form-group">
-            <label htmlFor="receiveNotes" className="bc-label">Receiving Notes (Optional)</label>
+            <label htmlFor="receiveNotes" className="bc-label">Notes</label>
             <input
               id="receiveNotes"
               name="notes"
               className="bc-input"
-              placeholder="e.g. Box intact, arrived via TCS courier"
+              placeholder="Optional notes"
             />
           </div>
 
@@ -329,7 +328,7 @@ function ReceiveModal({
               Cancel
             </button>
             <button type="submit" className="bc-btn-primary" disabled={fetcher.state !== "idle"}>
-              {fetcher.state !== "idle" ? "Recording…" : "Confirm Parcel Receipt"}
+              {fetcher.state !== "idle" ? "Saving…" : "Confirm receipt"}
             </button>
           </div>
         </fetcher.Form>
@@ -365,13 +364,11 @@ function InspectionModal({
       <div className="bc-modal-card bc-modal-lg" onClick={(e) => e.stopPropagation()}>
         <div className="bc-modal-header">
           <div>
-            <div className="bc-header-tags">
-              <span className="bc-tag-type">{requestType === "EXCHANGE" ? "EXCHANGE INSPECTION" : "RETURN INSPECTION"}</span>
-              <span className="bc-tag-status">RECEIVED AT WAREHOUSE</span>
-            </div>
-            <h2 className="bc-modal-title">Inspection · Order #{request.orderNumber}</h2>
+            <h2 className="bc-modal-title">
+              {requestType === "EXCHANGE" ? "Exchange inspection" : "Return inspection"} · #{request.orderNumber}
+            </h2>
             <p className="bc-modal-sub">
-              Customer: <strong>{request.customerName || "Customer"}</strong> · AWB: <strong>{request.customerTracking || "Manual Receipt"}</strong>
+              {request.customerName || "Customer"} · Tracking: {request.customerTracking || "None"}
             </p>
           </div>
           <button type="button" className="bc-modal-close" onClick={onClose} aria-label="Close">
@@ -388,40 +385,40 @@ function InspectionModal({
           {/* Context Banner: Explaining what is being inspected vs replacement requested */}
           {requestType === "EXCHANGE" ? (
             <div className="bc-exchange-context-card">
-              <div className="bc-exchange-col returned">
-                <span className="bc-col-badge in">📦 INBOUND PARCEL (TO INSPECT)</span>
+              <div className="bc-exchange-col">
+                <span className="bc-col-label">Inbound (To inspect)</span>
                 {items.map((item: any, idx: number) => (
                   <div key={idx} className="bc-exchange-product">
                     <span className="bc-product-title">{item.returnedTitle}</span>
-                    <span className="bc-product-qty">Quantity: <strong>{item.originalQuantity}</strong></span>
+                    <span className="bc-product-qty">Qty: {item.originalQuantity}</span>
                   </div>
                 ))}
               </div>
               <div className="bc-exchange-divider">
-                <span className="bc-arrow-icon">➔</span>
+                <span className="bc-arrow-text">→</span>
               </div>
-              <div className="bc-exchange-col replacement">
-                <span className="bc-col-badge out">🔄 REQUESTED REPLACEMENT</span>
+              <div className="bc-exchange-col">
+                <span className="bc-col-label">Requested replacement</span>
                 {items.map((item: any, idx: number) => (
                   <div key={idx} className="bc-exchange-product">
                     <span className="bc-product-title">{item.replacementTitle}</span>
-                    <span className="bc-product-qty">Quantity: <strong>{item.replacementQuantity}</strong></span>
+                    <span className="bc-product-qty">Qty: {item.replacementQuantity}</span>
                   </div>
                 ))}
                 {request.newOrderNumber && (
                   <div className="bc-replacement-link">
-                    Replacement Order: <strong>{request.newOrderNumber}</strong>
+                    Replacement order: {request.newOrderNumber}
                   </div>
                 )}
               </div>
             </div>
           ) : (
             <div className="bc-return-context-card">
-              <span className="bc-col-badge in">📦 RETURNED ITEM FOR REFUND</span>
+              <span className="bc-col-label">Returned item</span>
               {items.map((item: any, idx: number) => (
                 <div key={idx} className="bc-return-product">
                   <span className="bc-product-title">{item.returnedTitle}</span>
-                  <span className="bc-product-qty">Quantity: <strong>{item.quantity}</strong></span>
+                  <span className="bc-product-qty">Qty: {item.quantity}</span>
                 </div>
               ))}
             </div>
@@ -429,7 +426,7 @@ function InspectionModal({
 
           {/* Item Inspection Cards */}
           <div className="bc-inspection-items-list">
-            <h3 className="bc-section-title">Item Inspection Results</h3>
+            <h3 className="bc-section-title">Items</h3>
             {items.map((item: any, index: number) => {
               const expected = requestType === "EXCHANGE" ? Number(item.originalQuantity || 1) : Number(item.quantity || 1);
               const returnedItemTitle = item.returnedTitle || "Returned Item";
@@ -440,18 +437,17 @@ function InspectionModal({
 
                   <div className="bc-item-card-header">
                     <div>
-                      <span className="bc-inspect-tag">INSPECTING ITEM #{index + 1}</span>
                       <h4 className="bc-item-heading">{returnedItemTitle}</h4>
                     </div>
                     <div className="bc-expected-badge">
-                      Expected: <strong>{expected}</strong> unit{expected > 1 ? "s" : ""}
+                      Expected: {expected}
                     </div>
                   </div>
 
                   <div className="bc-item-fields-grid">
                     <div className="bc-field">
                       <label htmlFor={`receivedQuantity_${index}`} className="bc-label">
-                        Received Quantity <span className="bc-req">*</span>
+                        Received qty
                       </label>
                       <input
                         id={`receivedQuantity_${index}`}
@@ -467,7 +463,7 @@ function InspectionModal({
 
                     <div className="bc-field">
                       <label htmlFor={`condition_${index}`} className="bc-label">
-                        Item Condition <span className="bc-req">*</span>
+                        Condition
                       </label>
                       <select
                         id={`condition_${index}`}
@@ -477,7 +473,7 @@ function InspectionModal({
                       >
                         {conditions.map((c) => (
                           <option key={c.value} value={c.value}>
-                            {c.icon} {c.label} ({c.description})
+                            {c.label}
                           </option>
                         ))}
                       </select>
@@ -485,12 +481,12 @@ function InspectionModal({
                   </div>
 
                   <div className="bc-field bc-mt-2">
-                    <label htmlFor={`inspectionNotes_${index}`} className="bc-label">Item Note</label>
+                    <label htmlFor={`inspectionNotes_${index}`} className="bc-label">Note</label>
                     <input
                       id={`inspectionNotes_${index}`}
                       name={`inspectionNotes_${index}`}
                       className="bc-input"
-                      placeholder="e.g. Tags attached, original polybag intact, unworn"
+                      placeholder="Optional item note"
                     />
                   </div>
                 </div>
@@ -499,12 +495,12 @@ function InspectionModal({
           </div>
 
           <div className="bc-form-group">
-            <label htmlFor="overallNotes" className="bc-label">Overall Inspection Summary</label>
+            <label htmlFor="overallNotes" className="bc-label">Overall notes</label>
             <input
               id="overallNotes"
               name="inspectionNotes"
               className="bc-input"
-              placeholder="e.g. Package verified by warehouse team, safe for restocking."
+              placeholder="Optional summary"
             />
           </div>
 
@@ -516,7 +512,7 @@ function InspectionModal({
               Cancel
             </button>
             <button type="submit" className="bc-btn-primary" disabled={fetcher.state !== "idle"}>
-              {fetcher.state !== "idle" ? "Completing Inspection…" : "✓ Complete Inspection"}
+              {fetcher.state !== "idle" ? "Saving…" : "Complete inspection"}
             </button>
           </div>
         </fetcher.Form>
@@ -532,9 +528,9 @@ function RetryReplacementForm({ requestId }: { requestId: string }) {
     <fetcher.Form method="post" className="bc-retry-card">
       <input type="hidden" name="actionType" value="RETRY_REPLACEMENT" />
       <input type="hidden" name="requestId" value={requestId} />
-      <span className="bc-retry-text">Inspection complete. Replacement order pending.</span>
+      <span className="bc-retry-text">Replacement pending</span>
       <button className="bc-btn-retry" type="submit" disabled={fetcher.state !== "idle"}>
-        {fetcher.state === "idle" ? "🔄 Create Replacement Order" : "Creating…"}
+        {fetcher.state === "idle" ? "Create replacement order" : "Creating…"}
       </button>
       {fetcher.data?.error && <div className="bc-alert error mt-1">{fetcher.data.error}</div>}
       {fetcher.data?.success && <div className="bc-alert success mt-1">{fetcher.data.message}</div>}
@@ -580,42 +576,31 @@ export default function WarehouseReceiving() {
           --bc-text-muted: #64748b;
           --bc-brand: #0f172a;
           --bc-brand-hover: #1e293b;
-          --bc-primary-accent: #4f46e5;
-          --bc-primary-accent-hover: #4338ca;
         }
 
         .bc-page {
           max-width: 1400px;
           margin: 0 auto;
-          padding: 28px 24px;
+          padding: 24px;
           color: var(--bc-text-dark);
-          font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
 
         .bc-header-wrap {
-          margin-bottom: 24px;
-        }
-
-        .bc-eyebrow {
-          margin: 0 0 6px;
-          color: #6366f1;
-          letter-spacing: .08em;
-          font-size: 11px;
-          font-weight: 800;
-          text-transform: uppercase;
+          margin-bottom: 20px;
         }
 
         .bc-header-wrap h1 {
-          font-size: 28px;
-          font-weight: 800;
-          letter-spacing: -0.025em;
-          margin: 0 0 6px;
+          font-size: 24px;
+          font-weight: 700;
+          letter-spacing: -0.02em;
+          margin: 0 0 4px;
           color: var(--bc-text-dark);
         }
 
         .bc-header-wrap p {
           color: var(--bc-text-muted);
-          font-size: 14px;
+          font-size: 13.5px;
           margin: 0;
         }
 
@@ -624,35 +609,35 @@ export default function WarehouseReceiving() {
           display: flex;
           justify-content: space-between;
           align-items: center;
-          gap: 16px;
-          margin: 22px 0 16px;
+          gap: 12px;
+          margin: 18px 0 14px;
           flex-wrap: wrap;
         }
 
         .bc-tabs {
           display: inline-flex;
           background: #f1f5f9;
-          padding: 4px;
-          border-radius: 12px;
-          gap: 4px;
+          padding: 3px;
+          border-radius: 8px;
+          gap: 2px;
         }
 
         .bc-tab-btn {
           border: none;
           background: transparent;
-          padding: 8px 18px;
-          border-radius: 9px;
+          padding: 6px 14px;
+          border-radius: 6px;
           cursor: pointer;
-          font-weight: 700;
-          font-size: 13.5px;
-          color: #475569;
+          font-weight: 500;
+          font-size: 13px;
+          color: #64748b;
           transition: all 0.15s ease;
         }
 
         .bc-tab-btn[aria-pressed="true"] {
           background: #ffffff;
           color: #0f172a;
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
         }
 
         .bc-filters {
@@ -664,11 +649,11 @@ export default function WarehouseReceiving() {
         .bc-filter-btn {
           border: 1px solid var(--bc-border);
           background: #ffffff;
-          padding: 6px 14px;
-          border-radius: 9999px;
+          padding: 5px 12px;
+          border-radius: 6px;
           cursor: pointer;
-          font-size: 12.5px;
-          font-weight: 600;
+          font-size: 12px;
+          font-weight: 500;
           color: #64748b;
           transition: all 0.15s ease;
         }
@@ -688,224 +673,181 @@ export default function WarehouseReceiving() {
         .bc-table-wrap {
           overflow-x: auto;
           border: 1px solid var(--bc-border);
-          border-radius: 16px;
+          border-radius: 10px;
           background: #ffffff;
-          box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
         }
 
         .bc-table {
           width: 100%;
           border-collapse: collapse;
-          font-size: 13.5px;
+          font-size: 13px;
         }
 
         .bc-table th {
-          padding: 14px 16px;
+          padding: 12px 14px;
           border-bottom: 1px solid var(--bc-border);
           text-align: left;
           font-size: 11px;
-          letter-spacing: .06em;
+          letter-spacing: .04em;
           text-transform: uppercase;
-          font-weight: 700;
+          font-weight: 600;
           color: #64748b;
           background: #f8fafc;
         }
 
         .bc-table td {
-          padding: 16px;
+          padding: 14px;
           border-bottom: 1px solid #f1f5f9;
           text-align: left;
           vertical-align: middle;
         }
 
         .bc-table tbody tr:hover {
-          background: #fafcff;
+          background: #f8fafc;
         }
 
-        /* Order & Customer Column */
         .bc-order-title {
-          font-weight: 800;
-          font-size: 14px;
+          font-weight: 600;
+          font-size: 13.5px;
           color: #0f172a;
         }
 
         .bc-order-sub {
-          font-size: 11.5px;
+          font-size: 11px;
           color: #94a3b8;
           margin-top: 2px;
           font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         }
 
         .bc-customer-name {
-          font-weight: 600;
+          font-weight: 500;
           color: #1e293b;
         }
 
-        /* Items Display */
         .bc-items-cell {
           display: flex;
           flex-direction: column;
-          gap: 6px;
+          gap: 4px;
           max-width: 360px;
         }
 
         .bc-item-entry {
           display: flex;
           align-items: center;
-          gap: 8px;
-          font-size: 13px;
+          gap: 6px;
+          font-size: 12.5px;
         }
 
         .bc-pill-tag {
           font-size: 10px;
-          font-weight: 700;
-          text-transform: uppercase;
-          letter-spacing: 0.04em;
-          padding: 2px 7px;
-          border-radius: 6px;
+          font-weight: 500;
+          padding: 1px 6px;
+          border-radius: 4px;
           white-space: nowrap;
-        }
-
-        .bc-pill-tag.inbound {
-          background: #fef3c7;
-          color: #92400e;
-          border: 1px solid #fde68a;
-        }
-
-        .bc-pill-tag.outbound {
-          background: #e0e7ff;
-          color: #3730a3;
-          border: 1px solid #c7d2fe;
+          background: #f1f5f9;
+          color: #475569;
+          border: 1px solid #e2e8f0;
         }
 
         .bc-item-name {
-          font-weight: 600;
+          font-weight: 500;
           color: #1e293b;
         }
 
         .bc-item-qty {
-          color: #64748b;
-          font-weight: 700;
-          font-size: 12px;
+          color: #94a3b8;
+          font-size: 11.5px;
         }
 
-        /* Tracking & Status */
         .bc-tracking-num {
-          font-weight: 700;
+          font-weight: 500;
           color: #0f172a;
           font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-          font-size: 13px;
+          font-size: 12.5px;
         }
 
         .bc-tracking-sub {
           font-size: 11.5px;
           color: #64748b;
-          margin-top: 3px;
+          margin-top: 2px;
         }
 
         .bc-status-chip {
           display: inline-block;
           font-size: 11px;
-          font-weight: 800;
-          letter-spacing: 0.04em;
-          padding: 4px 10px;
-          border-radius: 9999px;
+          font-weight: 600;
+          padding: 2px 8px;
+          border-radius: 4px;
+          background: #f1f5f9;
+          color: #334155;
+          border: 1px solid #e2e8f0;
           white-space: nowrap;
         }
 
-        .bc-status-chip.RECEIVED {
-          background: #fef3c7;
-          color: #92400e;
-          border: 1px solid #fde68a;
-        }
-
-        .bc-status-chip.APPROVED {
-          background: #e0e7ff;
-          color: #3730a3;
-          border: 1px solid #c7d2fe;
-        }
-
         .bc-status-chip.INSPECTED {
-          background: #dcfce7;
-          color: #166534;
-          border: 1px solid #bbf7d0;
-        }
-
-        .bc-status-chip.FULFILLED {
-          background: #f0fdf4;
-          color: #15803d;
-          border: 1px solid #86efac;
+          background: #0f172a;
+          color: #ffffff;
+          border-color: #0f172a;
         }
 
         .bc-replacement-sub {
-          font-size: 11.5px;
-          color: #059669;
-          font-weight: 600;
-          margin-top: 4px;
+          font-size: 11px;
+          color: #64748b;
+          margin-top: 3px;
         }
 
         /* Action Buttons */
         .bc-btn-inspect {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
           background: #0f172a;
           color: #ffffff;
           border: 1px solid #0f172a;
-          padding: 8px 14px;
-          border-radius: 9px;
+          padding: 6px 14px;
+          border-radius: 6px;
           font-size: 12.5px;
-          font-weight: 700;
+          font-weight: 500;
           cursor: pointer;
-          transition: all 0.15s ease;
-          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+          transition: background 0.15s ease;
         }
 
         .bc-btn-inspect:hover {
           background: #1e293b;
-          transform: translateY(-1px);
-          box-shadow: 0 3px 6px rgba(0, 0, 0, 0.08);
         }
 
         .bc-btn-receive {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
           background: #ffffff;
-          color: #4f46e5;
-          border: 1.5px solid #c7d2fe;
-          padding: 7px 14px;
-          border-radius: 9px;
+          color: #0f172a;
+          border: 1px solid var(--bc-border);
+          padding: 6px 14px;
+          border-radius: 6px;
           font-size: 12.5px;
-          font-weight: 700;
+          font-weight: 500;
           cursor: pointer;
-          transition: all 0.15s ease;
+          transition: background 0.15s ease;
         }
 
         .bc-btn-receive:hover {
-          background: #f5f7ff;
-          border-color: #6366f1;
+          background: #f8fafc;
         }
 
         .bc-btn-retry {
           background: #ffffff;
-          color: #d97706;
-          border: 1px solid #fde68a;
-          padding: 6px 12px;
-          border-radius: 8px;
+          color: #0f172a;
+          border: 1px solid var(--bc-border);
+          padding: 5px 10px;
+          border-radius: 6px;
           font-size: 12px;
-          font-weight: 700;
+          font-weight: 500;
           cursor: pointer;
         }
 
         .bc-empty {
-          border: 1px dashed #cbd5e1;
-          border-radius: 16px;
-          padding: 48px;
+          border: 1px dashed var(--bc-border);
+          border-radius: 10px;
+          padding: 40px;
           text-align: center;
           color: #64748b;
           background: #ffffff;
-          font-size: 14px;
+          font-size: 13.5px;
         }
 
         /* Modal Overlays */
@@ -915,147 +857,105 @@ export default function WarehouseReceiving() {
           left: 0;
           right: 0;
           bottom: 0;
-          background: rgba(15, 23, 42, 0.65);
-          backdrop-filter: blur(4px);
+          background: rgba(15, 23, 42, 0.4);
           display: flex;
           align-items: center;
           justify-content: center;
-          padding: 20px;
+          padding: 16px;
           z-index: 9999;
-          animation: bcFadeIn 0.15s ease;
-        }
-
-        @keyframes bcFadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
         }
 
         .bc-modal-card {
           background: #ffffff;
-          border-radius: 20px;
+          border-radius: 10px;
           width: 100%;
-          max-width: 580px;
-          box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.25);
+          max-width: 520px;
+          box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
           overflow: hidden;
-          animation: bcSlideUp 0.18s ease;
+          border: 1px solid var(--bc-border);
         }
 
         .bc-modal-card.bc-modal-lg {
-          max-width: 680px;
-        }
-
-        @keyframes bcSlideUp {
-          from { opacity: 0; transform: translateY(12px) scale(0.98); }
-          to { opacity: 1; transform: translateY(0) scale(1); }
+          max-width: 580px;
         }
 
         .bc-modal-header {
           display: flex;
           justify-content: space-between;
-          align-items: flex-start;
-          padding: 24px 28px 18px;
+          align-items: center;
+          padding: 16px 20px;
           border-bottom: 1px solid #f1f5f9;
         }
 
-        .bc-header-tags {
-          display: flex;
-          gap: 6px;
-          margin-bottom: 6px;
-        }
-
-        .bc-tag-type {
-          font-size: 10.5px;
-          font-weight: 800;
-          letter-spacing: 0.05em;
-          padding: 3px 8px;
-          border-radius: 6px;
-          background: #eef2ff;
-          color: #4338ca;
-        }
-
-        .bc-tag-status {
-          font-size: 10.5px;
-          font-weight: 800;
-          letter-spacing: 0.05em;
-          padding: 3px 8px;
-          border-radius: 6px;
-          background: #fef3c7;
-          color: #92400e;
-        }
-
         .bc-modal-title {
-          font-size: 20px;
-          font-weight: 800;
-          letter-spacing: -0.02em;
+          font-size: 16px;
+          font-weight: 600;
           margin: 0;
           color: #0f172a;
         }
 
         .bc-modal-sub {
-          font-size: 13px;
+          font-size: 12.5px;
           color: #64748b;
-          margin: 4px 0 0;
+          margin: 2px 0 0;
         }
 
         .bc-modal-close {
           border: none;
-          background: #f1f5f9;
-          width: 32px;
-          height: 32px;
-          border-radius: 50%;
+          background: transparent;
+          width: 28px;
+          height: 28px;
+          border-radius: 4px;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 14px;
-          color: #475569;
+          font-size: 15px;
+          color: #64748b;
           cursor: pointer;
-          transition: all 0.12s ease;
         }
 
         .bc-modal-close:hover {
-          background: #e2e8f0;
+          background: #f1f5f9;
           color: #0f172a;
         }
 
         .bc-modal-form {
-          padding: 24px 28px;
+          padding: 18px 20px;
           max-height: 80vh;
           overflow-y: auto;
         }
 
-        /* Exchange Context Banner */
+        /* Exchange context card */
         .bc-exchange-context-card {
           display: grid;
           grid-template-columns: 1fr auto 1fr;
-          gap: 14px;
+          gap: 12px;
           align-items: center;
           background: #f8fafc;
-          border: 1px solid #e2e8f0;
-          border-radius: 14px;
-          padding: 16px;
-          margin-bottom: 22px;
+          border: 1px solid var(--bc-border);
+          border-radius: 8px;
+          padding: 12px 14px;
+          margin-bottom: 16px;
         }
 
         .bc-exchange-col {
           display: flex;
           flex-direction: column;
-          gap: 4px;
+          gap: 3px;
         }
 
-        .bc-col-badge {
-          font-size: 9.5px;
-          font-weight: 800;
-          letter-spacing: 0.06em;
+        .bc-col-label {
+          font-size: 11px;
+          font-weight: 600;
+          color: #64748b;
           text-transform: uppercase;
-          margin-bottom: 4px;
+          letter-spacing: 0.04em;
+          margin-bottom: 2px;
         }
-
-        .bc-col-badge.in { color: #d97706; }
-        .bc-col-badge.out { color: #4f46e5; }
 
         .bc-product-title {
-          font-weight: 700;
-          font-size: 13.5px;
+          font-weight: 600;
+          font-size: 13px;
           color: #0f172a;
         }
 
@@ -1064,142 +964,129 @@ export default function WarehouseReceiving() {
           color: #64748b;
         }
 
-        .bc-exchange-divider {
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        }
-
-        .bc-arrow-icon {
-          font-size: 18px;
+        .bc-arrow-text {
+          font-size: 14px;
           color: #94a3b8;
         }
 
-        .bc-return-context-card {
-          background: #fffbeb;
-          border: 1px solid #fde68a;
-          border-radius: 14px;
-          padding: 14px 18px;
-          margin-bottom: 22px;
+        .bc-replacement-link {
+          font-size: 11px;
+          color: #64748b;
+          margin-top: 4px;
         }
 
-        /* Section & Inspection Item Card */
+        .bc-return-context-card {
+          background: #f8fafc;
+          border: 1px solid var(--bc-border);
+          border-radius: 8px;
+          padding: 12px 14px;
+          margin-bottom: 16px;
+        }
+
+        /* Item cards */
         .bc-section-title {
-          font-size: 13px;
-          font-weight: 700;
+          font-size: 11.5px;
+          font-weight: 600;
           text-transform: uppercase;
-          letter-spacing: 0.05em;
+          letter-spacing: 0.04em;
           color: #64748b;
-          margin: 0 0 12px;
+          margin: 0 0 10px;
         }
 
         .bc-item-card {
           border: 1px solid var(--bc-border);
-          border-radius: 14px;
-          padding: 16px;
+          border-radius: 8px;
+          padding: 12px 14px;
           background: #ffffff;
-          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-          margin-bottom: 16px;
+          margin-bottom: 12px;
         }
 
         .bc-item-card-header {
           display: flex;
           justify-content: space-between;
-          align-items: flex-start;
-          margin-bottom: 14px;
-          padding-bottom: 10px;
-          border-bottom: 1px dashed #e2e8f0;
-        }
-
-        .bc-inspect-tag {
-          font-size: 10px;
-          font-weight: 800;
-          color: #6366f1;
-          letter-spacing: 0.06em;
-          text-transform: uppercase;
+          align-items: center;
+          margin-bottom: 10px;
+          padding-bottom: 8px;
+          border-bottom: 1px solid #f1f5f9;
         }
 
         .bc-item-heading {
-          font-size: 15px;
-          font-weight: 800;
+          font-size: 13.5px;
+          font-weight: 600;
           color: #0f172a;
-          margin: 3px 0 0;
+          margin: 0;
         }
 
         .bc-expected-badge {
           background: #f1f5f9;
-          font-size: 12px;
-          color: #334155;
-          padding: 4px 10px;
-          border-radius: 8px;
-          font-weight: 600;
+          font-size: 11.5px;
+          color: #475569;
+          padding: 2px 8px;
+          border-radius: 4px;
         }
 
         .bc-item-fields-grid {
           display: grid;
           grid-template-columns: 1fr 1.6fr;
-          gap: 12px;
+          gap: 10px;
         }
 
         .bc-field {
           display: flex;
           flex-direction: column;
-          gap: 5px;
+          gap: 4px;
         }
 
-        .bc-mt-2 { margin-top: 10px; }
+        .bc-mt-2 { margin-top: 8px; }
 
         .bc-label {
-          font-size: 12px;
-          font-weight: 700;
-          color: #334155;
+          font-size: 11.5px;
+          font-weight: 500;
+          color: #475569;
         }
 
         .bc-req { color: #dc2626; }
 
         .bc-input, .bc-select {
-          border: 1.5px solid #cbd5e1;
-          border-radius: 9px;
-          padding: 9px 12px;
-          font-size: 13.5px;
+          border: 1px solid var(--bc-border);
+          border-radius: 6px;
+          padding: 7px 10px;
+          font-size: 13px;
           color: #0f172a;
           background: #ffffff;
           outline: none;
-          transition: border-color 0.15s ease, box-shadow 0.15s ease;
           font-family: inherit;
         }
 
         .bc-input:focus, .bc-select:focus {
-          border-color: #4f46e5;
-          box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+          border-color: #0f172a;
         }
 
         .bc-form-group {
           display: flex;
           flex-direction: column;
-          gap: 6px;
-          margin-top: 14px;
+          gap: 4px;
+          margin-top: 12px;
         }
 
         .bc-modal-footer {
           display: flex;
           justify-content: flex-end;
-          gap: 10px;
-          margin-top: 24px;
-          padding-top: 18px;
+          gap: 8px;
+          margin-top: 16px;
+          padding-top: 14px;
           border-top: 1px solid #f1f5f9;
         }
 
         .bc-btn-secondary {
-          border: 1px solid #cbd5e1;
+          border: 1px solid var(--bc-border);
           background: #ffffff;
           color: #334155;
-          padding: 9px 18px;
-          border-radius: 10px;
-          font-size: 13.5px;
-          font-weight: 600;
+          padding: 7px 14px;
+          border-radius: 6px;
+          font-size: 12.5px;
+          font-weight: 500;
           cursor: pointer;
-          transition: all 0.15s ease;
         }
 
         .bc-btn-secondary:hover {
@@ -1207,82 +1094,86 @@ export default function WarehouseReceiving() {
         }
 
         .bc-btn-primary {
-          border: none;
+          border: 1px solid #0f172a;
           background: #0f172a;
           color: #ffffff;
-          padding: 9px 22px;
-          border-radius: 10px;
-          font-size: 13.5px;
-          font-weight: 700;
+          padding: 7px 16px;
+          border-radius: 6px;
+          font-size: 12.5px;
+          font-weight: 500;
           cursor: pointer;
-          transition: all 0.15s ease;
-          box-shadow: 0 2px 4px rgba(15, 23, 42, 0.15);
         }
 
         .bc-btn-primary:hover {
           background: #1e293b;
-          transform: translateY(-1px);
         }
 
         .bc-btn-primary:disabled, .bc-btn-secondary:disabled {
-          opacity: 0.6;
+          opacity: 0.5;
           cursor: not-allowed;
-          transform: none;
         }
 
         .bc-alert {
-          padding: 10px 14px;
-          border-radius: 10px;
-          font-size: 13px;
-          font-weight: 600;
-          margin-top: 12px;
+          padding: 8px 12px;
+          border-radius: 6px;
+          font-size: 12px;
+          margin-top: 10px;
         }
 
         .bc-alert.error {
           background: #fef2f2;
-          color: #b91c1c;
-          border: 1px solid #fecaca;
+          color: #991b1b;
+          border: 1px solid #fee2e2;
         }
 
         .bc-alert.success {
-          background: #f0fdf4;
-          color: #15803d;
-          border: 1px solid #bbf7d0;
+          background: #f1f5f9;
+          color: #0f172a;
+          border: 1px solid var(--bc-border);
         }
 
         .bc-meta-banner {
           display: flex;
-          gap: 20px;
+          gap: 16px;
           background: #f8fafc;
-          padding: 12px 16px;
-          border-radius: 10px;
-          border: 1px solid #e2e8f0;
-          margin-bottom: 16px;
+          padding: 10px 12px;
+          border-radius: 6px;
+          border: 1px solid var(--bc-border);
+          margin-bottom: 14px;
+          font-size: 12px;
         }
 
         .bc-meta-label {
           display: block;
-          font-size: 10px;
-          text-transform: uppercase;
-          letter-spacing: 0.05em;
+          font-size: 10.5px;
           color: #64748b;
-          font-weight: 700;
+          font-weight: 500;
+        }
+
+        .bc-retry-card {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .bc-retry-text {
+          font-size: 12px;
+          color: #64748b;
         }
 
         @media (max-width: 768px) {
-          .bc-page { padding: 16px; }
+          .bc-page { padding: 14px; }
           .bc-controls-bar { flex-direction: column; align-items: stretch; }
           .bc-item-fields-grid { grid-template-columns: 1fr; }
           .bc-exchange-context-card { grid-template-columns: 1fr; }
-          .bc-exchange-divider { transform: rotate(90deg); margin: 4px 0; }
+          .bc-exchange-divider { display: none; }
         }
       `}</style>
 
       {/* Header */}
       <div className="bc-header-wrap">
-        <p className="bc-eyebrow">FULFILMENT & REVERSE LOGISTICS</p>
-        <h1>Warehouse Receiving & Inspection</h1>
-        <p>Review inbound customer return parcels, inspect garment conditions, and release replacement exchanges.</p>
+        <h1>Warehouse</h1>
+        <p>Receiving and inspection</p>
       </div>
 
       {/* Controls Bar: Tabs and Filters */}
@@ -1403,13 +1294,13 @@ export default function WarehouseReceiving() {
                           ? requestItems.map((item: any, i: number) => (
                               <div key={i} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                                 <div className="bc-item-entry">
-                                  <span className="bc-pill-tag inbound">In Parcel</span>
+                                  <span className="bc-pill-tag">In parcel</span>
                                   <span className="bc-item-name">{item.returnedTitle}</span>
                                   <span className="bc-item-qty">×{item.originalQuantity}</span>
                                 </div>
                                 <div className="bc-item-entry">
-                                  <span className="bc-pill-tag outbound">Exchange</span>
-                                  <span className="bc-item-name" style={{ color: "#4f46e5" }}>
+                                  <span className="bc-pill-tag">Exchange</span>
+                                  <span className="bc-item-name">
                                     {item.replacementTitle}
                                   </span>
                                   <span className="bc-item-qty">×{item.replacementQuantity}</span>
@@ -1418,7 +1309,7 @@ export default function WarehouseReceiving() {
                             ))
                           : requestItems.map((item: any, i: number) => (
                               <div key={i} className="bc-item-entry">
-                                <span className="bc-pill-tag inbound">Return</span>
+                                <span className="bc-pill-tag">Return</span>
                                 <span className="bc-item-name">{item.returnedTitle}</span>
                                 <span className="bc-item-qty">×{item.quantity}</span>
                               </div>
@@ -1459,7 +1350,7 @@ export default function WarehouseReceiving() {
                           className="bc-btn-receive"
                           onClick={() => setReceivingItem({ requestType, request })}
                         >
-                          <span>📥</span> Receive Parcel
+                          Receive
                         </button>
                       )}
 
@@ -1475,7 +1366,7 @@ export default function WarehouseReceiving() {
                             })
                           }
                         >
-                          <span>🔍</span> Inspect Item
+                          Inspect
                         </button>
                       )}
 
