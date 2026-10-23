@@ -131,6 +131,8 @@ const BOOKING_ORDER_STATUS_QUERY = `#graphql
       id
       name
       displayFulfillmentStatus
+      closedAt
+      cancelledAt
     }
   }
 `;
@@ -547,14 +549,18 @@ export async function bookCourierShipment(
           error: "This order could not be confirmed in Shopify. Refresh the booking page and try again.",
         };
       }
-      if (String(liveOrder.displayFulfillmentStatus || "").toUpperCase() !== "UNFULFILLED") {
+      if (
+        String(liveOrder.displayFulfillmentStatus || "").toUpperCase() !== "UNFULFILLED"
+        || liveOrder.closedAt
+        || liveOrder.cancelledAt
+      ) {
         return {
           success: false,
           orderId: input.orderId,
           orderNumber: input.orderNumber,
           courier: normCourier,
           trackingNumber: "",
-          error: "This order is no longer unfulfilled in Shopify. Refresh the booking page before booking.",
+          error: "This order is no longer open and unfulfilled in Shopify. Refresh the booking page before booking.",
         };
       }
     } catch (error) {
@@ -567,6 +573,40 @@ export async function bookCourierShipment(
         error: error instanceof Error
           ? `Shopify order verification failed: ${error.message}`
           : "Could not verify this order with Shopify. No courier booking was submitted.",
+      };
+    }
+  }
+
+  // Prevent repeat normal bookings even if the UI is stale or the request is submitted twice.
+  if (shipmentType === "FORWARD") {
+    try {
+      const existingBooking = await prisma.shipmentTrack.findFirst({
+        where: {
+          shopifyStoreId,
+          shopifyOrderId: input.orderId,
+          type: "FORWARD",
+          status: { notIn: ["FAILED", "CANCELLED"] },
+        },
+        select: { trackingNumber: true, courier: true },
+      });
+      if (existingBooking) {
+        return {
+          success: false,
+          orderId: input.orderId,
+          orderNumber: input.orderNumber,
+          courier: normCourier,
+          trackingNumber: "",
+          error: `This order already has an active ${existingBooking.courier} booking (CN: ${existingBooking.trackingNumber}). Cancel it before creating another normal booking.`,
+        };
+      }
+    } catch (error) {
+      return {
+        success: false,
+        orderId: input.orderId,
+        orderNumber: input.orderNumber,
+        courier: normCourier,
+        trackingNumber: "",
+        error: "Could not check for an existing booking. No new courier booking was submitted; retry after checking the shipment history.",
       };
     }
   }
