@@ -1158,7 +1158,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Customer name and email */}
-                        <td style={{ verticalAlign: "middle", padding: "8px 8px", verticalAlign: "top" }}>
+                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
                           <input
                             type="text"
                             value={currentName}
@@ -1186,7 +1186,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Phone */}
-                        <td style={{ verticalAlign: "middle", padding: "8px 8px", verticalAlign: "top" }}>
+                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
                           <input
                             type="text"
                             value={currentPhone}
@@ -1210,7 +1210,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Delivery address and carrier-supported city in a single, aligned column */}
-                        <td style={{ verticalAlign: "middle", padding: "8px 8px", verticalAlign: "top" }}>
+                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
                           <input
                             type="text"
                             value={currentAddress}
@@ -1237,7 +1237,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Searchable, courier-specific city picker */}
-                        <td style={{ verticalAlign: "middle", padding: "8px 6px", verticalAlign: "top" }}>
+                        <td style={{ verticalAlign: "middle", padding: "8px 6px" }}>
                           <button
                             type="button"
                             aria-label={`Choose ${selectedCourierKey} city for ${order.name}`}
