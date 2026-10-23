@@ -419,21 +419,28 @@ export default function BookingsPage() {
     }));
   };
 
-  // Build a complete, validated carrier payload from the current order snapshot.
+  // Build each courier payload against the current carrier's own city/type lists.
   const bulkBookingPayload = useMemo(() => {
     return selectedOrderIds.flatMap((id) => {
       const order = unfulfilledOrders.find((o) => o.id === id);
       if (!order || order.alreadyBooked) return [];
       const edit = orderEdits[id] || {};
+      const serviceType = selectedCourierKey === "RIDER"
+        ? "Normal"
+        : (availableServiceTypes.includes(edit.type || "Normal") ? (edit.type || "Normal") : (availableServiceTypes[0] || ""));
+      const cityOptions = availableCityOptions(serviceType);
+      const requestedCity = edit.city !== undefined ? edit.city : (order.matchedCity || "");
+      const cityName = matchCarrierOption(requestedCity, cityOptions);
+
       return [{
         orderId: order.id,
         orderNumber: order.name,
         courier: selectedCourierKey,
-        serviceType: selectedCourierKey === "RIDER" ? "Normal" : (edit.type || "Normal"),
+        serviceType,
         customerName: edit.name !== undefined ? edit.name : order.customerName,
         customerPhone: edit.phone !== undefined ? edit.phone : order.customerPhone,
         customerAddress: edit.address !== undefined ? edit.address : [order.address1, order.address2].filter(Boolean).join(", ").trim(),
-        cityName: edit.city !== undefined ? edit.city : (order.matchedCity || ""),
+        cityName,
         codAmountPKR: edit.cod !== undefined ? edit.cod : order.suggestedCod,
         weightKg: edit.weight !== undefined ? edit.weight : order.suggestedWeight,
         remarks: edit.remarks || "Allow customer to check flyer before payment",
@@ -445,7 +452,7 @@ export default function BookingsPage() {
         })),
       }];
     });
-  }, [selectedOrderIds, unfulfilledOrders, orderEdits, selectedCourierKey]);
+  }, [selectedOrderIds, unfulfilledOrders, orderEdits, selectedCourierKey, activeCourierOptions, availableServiceTypes]);
 
   const selectedBookingIssues = bulkBookingPayload.filter((booking) => {
     return !booking.orderId
@@ -453,13 +460,93 @@ export default function BookingsPage() {
       || !isValidPakistaniMobile(String(booking.customerPhone || ""))
       || String(booking.customerAddress || "").trim().length < 8
       || !String(booking.cityName || "").trim()
+      || !availableServiceTypes.includes(booking.serviceType)
       || !Number.isFinite(Number(booking.weightKg))
       || Number(booking.weightKg) <= 0
       || Number(booking.weightKg) > 50
       || !Number.isFinite(Number(booking.codAmountPKR))
       || Number(booking.codAmountPKR) < 0;
   });
-  const canUploadSelectedOrders = bulkBookingPayload.length > 0 && selectedBookingIssues.length === 0;
+  const canUploadSelectedOrders = bulkBookingPayload.length > 0
+    && selectedBookingIssues.length === 0
+    && !courierOptionsLoading
+    && (selectedCourierKey === "RIDER" || Boolean(activeCourierOptions && !activeCourierOptions.error));
+
+  const submitSingleBooking = (booking: Record<string, any>) => {
+    singleBookingFetcher.submit({
+      intent: "BOOK_SINGLE",
+      orderId: String(booking.orderId),
+      orderNumber: String(booking.orderNumber),
+      courier: String(booking.courier),
+      serviceType: String(booking.serviceType || "Normal"),
+      customerName: String(booking.customerName || ""),
+      customerPhone: String(booking.customerPhone || ""),
+      customerAddress: String(booking.customerAddress || ""),
+      cityName: String(booking.cityName || ""),
+      codAmountPKR: String(booking.codAmountPKR),
+      weightKg: String(booking.weightKg),
+      remarks: String(booking.remarks || ""),
+      items: JSON.stringify(booking.items || []),
+    }, { method: "post" });
+  };
+
+  const startBulkUpload = () => {
+    if (!canUploadSelectedOrders || bulkBookingQueueRef.current) return;
+    const items = bulkBookingPayload.map((booking) => ({ ...booking }));
+    const steps: BookingUploadStep[] = items.map((item, index) => ({
+      orderNumber: item.orderNumber,
+      status: index === 0 ? "uploading" : "pending",
+    }));
+    bulkBookingQueueRef.current = { items, index: 0 };
+    handledBookingResponseRef.current = singleBookingFetcher.data;
+    setUploadProgress({ total: items.length, completed: 0, currentIndex: 0, status: "uploading", steps });
+    submitSingleBooking(items[0]);
+  };
+
+  useEffect(() => {
+    if (singleBookingFetcher.state !== "idle") return;
+    const response = singleBookingFetcher.data;
+    if (!response || response.intent !== "BOOK_SINGLE" || response === handledBookingResponseRef.current) return;
+    const queue = bulkBookingQueueRef.current;
+    if (!queue) return;
+
+    handledBookingResponseRef.current = response;
+    const currentItem = queue.items[queue.index];
+    const results = [...(uploadProgress?.steps || [])];
+    results[queue.index] = {
+      orderNumber: currentItem.orderNumber,
+      status: response.ok ? "success" : "failed",
+      message: response.message,
+    };
+
+    const nextIndex = queue.index + 1;
+    if (nextIndex >= queue.items.length) {
+      bulkBookingQueueRef.current = null;
+      setUploadProgress({
+        total: queue.items.length,
+        completed: queue.items.length,
+        currentIndex: queue.items.length,
+        status: "done",
+        steps: results,
+      });
+      setSelectedOrderIds((current) => current.filter((id) => !queue.items.some((item) => item.orderId === id)));
+      return;
+    }
+
+    queue.index = nextIndex;
+    results[nextIndex] = {
+      orderNumber: queue.items[nextIndex].orderNumber,
+      status: "uploading",
+    };
+    setUploadProgress({
+      total: queue.items.length,
+      completed: nextIndex,
+      currentIndex: nextIndex,
+      status: "uploading",
+      steps: results,
+    });
+    submitSingleBooking(queue.items[nextIndex]);
+  }, [singleBookingFetcher.state, singleBookingFetcher.data, uploadProgress?.steps]);
 
   // Barcode scanner submission for loadsheet
   const handleBarcodeScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
