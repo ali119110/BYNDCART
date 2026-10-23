@@ -73,12 +73,14 @@ test("PostEx booking options cache all four API types and city lists in the data
     assert.deepStrictEqual(first.serviceTypes, ["Normal", "Reversed", "Overland", "Replacement"]);
     assert.ok(first.deliveryCities.includes("Karachi"));
     const firstRequestCount = requests.length;
-    assert.strictEqual(firstRequestCount, 3, "one pickup list, one delivery list, and one type list should be fetched");
+    assert.strictEqual(firstRequestCount, 2, "the complete city catalog should be fetched once, plus the order-type list");
+    assert.ok(requests.some((url) => url.endsWith("/order/v2/get-operational-city")), "PostEx city catalog should use the no-filter endpoint to avoid carrier-specific enum casing errors");
 
     const second = await getMerchantCourierBookingOptions("store-catalog-test", "POSTEX");
     assert.deepStrictEqual(second.serviceTypes, ["Normal", "Reversed", "Overland", "Replacement"]);
     assert.strictEqual(requests.length, firstRequestCount, "subsequent reads should use the persisted catalog");
     const stored = (config.additionalConfig as any)?.byndcartBookingOptionsCache;
+    assert.strictEqual(stored?.cacheVersion, 2, "a corrected city lookup version should be persisted");
     assert.ok(stored?.credentialFingerprint);
     assert.ok(stored?.cachedAt);
     assert.ok(stored?.pickupCities?.includes("Karachi"));
@@ -131,7 +133,7 @@ test("PostEx accepts a return only when statusCode is 200 and a tracking number 
   assert.strictEqual(normalizeCourierStatus(result.carrierStatus), "LABEL_CREATED");
   const booking = calls.find((call) => call.url.includes("create-order"));
   assert.strictEqual(booking?.body.orderType, "Reversed");
-  assert.ok(calls.some((call) => call.url.includes("operationalCityType=Pickup")), "PostEx city lookup should use the carrier's lowercase pickup value");
+  assert.ok(calls.some((call) => call.url.endsWith("/order/v2/get-operational-city")), "PostEx should validate against the no-filter operational-city catalog");
   assert.strictEqual(booking?.body.customerPhone, "03001234567");
   assert.strictEqual(booking?.body.invoicePayment, "0");
   assert.strictEqual(booking?.body.cityName, "Karachi");

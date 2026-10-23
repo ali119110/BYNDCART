@@ -261,6 +261,7 @@ function matchCarrierOption(value: string | undefined, options: string[]): strin
   return options.find((option) => option.trim().toLocaleLowerCase() === normalized) || "";
 }
 
+
 export default function BookingsPage() {
   const { unfulfilledOrders, bookingLoadError, configuredCouriers, unassignedShipments, pastLoadsheets } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
@@ -338,6 +339,10 @@ export default function BookingsPage() {
 
   // Viewing line items modal
   const [viewingOrder, setViewingOrder] = useState<UnfulfilledOrder | null>(null);
+
+  // Searchable city picker modal, scoped to the order currently being edited.
+  const [cityPickerOrderId, setCityPickerOrderId] = useState<string | null>(null);
+  const [citySearchQuery, setCitySearchQuery] = useState("");
 
   // Loadsheet selection
   const [selectedShipmentIds, setSelectedShipmentIds] = useState<string[]>([]);
@@ -568,6 +573,29 @@ export default function BookingsPage() {
     }
   };
 
+  const cityPickerOrder = cityPickerOrderId
+    ? unfulfilledOrders.find((order) => order.id === cityPickerOrderId) || null
+    : null;
+  const cityPickerEdit = cityPickerOrder ? orderEdits[cityPickerOrder.id] || {} : {};
+  const cityPickerServiceType = selectedCourierKey === "RIDER"
+    ? "Normal"
+    : (availableServiceTypes.includes(cityPickerEdit.type || "Normal")
+      ? (cityPickerEdit.type || "Normal")
+      : (availableServiceTypes[0] || ""));
+  const cityPickerOptions = cityPickerOrder
+    ? availableCityOptions(cityPickerServiceType)
+    : [];
+  const normalizedCitySearch = citySearchQuery.trim().toLocaleLowerCase();
+  const cityPickerSelectedCity = cityPickerOrder
+    ? matchCarrierOption(
+      cityPickerEdit.city !== undefined ? cityPickerEdit.city : cityPickerOrder.matchedCity,
+      cityPickerOptions,
+    )
+    : "";
+  const filteredCityPickerOptions = cityPickerOptions.filter((city) =>
+    city.toLocaleLowerCase().includes(normalizedCitySearch)
+  );
+
   return (
     <div className="bc-page" style={{ width: "100%", maxWidth: "none", minWidth: 0, padding: "16px 20px", boxSizing: "border-box" }}>
 
@@ -658,7 +686,11 @@ export default function BookingsPage() {
               ) : (
                 <select
                   value={selectedCourierKey}
-                  onChange={(e) => setSelectedCourierKey(e.target.value)}
+                  onChange={(e) => {
+                    setSelectedCourierKey(e.target.value);
+                    setCityPickerOrderId(null);
+                    setCitySearchQuery("");
+                  }}
                   style={{
                     height: "38px",
                     padding: "0 14px",
@@ -1206,34 +1238,43 @@ export default function BookingsPage() {
                           </div>
                         </td>
 
-                        {/* Single City column: original city plus carrier's own city list */}
-                        <td style={{ padding: "8px 8px", verticalAlign: "top" }}>
-                          <select
-                            value={currentCity}
+                        {/* Searchable, courier-specific city picker */}
+                        <td style={{ padding: "8px 6px", verticalAlign: "top" }}>
+                          <button
+                            type="button"
+                            aria-label={`Choose ${selectedCourierKey} city for ${order.name}`}
+                            title={currentCity || "Search carrier cities"}
                             disabled={order.alreadyBooked || courierOptionsLoading || currentCityOptions.length === 0}
-                            onChange={(e) => handleEditOrder(order.id, "city", e.target.value)}
+                            onClick={() => {
+                              setCityPickerOrderId(order.id);
+                              setCitySearchQuery("");
+                            }}
                             style={{
                               boxSizing: "border-box",
                               width: "100%",
                               minWidth: 0,
-                              height: "36px",
-                              padding: "2px 7px",
+                              minHeight: "36px",
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "space-between",
+                              gap: "6px",
+                              padding: "6px 8px",
                               border: "1px solid #cbd5e1",
                               borderRadius: "6px",
-                              fontSize: "13px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
-                              color: "#0f172a",
+                              color: currentCity ? "#0f172a" : "#64748b",
+                              fontSize: "13px",
+                              textAlign: "left",
+                              cursor: order.alreadyBooked || courierOptionsLoading || currentCityOptions.length === 0 ? "not-allowed" : "pointer",
+                              opacity: order.alreadyBooked ? 0.7 : 1,
                             }}
                           >
-                            <option value="">
-                              {courierOptionsLoading ? "Loading carrier cities…" : currentCityOptions.length ? "Select carrier city" : "Carrier city list unavailable"}
-                            </option>
-                            {currentCityOptions.map((city) => (
-                              <option key={city} value={city}>
-                                {city}
-                              </option>
-                            ))}
-                          </select>
+                            <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                              {currentCity
+                                || (courierOptionsLoading ? "Loading cities…" : currentCityOptions.length ? "Search / select city" : "City list unavailable")}
+                            </span>
+                            <span aria-hidden="true" style={{ flex: "0 0 auto", color: "#64748b" }}>⌄</span>
+                          </button>
                         </td>
 
                         {/* COD Amount */}
@@ -1643,6 +1684,133 @@ export default function BookingsPage() {
       )}
 
       {/* Order Line Items Detail Modal */}
+      {cityPickerOrder && (
+        <div
+          role="presentation"
+          onClick={() => setCityPickerOrderId(null)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setCityPickerOrderId(null);
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 10000,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "16px",
+            background: "rgba(15, 23, 42, 0.52)",
+          }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="bc-city-picker-title"
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              width: "min(100%, 520px)",
+              maxHeight: "min(82vh, 680px)",
+              display: "flex",
+              flexDirection: "column",
+              overflow: "hidden",
+              background: "#ffffff",
+              border: "1px solid #dbe3ee",
+              borderRadius: "14px",
+              boxShadow: "0 24px 60px rgba(15, 23, 42, 0.28)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "14px", padding: "18px 20px 12px", borderBottom: "1px solid #e2e8f0" }}>
+              <div style={{ minWidth: 0 }}>
+                <h3 id="bc-city-picker-title" style={{ margin: 0, color: "#0f172a", fontSize: "18px", lineHeight: 1.3, fontWeight: 750 }}>
+                  {cityPickerServiceType === "Reverse" || cityPickerServiceType === "Reversed" ? "Select pickup city" : "Select delivery city"}
+                </h3>
+                <p style={{ margin: "5px 0 0", color: "#64748b", fontSize: "12px", lineHeight: 1.5 }}>
+                  Order {cityPickerOrder.name} · {activeCourier?.label || selectedCourierKey} · {cityPickerServiceType === "Reverse" || cityPickerServiceType === "Reversed" ? "Pickup cities" : "Delivery cities"}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close city picker"
+                onClick={() => setCityPickerOrderId(null)}
+                style={{ flex: "0 0 auto", width: "32px", height: "32px", border: "1px solid #e2e8f0", borderRadius: "8px", background: "#ffffff", color: "#475569", cursor: "pointer", fontSize: "18px" }}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={{ padding: "14px 20px 10px" }}>
+              <label htmlFor="bc-city-search" style={{ display: "block", marginBottom: "7px", fontSize: "12px", fontWeight: 700, color: "#475569" }}>
+                Search {activeCourier?.label || selectedCourierKey} cities
+              </label>
+              <div style={{ position: "relative" }}>
+                <span aria-hidden="true" style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: "#64748b", pointerEvents: "none" }}>⌕</span>
+                <input
+                  id="bc-city-search"
+                  type="search"
+                  autoFocus
+                  autoComplete="off"
+                  placeholder="Type a city name…"
+                  value={citySearchQuery}
+                  onChange={(event) => setCitySearchQuery(event.target.value)}
+                  style={{ boxSizing: "border-box", width: "100%", height: "42px", border: "1px solid #cbd5e1", borderRadius: "9px", padding: "0 12px 0 34px", outlineColor: "#2563eb", fontSize: "14px", color: "#0f172a", background: "#ffffff" }}
+                />
+              </div>
+              <div style={{ marginTop: "8px", color: "#64748b", fontSize: "11px" }}>
+                {filteredCityPickerOptions.length} matching {filteredCityPickerOptions.length === 1 ? "city" : "cities"}
+              </div>
+            </div>
+
+            <div role="listbox" aria-label="Matching carrier cities" style={{ overflowY: "auto", minHeight: "110px", padding: "0 12px 12px" }}>
+              {filteredCityPickerOptions.length === 0 ? (
+                <div style={{ margin: "4px 8px", padding: "24px 12px", textAlign: "center", border: "1px dashed #cbd5e1", borderRadius: "10px", color: "#64748b", fontSize: "13px" }}>
+                  {cityPickerOptions.length === 0
+                    ? "The selected courier did not provide a city list. Check that courier's API connection and try again."
+                    : "No cities match your search. Try another spelling."}
+                </div>
+              ) : (
+                filteredCityPickerOptions.map((city) => (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={cityPickerSelectedCity === city}
+                    key={city}
+                    onClick={() => {
+                      handleEditOrder(cityPickerOrder.id, "city", city);
+                      setCityPickerOrderId(null);
+                      setCitySearchQuery("");
+                    }}
+                    style={{
+                      boxSizing: "border-box",
+                      width: "100%",
+                      minHeight: "40px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "10px",
+                      padding: "9px 12px",
+                      border: "1px solid transparent",
+                      borderRadius: "8px",
+                      background: cityPickerSelectedCity === city ? "#eff6ff" : "#ffffff",
+                      color: "#0f172a",
+                      fontSize: "13px",
+                      fontWeight: cityPickerSelectedCity === city ? 700 : 500,
+                      textAlign: "left",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <span>{city}</span>
+                    {cityPickerSelectedCity === city && <span aria-hidden="true" style={{ color: "#2563eb", fontWeight: 800 }}>✓</span>}
+                  </button>
+                ))
+              )}
+            </div>
+            <div style={{ borderTop: "1px solid #e2e8f0", padding: "12px 20px", display: "flex", justifyContent: "flex-end", background: "#f8fafc" }}>
+              <button type="button" className="bc-btn" onClick={() => setCityPickerOrderId(null)}>Cancel</button>
+            </div>
+          </section>
+        </div>
+      )}
+
       {viewingOrder && (
         <div
           style={{
