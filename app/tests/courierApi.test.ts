@@ -70,13 +70,13 @@ test("PostEx booking options cache all four API types and city lists in the data
 
   try {
     const first = await getMerchantCourierBookingOptions("store-catalog-test", "POSTEX");
-    assert.deepStrictEqual(first.serviceTypes, ["Normal", "Reverse", "Overland", "Replacement"]);
+    assert.deepStrictEqual(first.serviceTypes, ["Normal", "Reversed", "Overland", "Replacement"]);
     assert.ok(first.deliveryCities.includes("Karachi"));
     const firstRequestCount = requests.length;
     assert.strictEqual(firstRequestCount, 3, "one pickup list, one delivery list, and one type list should be fetched");
 
     const second = await getMerchantCourierBookingOptions("store-catalog-test", "POSTEX");
-    assert.deepStrictEqual(second.serviceTypes, ["Normal", "Reverse", "Overland", "Replacement"]);
+    assert.deepStrictEqual(second.serviceTypes, ["Normal", "Reversed", "Overland", "Replacement"]);
     assert.strictEqual(requests.length, firstRequestCount, "subsequent reads should use the persisted catalog");
     const stored = (config.additionalConfig as any)?.byndcartBookingOptionsCache;
     assert.ok(stored?.credentialFingerprint);
