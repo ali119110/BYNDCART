@@ -1704,88 +1704,95 @@ export default function BookingsPage() {
       )}
 
       {/* Order Line Items Detail Modal */}
-      {cityPickerOrder && (
+      {cityPickerOrder && cityPickerAnchor && (
         <div
           role="presentation"
-          onClick={() => setCityPickerOrderId(null)}
+          onClick={() => {
+            setCityPickerOrderId(null);
+            setCityPickerAnchor(null);
+          }}
           onKeyDown={(event) => {
-            if (event.key === "Escape") setCityPickerOrderId(null);
+            if (event.key === "Escape") {
+              setCityPickerOrderId(null);
+              setCityPickerAnchor(null);
+            }
           }}
           style={{
             position: "fixed",
             inset: 0,
             zIndex: 10000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "16px",
-            background: "rgba(15, 23, 42, 0.52)",
+            background: "transparent",
           }}
         >
           <section
             role="dialog"
-            aria-modal="true"
+            aria-modal="false"
             aria-labelledby="bc-city-picker-title"
             onClick={(event) => event.stopPropagation()}
             style={{
-              width: "min(100%, 520px)",
-              maxHeight: "min(82vh, 680px)",
+              position: "fixed",
+              left: `${cityPickerAnchor.left}px`,
+              bottom: `calc(100vh - ${cityPickerAnchor.top}px + 6px)`,
+              width: `${cityPickerAnchor.width}px`,
+              maxWidth: "calc(100vw - 16px)",
+              maxHeight: `${cityPickerAnchor.maxHeight}px`,
               display: "flex",
               flexDirection: "column",
               overflow: "hidden",
               background: "#ffffff",
-              border: "1px solid #dbe3ee",
-              borderRadius: "14px",
-              boxShadow: "0 24px 60px rgba(15, 23, 42, 0.28)",
+              border: "1px solid #cbd5e1",
+              borderRadius: "9px",
+              boxShadow: "0 8px 24px rgba(15, 23, 42, 0.18)",
+              textAlign: "left",
             }}
           >
-            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "14px", padding: "18px 20px 12px", borderBottom: "1px solid #e2e8f0" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px", padding: "8px 9px", borderBottom: "1px solid #e2e8f0" }}>
               <div style={{ minWidth: 0 }}>
-                <h3 id="bc-city-picker-title" style={{ margin: 0, color: "#0f172a", fontSize: "18px", lineHeight: 1.3, fontWeight: 750 }}>
-                  {cityPickerServiceType === "Reverse" || cityPickerServiceType === "Reversed" ? "Select pickup city" : "Select delivery city"}
+                <h3 id="bc-city-picker-title" style={{ margin: 0, color: "#0f172a", fontSize: "12px", lineHeight: 1.3, fontWeight: 750, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {cityPickerServiceType === "Reverse" || cityPickerServiceType === "Reversed" ? "Pickup city" : "Delivery city"}
                 </h3>
-                <p style={{ margin: "5px 0 0", color: "#64748b", fontSize: "12px", lineHeight: 1.5 }}>
-                  Order {cityPickerOrder.name} · {activeCourier?.label || selectedCourierKey} · {cityPickerServiceType === "Reverse" || cityPickerServiceType === "Reversed" ? "Pickup cities" : "Delivery cities"}
+                <p style={{ margin: "2px 0 0", color: "#64748b", fontSize: "10px", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {cityPickerOrder.name} · {activeCourier?.label || selectedCourierKey}
                 </p>
               </div>
               <button
                 type="button"
                 aria-label="Close city picker"
-                onClick={() => setCityPickerOrderId(null)}
-                style={{ flex: "0 0 auto", width: "32px", height: "32px", border: "1px solid #e2e8f0", borderRadius: "8px", background: "#ffffff", color: "#475569", cursor: "pointer", fontSize: "18px" }}
+                onClick={() => {
+                  setCityPickerOrderId(null);
+                  setCityPickerAnchor(null);
+                }}
+                style={{ flex: "0 0 22px", width: "22px", height: "22px", padding: 0, border: "1px solid #e2e8f0", borderRadius: "5px", background: "#ffffff", color: "#475569", cursor: "pointer", fontSize: "15px", lineHeight: 1 }}
               >
                 ×
               </button>
             </div>
 
-            <div style={{ padding: "14px 20px 10px" }}>
-              <label htmlFor="bc-city-search" style={{ display: "block", marginBottom: "7px", fontSize: "12px", fontWeight: 700, color: "#475569" }}>
-                Search {activeCourier?.label || selectedCourierKey} cities
+            <div style={{ padding: "8px 8px 5px" }}>
+              <label htmlFor="bc-city-search" style={{ display: "block", marginBottom: "4px", fontSize: "10px", fontWeight: 700, color: "#475569" }}>
+                Search city
               </label>
-              <div style={{ position: "relative" }}>
-                <span aria-hidden="true" style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", color: "#64748b", pointerEvents: "none" }}>⌕</span>
-                <input
-                  id="bc-city-search"
-                  type="search"
-                  autoFocus
-                  autoComplete="off"
-                  placeholder="Type a city name…"
-                  value={citySearchQuery}
-                  onChange={(event) => setCitySearchQuery(event.target.value)}
-                  style={{ boxSizing: "border-box", width: "100%", height: "42px", border: "1px solid #cbd5e1", borderRadius: "9px", padding: "0 12px 0 34px", outlineColor: "#2563eb", fontSize: "14px", color: "#0f172a", background: "#ffffff" }}
-                />
-              </div>
-              <div style={{ marginTop: "8px", color: "#64748b", fontSize: "11px" }}>
-                {filteredCityPickerOptions.length} matching {filteredCityPickerOptions.length === 1 ? "city" : "cities"}
+              <input
+                id="bc-city-search"
+                type="search"
+                autoFocus
+                autoComplete="off"
+                placeholder="Type city name…"
+                value={citySearchQuery}
+                onChange={(event) => setCitySearchQuery(event.target.value)}
+                style={{ boxSizing: "border-box", width: "100%", height: "32px", border: "1px solid #cbd5e1", borderRadius: "6px", padding: "0 8px", outlineColor: "#2563eb", fontSize: "12px", color: "#0f172a", background: "#ffffff" }}
+              />
+              <div style={{ marginTop: "4px", color: "#64748b", fontSize: "10px" }}>
+                {filteredCityPickerOptions.length} {filteredCityPickerOptions.length === 1 ? "match" : "matches"}
               </div>
             </div>
 
-            <div role="listbox" aria-label="Matching carrier cities" style={{ overflowY: "auto", minHeight: "110px", padding: "0 12px 12px" }}>
+            <div role="listbox" aria-label="Matching carrier cities" style={{ overflowY: "auto", flex: "1 1 auto", minHeight: 0, padding: "0 5px 5px" }}>
               {filteredCityPickerOptions.length === 0 ? (
-                <div style={{ margin: "4px 8px", padding: "24px 12px", textAlign: "center", border: "1px dashed #cbd5e1", borderRadius: "10px", color: "#64748b", fontSize: "13px" }}>
+                <div style={{ margin: "3px", padding: "12px 5px", textAlign: "center", border: "1px dashed #cbd5e1", borderRadius: "6px", color: "#64748b", fontSize: "11px", lineHeight: 1.35 }}>
                   {cityPickerOptions.length === 0
-                    ? "The selected courier did not provide a city list. Check that courier's API connection and try again."
-                    : "No cities match your search. Try another spelling."}
+                    ? "No city list available for this courier."
+                    : "No cities match. Try another search."}
                 </div>
               ) : (
                 filteredCityPickerOptions.map((city) => (
@@ -1797,35 +1804,33 @@ export default function BookingsPage() {
                     onClick={() => {
                       handleEditOrder(cityPickerOrder.id, "city", city);
                       setCityPickerOrderId(null);
+                      setCityPickerAnchor(null);
                       setCitySearchQuery("");
                     }}
                     style={{
                       boxSizing: "border-box",
                       width: "100%",
-                      minHeight: "40px",
+                      minHeight: "30px",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "space-between",
-                      gap: "10px",
-                      padding: "9px 12px",
+                      gap: "6px",
+                      padding: "5px 7px",
                       border: "1px solid transparent",
-                      borderRadius: "8px",
+                      borderRadius: "5px",
                       background: cityPickerSelectedCity === city ? "#eff6ff" : "#ffffff",
                       color: "#0f172a",
-                      fontSize: "13px",
+                      fontSize: "11px",
                       fontWeight: cityPickerSelectedCity === city ? 700 : 500,
                       textAlign: "left",
                       cursor: "pointer",
                     }}
                   >
-                    <span>{city}</span>
-                    {cityPickerSelectedCity === city && <span aria-hidden="true" style={{ color: "#2563eb", fontWeight: 800 }}>✓</span>}
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{city}</span>
+                    {cityPickerSelectedCity === city && <span aria-hidden="true" style={{ flex: "0 0 auto", color: "#2563eb", fontWeight: 800 }}>✓</span>}
                   </button>
                 ))
               )}
-            </div>
-            <div style={{ borderTop: "1px solid #e2e8f0", padding: "12px 20px", display: "flex", justifyContent: "flex-end", background: "#f8fafc" }}>
-              <button type="button" className="bc-btn" onClick={() => setCityPickerOrderId(null)}>Cancel</button>
             </div>
           </section>
         </div>
