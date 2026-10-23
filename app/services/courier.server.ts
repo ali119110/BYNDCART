@@ -1821,6 +1821,148 @@ export async function getDecryptedCourierCredentials(shopifyStoreId: string, pro
   }
 }
 
+export interface MerchantCourierBookingOptions {
+  providerName: string;
+  pickupCities: string[];
+  deliveryCities: string[];
+  serviceTypes: string[];
+  citySource: "carrier_api" | "local";
+  serviceTypeSource: "carrier_api" | "integration";
+}
+
+function uniqueOptionStrings(values: unknown[]): string[] {
+  return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b));
+}
+
+function normalizePostExOrderType(value: unknown): string | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "normal") return "Normal";
+  if (normalized === "reverse" || normalized === "reversed") return "Reverse";
+  if (normalized === "replacement") return "Replacement";
+  return null;
+}
+
+/**
+ * Retrieves booking cities and shipment operation types from each carrier where its API exposes
+ * those lists. Some carrier contracts do not expose a service-type list endpoint; those modes are
+ * restricted to the operations implemented by that carrier adapter instead of invented API data.
+ */
+export async function getMerchantCourierBookingOptions(
+  shopifyStoreId: string,
+  providerName: string,
+): Promise<MerchantCourierBookingOptions> {
+  const provider = providerName.trim().toUpperCase();
+  if (provider === "RIDER") {
+    return {
+      providerName: provider,
+      pickupCities: [],
+      deliveryCities: [],
+      serviceTypes: ["Normal"],
+      citySource: "local",
+      serviceTypeSource: "integration",
+    };
+  }
+
+  const credentials = await getDecryptedCourierCredentials(shopifyStoreId, provider);
+  if (!credentials) {
+    throw new Error(`${provider} is not configured or enabled. Open Courier Settings, verify the saved API credentials, and retry.`);
+  }
+
+  if (provider === "POSTEX") {
+    const token = credentialValue(credentials, "apiToken");
+    if (!token) throw new Error("PostEx merchant API token is missing. Reconfigure PostEx in Courier Settings.");
+
+    const fetchCityList = async (direction: "Pickup" | "Delivery"): Promise<string[]> => {
+      const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${direction}`, {
+        method: "GET",
+        headers: { token, Accept: "application/json" },
+      });
+      const payload = await readJson(response);
+      if (!response.ok || Number(payload?.statusCode) !== 200 || !Array.isArray(payload?.dist)) {
+        throw new Error(apiPayloadMessage(payload, `PostEx could not load its ${direction.toLowerCase()} city list (HTTP ${response.status}).`));
+      }
+      const flag = direction === "Pickup" ? "isPickupCity" : "isDeliveryCity";
+      return uniqueOptionStrings(payload.dist
+        .filter((row: any) => row && (row[flag] === undefined || row[flag] === true || String(row[flag]).toLowerCase() === "true" || String(row[flag]) === "1"))
+        .map((row: any) => row.operationalCityName || row.cityName || row.name));
+    };
+
+    const cityResults = await Promise.allSettled([fetchCityList("Pickup"), fetchCityList("Delivery")]);
+    const pickupResult = cityResults[0];
+    const deliveryResult = cityResults[1];
+    if (pickupResult.status === "rejected" && deliveryResult.status === "rejected") {
+      throw new Error(`PostEx city lookup failed: ${pickupResult.reason instanceof Error ? pickupResult.reason.message : "API request failed"}`);
+    }
+
+    const typesResponse = await fetch(`${POSTEX_API_ROOT}/order/v1/get-order-types`, {
+      method: "GET",
+      headers: { token, Accept: "application/json" },
+    });
+    const typesPayload = await readJson(typesResponse);
+    if (!typesResponse.ok || Number(typesPayload?.statusCode) !== 200 || !Array.isArray(typesPayload?.dist)) {
+      throw new Error(apiPayloadMessage(typesPayload, `PostEx could not load its supported order types (HTTP ${typesResponse.status}).`));
+    }
+    const serviceTypes = uniqueOptionStrings(typesPayload.dist
+      .map((item: any) => normalizePostExOrderType(typeof item === "string" ? item : item?.orderType || item?.type || item?.name))
+      .filter(Boolean));
+    if (!serviceTypes.length) throw new Error("PostEx returned an empty supported-order-type list.");
+
+    return {
+      providerName: provider,
+      pickupCities: pickupResult.status === "fulfilled" ? pickupResult.value : [],
+      deliveryCities: deliveryResult.status === "fulfilled" ? deliveryResult.value : [],
+      serviceTypes,
+      citySource: "carrier_api",
+      serviceTypeSource: "carrier_api",
+    };
+  }
+
+  if (provider === "LEOPARDS") {
+    const apiKey = credentialValue(credentials, "apiKey");
+    const apiPassword = credentialValue(credentials, "apiPassword");
+    if (!apiKey || !apiPassword) throw new Error("Leopards API key and password are required. Reconfigure Leopards in Courier Settings.");
+    const cities = await loadLeopardsCities(apiKey, apiPassword, leopardsApiRoot(credentials));
+    const pickupCities = uniqueOptionStrings(cities
+      .filter((city) => city.allow_as_origin !== false && String(city.allow_as_origin).toLowerCase() !== "false" && String(city.allow_as_origin) !== "0")
+      .map((city) => city.name));
+    const deliveryCities = uniqueOptionStrings(cities
+      .filter((city) => city.allow_as_destination !== false && String(city.allow_as_destination).toLowerCase() !== "false" && String(city.allow_as_destination) !== "0")
+      .map((city) => city.name));
+    return {
+      providerName: provider,
+      pickupCities,
+      deliveryCities,
+      serviceTypes: ["Normal", "Reverse", "Replacement"],
+      citySource: "carrier_api",
+      serviceTypeSource: "integration",
+    };
+  }
+
+  if (provider === "TCS") {
+    const response = await fetch(`${TCS_COD_API_ROOT}/cities`, { headers: tcsHeaders(credentials) });
+    const payload = await readJson(response);
+    const rows = payload?.city || payload?.cities || payload?.data?.city;
+    if (!response.ok || !Array.isArray(rows) || !rows.length) {
+      throw new Error(httpMessage(payload, `TCS did not return a valid city list (HTTP ${response.status}). Check the Client ID and API subscription.`));
+    }
+    const names = uniqueOptionStrings(rows.map((row: any) =>
+      typeof row === "string" ? row : row?.cityName || row?.cityname || row?.name || row?.city || row?.CityName
+    ));
+    if (!names.length) throw new Error("TCS returned city records without readable city names.");
+    return {
+      providerName: provider,
+      pickupCities: names,
+      deliveryCities: names,
+      serviceTypes: ["Normal", "Reverse", "Replacement"],
+      citySource: "carrier_api",
+      serviceTypeSource: "integration",
+    };
+  }
+
+  throw new Error(`Live booking options are not implemented for ${provider}.`);
+}
+
 /**
  * Resolves the merchant's default configured courier for reverse or forward shipments.
  */
