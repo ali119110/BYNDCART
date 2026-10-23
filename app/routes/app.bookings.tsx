@@ -1313,38 +1313,100 @@ export default function BookingsPage() {
             </table>
           </div>
 
-          {/* Centered Upload Booking action. Invalid data is blocked before it reaches the carrier API. */}
-          <div style={{ textAlign: "center", margin: "28px 0 20px" }}>
+          {/* Sequential Upload Booking action with per-order status */}
+          <div style={{ margin: "24px 0 20px", display: "flex", flexDirection: "column", alignItems: "center", gap: "12px" }}>
             {bulkBookingPayload.length > 0 && selectedBookingIssues.length > 0 && (
-              <p role="alert" style={{ color: "#b91c1c", fontSize: "13px", margin: "0 0 12px" }}>
+              <p role="alert" style={{ color: "#b91c1c", fontSize: "13px", margin: 0, textAlign: "center" }}>
                 Complete the customer details in the selected rows before uploading. {selectedBookingIssues.length} selected order(s) need attention.
               </p>
             )}
-            <Form method="post" style={{ display: "inline-block" }}>
-              <input type="hidden" name="intent" value="BOOK_BULK" />
-              <input type="hidden" name="bulkPayload" value={JSON.stringify(bulkBookingPayload)} />
-              <button
-                type="submit"
-                disabled={isSubmitting || !canUploadSelectedOrders}
+            {uploadProgress && (
+              <section
+                aria-live="polite"
+                aria-busy={uploadProgress.status === "uploading"}
                 style={{
-                  background: canUploadSelectedOrders ? "#16834b" : "#94a3b8",
-                  color: "#ffffff",
-                  border: "none",
-                  padding: "13px 44px",
-                  borderRadius: "6px",
-                  fontSize: "15px",
-                  fontWeight: 700,
-                  letterSpacing: "0.01em",
-                  cursor: canUploadSelectedOrders ? "pointer" : "not-allowed",
-                  boxShadow: canUploadSelectedOrders ? "0 2px 5px rgba(15, 23, 42, 0.15)" : "none",
-                  transition: "all 140ms ease",
+                  width: "min(100%, 940px)",
+                  boxSizing: "border-box",
+                  background: "#ffffff",
+                  border: "1px solid #dbe3ee",
+                  borderRadius: "12px",
+                  padding: "16px",
+                  boxShadow: "0 3px 10px rgba(15, 23, 42, 0.05)",
+                  textAlign: "left",
                 }}
               >
-                {isSubmitting
-                  ? "Uploading Booking..."
-                  : `Upload Booking${bulkBookingPayload.length > 0 ? ` (${bulkBookingPayload.length})` : ""}`}
-              </button>
-            </Form>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", marginBottom: "10px" }}>
+                  <strong style={{ color: "#0f172a", fontSize: "14px" }}>
+                    {uploadProgress.status === "uploading"
+                      ? `Uploading order ${uploadProgress.currentIndex + 1} of ${uploadProgress.total}: ${uploadProgress.steps[uploadProgress.currentIndex]?.orderNumber || ""}`
+                      : "Booking upload finished"}
+                  </strong>
+                  <span style={{ color: "#64748b", fontSize: "12px", fontWeight: 700 }}>
+                    {uploadProgress.completed} / {uploadProgress.total} processed
+                  </span>
+                </div>
+                <div
+                  role="progressbar"
+                  aria-label="Booking upload progress"
+                  aria-valuemin={0}
+                  aria-valuemax={uploadProgress.total}
+                  aria-valuenow={uploadProgress.completed}
+                  style={{ height: "7px", overflow: "hidden", background: "#e2e8f0", borderRadius: "999px", marginBottom: "14px" }}
+                >
+                  <div style={{ height: "100%", width: `${Math.round((uploadProgress.completed / Math.max(1, uploadProgress.total)) * 100)}%`, background: "#16a34a", borderRadius: "999px", transition: "width 160ms ease" }} />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "8px" }}>
+                  {uploadProgress.steps.map((step, index) => {
+                    const colors = step.status === "success"
+                      ? { bg: "#ecfdf5", border: "#a7f3d0", text: "#047857", label: "Booked" }
+                      : step.status === "failed"
+                        ? { bg: "#fef2f2", border: "#fecaca", text: "#b91c1c", label: "Failed" }
+                        : step.status === "uploading"
+                          ? { bg: "#eff6ff", border: "#bfdbfe", text: "#1d4ed8", label: "Uploading…" }
+                          : { bg: "#f8fafc", border: "#e2e8f0", text: "#64748b", label: "Queued" };
+                    return (
+                      <div key={`${step.orderNumber}-${index}`} title={step.message || step.orderNumber} style={{ minWidth: 0, padding: "9px 10px", border: `1px solid ${colors.border}`, background: colors.bg, color: colors.text, borderRadius: "8px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "7px", fontSize: "12px", fontWeight: 700 }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "22px", height: "22px", flex: "0 0 22px", borderRadius: "50%", border: `1px solid ${colors.border}", background: "#ffffff" }}>{index + 1}</span>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{step.orderNumber}</span>
+                          <span style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>{colors.label}</span>
+                        </div>
+                        {step.status === "failed" && step.message && <div style={{ marginTop: "7px", fontSize: "11px", lineHeight: 1.4, overflowWrap: "anywhere" }}>{step.message}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+                {uploadProgress.status === "done" && (
+                  <p style={{ margin: "12px 0 0", color: "#334155", fontSize: "13px" }}>
+                    {uploadProgress.steps.filter((step) => step.status === "success").length} booked successfully · {uploadProgress.steps.filter((step) => step.status === "failed").length} failed.
+                  </p>
+                )}
+              </section>
+            )}
+
+            <button
+              type="button"
+              onClick={startBulkUpload}
+              disabled={isSubmitting || uploadProgress?.status === "uploading" || !canUploadSelectedOrders}
+              style={{
+                background: canUploadSelectedOrders && uploadProgress?.status !== "uploading" ? "#16834b" : "#94a3b8",
+                color: "#ffffff",
+                border: "none",
+                padding: "13px 38px",
+                borderRadius: "8px",
+                fontSize: "15px",
+                fontWeight: 700,
+                letterSpacing: "0.01em",
+                cursor: canUploadSelectedOrders && uploadProgress?.status !== "uploading" ? "pointer" : "not-allowed",
+                boxShadow: canUploadSelectedOrders && uploadProgress?.status !== "uploading" ? "0 2px 5px rgba(15, 23, 42, 0.15)" : "none",
+                transition: "all 140ms ease",
+              }}
+            >
+              {uploadProgress?.status === "uploading"
+                ? `Uploading order ${uploadProgress.currentIndex + 1} of ${uploadProgress.total}…`
+                : `Upload Booking${bulkBookingPayload.length > 0 ? ` (${bulkBookingPayload.length})` : ""}`}
+            </button>
+          </div>
           </div>
         </div>
       )}
