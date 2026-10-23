@@ -260,7 +260,7 @@ async function validatePostExCity(
     // (for example API adapter tests). A configured merchant always uses the persisted catalog.
     const message = error instanceof Error ? error.message : "";
     if (!fallbackToken || !message.includes("POSTEX is not configured or enabled")) throw error;
-    const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${operationalCityType}`, {
+    const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city`, {
       method: "GET",
       headers: { token: fallbackToken, Accept: "application/json" },
     });
