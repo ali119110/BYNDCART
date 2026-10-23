@@ -105,7 +105,7 @@ export async function action({ request }: ActionFunctionArgs) {
       const providerName = String(form.get("providerName") || "").trim().toUpperCase();
       try {
         const options = await getMerchantCourierBookingOptions(shopifyStoreId, providerName);
-        return { intent, providerName, ...options, error: null };
+        return { ...options, intent, error: null };
       } catch (error) {
         return {
           intent,
