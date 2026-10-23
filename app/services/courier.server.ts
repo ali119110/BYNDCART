@@ -243,9 +243,9 @@ function resolveLeopardsCityId(cities: LeopardsCity[], cityName: string, purpose
 async function validatePostExCity(
   shopifyStoreId: string,
   cityName: string,
-  orderType: "Normal" | "Reverse" | "Replacement" | "Overland",
+  orderType: string,
 ): Promise<void> {
-  const operationalCityType = orderType === "Reverse" ? "Pickup" : "Delivery";
+  const operationalCityType = orderType === "Reverse" || orderType === "Reversed" ? "Pickup" : "Delivery";
   const normalized = cityName.trim().toLocaleLowerCase().replace(/\s+/g, " ");
   if (!normalized) throw new Error("Enter a city supported by PostEx.");
 
@@ -295,11 +295,11 @@ export class PostExCourierAdapter implements ICourierAdapter {
     }
   }
 
-  private async createOrder(input: ShipmentInput, credentials: any, orderType: "Normal" | "Reverse" | "Replacement" | "Overland"): Promise<LabelResult> {
+  private async createOrder(input: ShipmentInput, credentials: any, orderType: string): Promise<LabelResult> {
     const token = credentialValue(credentials, "apiToken");
     if (!token) return unconfirmedBooking(this.providerName, "PostEx merchant API token is missing for this store.");
 
-    const isReturn = orderType === "Reverse";
+    const isReturn = orderType === "Reverse" || orderType === "Reversed";
     const address = isReturn ? input.originAddress : input.destinationAddress;
     const customerName = String(input.customerName || "").trim();
     const customerPhoneRaw = String(input.customerPhone || "").trim();
@@ -327,7 +327,7 @@ export class PostExCourierAdapter implements ICourierAdapter {
       cityName,
       invoiceDivision: 1,
       items: quantity,
-      // PostEx's order-types endpoint returns "Reversed"; the UI calls this mode "Reverse".
+      // The UI displays "Reversed" as "Reverse"; send the provider's literal type value.
       orderType: orderType === "Reverse" ? "Reversed" : orderType,
     };
     const pickupAddressCode = credentialValue(credentials, "pickupAddressCode");
@@ -377,9 +377,9 @@ export class PostExCourierAdapter implements ICourierAdapter {
   }
 
   async createForwardShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
-    const selectedType = input.courierServiceType;
-    const orderType = selectedType === "Overland"
-      ? "Overland"
+    const selectedType = String(input.courierServiceType || "").trim();
+    const orderType = selectedType && selectedType !== "Reverse" && selectedType !== "Reversed"
+      ? selectedType
       : input.shipmentType === "EXCHANGE" ? "Replacement" : "Normal";
     return this.createOrder(input, credentials, orderType);
   }
@@ -472,7 +472,6 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
   private async bookPacket(input: ShipmentInput, credentials: any, direction: "RETURN" | "FORWARD" | "EXCHANGE"): Promise<LabelResult> {
     const apiKey = credentialValue(credentials, "apiKey");
     const apiPassword = credentialValue(credentials, "apiPassword");
-    const apiRoot = leopardsApiRoot(credentials);
     if (!apiKey || !apiPassword) return unconfirmedBooking(this.providerName, "Leopards requires both API key and API password for this store.");
 
     const warehouseCity = credentialValue(credentials, "warehouseCity");
