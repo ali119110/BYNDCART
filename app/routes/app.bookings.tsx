@@ -20,22 +20,55 @@ import { MAJOR_PAKISTANI_CITIES } from "../services/pakistanLogistics";
 export async function loader({ request }: LoaderFunctionArgs) {
   const { shopifyStoreId, admin } = await requireTenantContext(request);
 
-  // Load unfulfilled orders from Shopify (with automatic DB fallback for all synced orders)
-  const unfulfilledOrders = await fetchUnfulfilledOrders(admin, shopifyStoreId, 250);
+  // Load ONLY live Shopify unfulfilled orders (no DB fallback that inflates count)
+  const unfulfilledOrders = await fetchUnfulfilledOrders(admin, shopifyStoreId, 100);
 
-  // Check which couriers have active credentials
+  // Check which couriers have active credentials - pass credentials details for pickup address
   const [postexCreds, leopardsCreds, tcsCreds] = await Promise.all([
     getDecryptedCourierCredentials(shopifyStoreId, "POSTEX"),
     getDecryptedCourierCredentials(shopifyStoreId, "LEOPARDS"),
     getDecryptedCourierCredentials(shopifyStoreId, "TCS"),
   ]);
 
-  const courierStatus = {
-    POSTEX: Boolean(postexCreds?.apiToken || postexCreds?.credentials?.apiToken),
-    LEOPARDS: Boolean(leopardsCreds?.credentials?.apiKey || leopardsCreds?.apiToken),
-    TCS: Boolean(tcsCreds?.credentials?.clientId || tcsCreds?.credentials?.apiKey || tcsCreds?.apiToken),
-    RIDER: true, // In-house rider is always available
-  };
+  // Build configured couriers list with pickup addresses from their credentials
+  const configuredCouriers: Array<{
+    key: string;
+    label: string;
+    pickupAddress: string;
+    pickupCity: string;
+  }> = [];
+
+  if (postexCreds?.apiToken || postexCreds?.credentials?.apiToken) {
+    configuredCouriers.push({
+      key: "POSTEX",
+      label: "PostEx",
+      pickupAddress: (postexCreds.credentials as any)?.warehouseAddress || (postexCreds as any)?.warehouseAddress || "",
+      pickupCity: (postexCreds.credentials as any)?.warehouseCity || (postexCreds as any)?.warehouseCity || "Karachi",
+    });
+  }
+  if (leopardsCreds?.credentials?.apiKey || (leopardsCreds as any)?.apiKey) {
+    configuredCouriers.push({
+      key: "LEOPARDS",
+      label: "Leopards Courier",
+      pickupAddress: (leopardsCreds?.credentials as any)?.warehouseAddress || (leopardsCreds as any)?.warehouseAddress || "",
+      pickupCity: (leopardsCreds?.credentials as any)?.warehouseCity || (leopardsCreds as any)?.warehouseCity || "Karachi",
+    });
+  }
+  if (tcsCreds?.credentials?.clientId || (tcsCreds as any)?.clientId) {
+    configuredCouriers.push({
+      key: "TCS",
+      label: "TCS Express",
+      pickupAddress: (tcsCreds?.credentials as any)?.warehouseAddress || (tcsCreds as any)?.warehouseAddress || "",
+      pickupCity: (tcsCreds?.credentials as any)?.warehouseCity || (tcsCreds as any)?.warehouseCity || "Karachi",
+    });
+  }
+  // In-house rider is always available
+  configuredCouriers.push({
+    key: "RIDER",
+    label: "In-House Rider",
+    pickupAddress: "",
+    pickupCity: "",
+  });
 
   // Load unassigned booked shipments waiting for rider loadsheet
   const unassignedShipments = await getUnassignedBookedShipments(shopifyStoreId);
@@ -45,7 +78,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   return {
     unfulfilledOrders,
-    courierStatus,
+    configuredCouriers,
     unassignedShipments,
     pastLoadsheets,
   };
@@ -152,13 +185,17 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function BookingsPage() {
-  const { unfulfilledOrders, courierStatus, unassignedShipments, pastLoadsheets } = useLoaderData<typeof loader>();
+  const { unfulfilledOrders, configuredCouriers, unassignedShipments, pastLoadsheets } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
 
   const [activeTab, setActiveTab] = useState<"BOOK" | "LOADSHEET">("BOOK");
-  const [selectedCourier, setSelectedCourier] = useState<"POSTEX" | "LEOPARDS" | "TCS" | "RIDER">("POSTEX");
+
+  // Default to first configured courier
+  const defaultCourierKey = configuredCouriers[0]?.key || "RIDER";
+  const [selectedCourierKey, setSelectedCourierKey] = useState(defaultCourierKey);
+  const activeCourier = configuredCouriers.find((c) => c.key === selectedCourierKey) || configuredCouriers[0];
 
   // Selection & Editing state for orders
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
@@ -179,10 +216,6 @@ export default function BookingsPage() {
   const [selectDate, setSelectDate] = useState("");
   const [financialFilter, setFinancialFilter] = useState("ALL");
   const [fulfillmentFilter, setFulfillmentFilter] = useState("ALL");
-
-  // Shipper Profile & Pickup location state
-  const [selectedShipperProfile, setSelectedShipperProfile] = useState("DEFAULT");
-  const [selectedPickupLocation, setSelectedPickupLocation] = useState("DEFAULT");
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -280,7 +313,7 @@ export default function BookingsPage() {
       return {
         orderId: order?.id,
         orderNumber: order?.name,
-        courier: selectedCourier,
+        courier: selectedCourierKey,
         customerName: edit.name || order?.customerName,
         customerPhone: edit.phone || order?.customerPhone,
         customerAddress: edit.address || `${order?.address1 || ""} ${order?.address2 || ""}`.trim(),
@@ -290,7 +323,7 @@ export default function BookingsPage() {
         remarks: edit.remarks || "Allow customer to check flyer before payment",
       };
     });
-  }, [selectedOrderIds, unfulfilledOrders, orderEdits, selectedCourier]);
+  }, [selectedOrderIds, unfulfilledOrders, orderEdits, selectedCourierKey]);
 
   // Barcode scanner submission for loadsheet
   const handleBarcodeScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -313,35 +346,18 @@ export default function BookingsPage() {
   };
 
   return (
-    <div className="bc-page" style={{ maxWidth: "1400px", padding: "16px 20px" }}>
-      {/* Universal Courier Announcement Banner */}
-      <div
-        style={{
-          background: "#e6f4ea",
-          border: "1px solid #bbf7d0",
-          borderRadius: "6px",
-          padding: "9px 18px",
-          fontSize: "13px",
-          color: "#166534",
-          fontWeight: 500,
-          textAlign: "center",
-          marginBottom: "16px",
-          boxShadow: "0 1px 2px rgba(22, 101, 52, 0.05)",
-        }}
-      >
-        Note: You have 997,579 courier credits remaining. Active logistics integration connected.
-      </div>
+    <div className="bc-page" style={{ maxWidth: "1500px", padding: "16px 20px" }}>
 
       {actionData?.message && (
         <div
           className={`bc-note ${actionData.ok ? "ok" : "bad"}`}
-          style={{ marginBottom: "16px" }}
+          style={{ marginBottom: "12px" }}
         >
           {actionData.message}
         </div>
       )}
 
-      {/* Main Tabs (Book Orders vs Loadsheet) */}
+      {/* Main Tabs */}
       <div style={{ display: "flex", gap: "8px", borderBottom: "1px solid #e2e8f0", paddingBottom: "10px", marginBottom: "16px" }}>
         <button
           type="button"
@@ -349,7 +365,7 @@ export default function BookingsPage() {
           onClick={() => setActiveTab("BOOK")}
           style={{ fontWeight: 700 }}
         >
-          Create Booking ({filteredOrders.length} Available)
+          Create Booking ({filteredOrders.length} Unfulfilled)
         </button>
         <button
           type="button"
@@ -370,94 +386,92 @@ export default function BookingsPage() {
 
       {activeTab === "BOOK" && (
         <div>
-          {/* Centered Large Courier Branding */}
-          <div style={{ textAlign: "center", margin: "16px 0 20px" }}>
-            {selectedCourier === "POSTEX" && (
+          {/* Courier Brand Header + Dropdown Selector */}
+          <div style={{ textAlign: "center", margin: "12px 0 18px" }}>
+            {/* Courier branding display */}
+            {activeCourier?.key === "POSTEX" && (
               <div style={{ display: "inline-flex", alignItems: "baseline", gap: "2px" }}>
-                <span style={{ fontSize: "36px", fontWeight: 900, color: "#0f172a", letterSpacing: "-0.04em" }}>PostEx</span>
-                <span style={{ fontSize: "38px", fontWeight: 900, color: "#16a34a" }}>.</span>
+                <span style={{ fontSize: "34px", fontWeight: 900, color: "#0f172a", letterSpacing: "-0.04em" }}>PostEx</span>
+                <span style={{ fontSize: "36px", fontWeight: 900, color: "#16a34a" }}>.</span>
               </div>
             )}
-            {selectedCourier === "LEOPARDS" && (
+            {activeCourier?.key === "LEOPARDS" && (
               <div style={{ display: "inline-flex", alignItems: "baseline", gap: "6px" }}>
-                <span style={{ fontSize: "34px", fontWeight: 900, color: "#ca8a04", letterSpacing: "-0.03em" }}>LEOPARDS</span>
-                <span style={{ fontSize: "34px", fontWeight: 900, color: "#0f172a" }}>COURIER</span>
+                <span style={{ fontSize: "32px", fontWeight: 900, color: "#ca8a04", letterSpacing: "-0.03em" }}>LEOPARDS</span>
+                <span style={{ fontSize: "32px", fontWeight: 900, color: "#0f172a" }}>COURIER</span>
               </div>
             )}
-            {selectedCourier === "TCS" && (
+            {activeCourier?.key === "TCS" && (
               <div style={{ display: "inline-flex", alignItems: "baseline", gap: "6px" }}>
-                <span style={{ fontSize: "34px", fontWeight: 900, color: "#dc2626", letterSpacing: "-0.03em" }}>TCS</span>
-                <span style={{ fontSize: "34px", fontWeight: 900, color: "#0f172a" }}>EXPRESS</span>
+                <span style={{ fontSize: "32px", fontWeight: 900, color: "#dc2626", letterSpacing: "-0.03em" }}>TCS</span>
+                <span style={{ fontSize: "32px", fontWeight: 900, color: "#0f172a" }}>EXPRESS</span>
               </div>
             )}
-            {selectedCourier === "RIDER" && (
+            {activeCourier?.key === "RIDER" && (
               <div style={{ display: "inline-flex", alignItems: "baseline", gap: "6px" }}>
-                <span style={{ fontSize: "34px", fontWeight: 900, color: "#2563eb", letterSpacing: "-0.03em" }}>IN-HOUSE</span>
-                <span style={{ fontSize: "34px", fontWeight: 900, color: "#0f172a" }}>RIDER</span>
+                <span style={{ fontSize: "32px", fontWeight: 900, color: "#2563eb", letterSpacing: "-0.03em" }}>IN-HOUSE</span>
+                <span style={{ fontSize: "32px", fontWeight: 900, color: "#0f172a" }}>RIDER</span>
               </div>
             )}
-            <p style={{ margin: "4px 0 14px", fontSize: "14px", fontWeight: 500, color: "#64748b" }}>
-              Create Booking with {selectedCourier === "POSTEX" ? "PostEx" : selectedCourier === "LEOPARDS" ? "Leopards" : selectedCourier === "TCS" ? "TCS" : "In-House Rider"}
+            {!activeCourier && (
+              <div style={{ fontSize: "20px", color: "#94a3b8", marginBottom: "8px" }}>No Couriers Configured</div>
+            )}
+            <p style={{ margin: "4px 0 12px", fontSize: "13px", fontWeight: 500, color: "#64748b" }}>
+              Create Booking with {activeCourier?.label || "—"}
             </p>
 
-            {/* Courier Selection Pill Buttons */}
-            <div style={{ display: "inline-flex", gap: "6px", background: "#f1f5f9", padding: "4px", borderRadius: "10px", border: "1px solid #e2e8f0" }}>
-              {(["POSTEX", "LEOPARDS", "TCS", "RIDER"] as const).map((c) => {
-                const active = selectedCourier === c;
-                const isConfigured = courierStatus[c];
-                return (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => setSelectedCourier(c)}
-                    style={{
-                      padding: "6px 14px",
-                      borderRadius: "7px",
-                      fontSize: "12px",
-                      fontWeight: active ? 700 : 500,
-                      background: active ? "#0f172a" : "transparent",
-                      color: active ? "#ffffff" : "#475569",
-                      border: "none",
-                      cursor: "pointer",
-                      transition: "all 140ms ease",
-                    }}
-                  >
-                    {c === "POSTEX" ? "PostEx" : c === "LEOPARDS" ? "Leopards" : c === "TCS" ? "TCS" : "In-House Rider"}
-                    {!isConfigured && c !== "RIDER" ? " (Needs Setup)" : ""}
-                  </button>
-                );
-              })}
+            {/* Courier List Dropdown — only shows configured couriers */}
+            <div style={{ display: "inline-flex", alignItems: "center", gap: "10px" }}>
+              {configuredCouriers.length === 0 ? (
+                <a href="/app/couriers" style={{ color: "#dc2626", fontWeight: 700, fontSize: "13px" }}>
+                  ⚠ No courier configured — Click to set up courier API
+                </a>
+              ) : (
+                <select
+                  value={selectedCourierKey}
+                  onChange={(e) => setSelectedCourierKey(e.target.value)}
+                  style={{
+                    height: "38px",
+                    padding: "0 14px",
+                    border: "2px solid #0f172a",
+                    borderRadius: "8px",
+                    fontSize: "14px",
+                    fontWeight: 700,
+                    background: "#0f172a",
+                    color: "#ffffff",
+                    cursor: "pointer",
+                    minWidth: "220px",
+                  }}
+                >
+                  {configuredCouriers.map((c) => (
+                    <option key={c.key} value={c.key}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              )}
               <a
                 href="/app/couriers"
-                style={{
-                  padding: "6px 12px",
-                  borderRadius: "7px",
-                  fontSize: "12px",
-                  fontWeight: 600,
-                  color: "#2563eb",
-                  textDecoration: "none",
-                  display: "inline-flex",
-                  alignItems: "center",
-                }}
+                style={{ fontSize: "12px", color: "#2563eb", fontWeight: 600, textDecoration: "none" }}
               >
-                ⚙ Settings
+                ⚙ Courier Settings
               </a>
             </div>
           </div>
 
-          {/* 5-Field Search and Filter Grid (Matches Universal Courier UI) */}
+          {/* Search & Filter Row — all in one line */}
           <div
             style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr)) auto",
-              gap: "10px",
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "8px",
               alignItems: "center",
               background: "#ffffff",
-              padding: "14px 16px",
+              padding: "12px 14px",
               borderRadius: "8px",
               border: "1px solid #cbd5e1",
               boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
-              marginBottom: "16px",
+              marginBottom: "14px",
             }}
           >
             <input
@@ -574,102 +588,62 @@ export default function BookingsPage() {
             </button>
           </div>
 
-          {/* Shipper Profile & Pickup Location row with Pagination Controls */}
+          {/* Shipper Profile & Pickup Location — pull from active courier credentials */}
           <div
             style={{
               display: "flex",
               justifyContent: "space-between",
-              alignItems: "flex-end",
+              alignItems: "center",
               flexWrap: "wrap",
-              gap: "16px",
-              marginBottom: "14px",
+              gap: "12px",
+              marginBottom: "12px",
+              background: "#f8fafc",
+              border: "1px solid #e2e8f0",
+              borderRadius: "8px",
+              padding: "10px 14px",
             }}
           >
-            <div style={{ display: "flex", gap: "16px", flexWrap: "wrap", flex: "1 1 540px" }}>
-              <div style={{ flex: "1 1 260px" }}>
-                <label style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#0f172a", marginBottom: "5px" }}>
-                  Shipper Profile
-                </label>
-                <select
-                  value={selectedShipperProfile}
-                  onChange={(e) => setSelectedShipperProfile(e.target.value)}
-                  style={{
-                    width: "100%",
-                    height: "38px",
-                    padding: "0 10px",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "6px",
-                    fontSize: "12px",
-                    background: "#ffffff",
-                    color: "#0f172a",
-                  }}
-                >
-                  <option value="DEFAULT">FEAR | Row E, Block 04, Sindhi Jamat Cooperative Housing Society, Karachi</option>
-                  <option value="LAHORE">CENTRAL HUB | Gulberg III, MM Alam Road, Lahore</option>
-                  <option value="ISLAMABAD">NORTH DISPATCH | Blue Area, Islamabad</option>
-                </select>
+            <div style={{ display: "flex", gap: "24px", flexWrap: "wrap", flex: 1 }}>
+              <div>
+                <span style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Pickup Location</span>
+                <div style={{ fontSize: "13px", fontWeight: 600, color: "#0f172a", marginTop: "2px" }}>
+                  {activeCourier?.pickupAddress
+                    ? `${activeCourier.pickupAddress}, ${activeCourier.pickupCity}`
+                    : activeCourier?.pickupCity
+                    ? activeCourier.pickupCity
+                    : <span style={{ color: "#94a3b8" }}>Not set — configure in Courier Settings</span>
+                  }
+                </div>
               </div>
-
-              <div style={{ flex: "1 1 260px" }}>
-                <label style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#0f172a", marginBottom: "5px" }}>
-                  Pickup Location
-                </label>
-                <select
-                  value={selectedPickupLocation}
-                  onChange={(e) => setSelectedPickupLocation(e.target.value)}
-                  style={{
-                    width: "100%",
-                    height: "38px",
-                    padding: "0 10px",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: "6px",
-                    fontSize: "12px",
-                    background: "#ffffff",
-                    color: "#0f172a",
-                  }}
-                >
-                  <option value="DEFAULT">Row E , Block 4 ,Sindhi Jamat Co-operative Housing Society , Karachi</option>
-                  <option value="LAHORE">Plot 18, Commercial Zone, MM Alam Road, Lahore</option>
-                </select>
+              <div>
+                <span style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Courier</span>
+                <div style={{ fontSize: "13px", fontWeight: 600, color: "#0f172a", marginTop: "2px" }}>{activeCourier?.label || "—"}</div>
               </div>
             </div>
 
             {/* Back / Next Pagination */}
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", marginLeft: "auto" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               <button
                 type="button"
                 className="bc-btn"
                 disabled={currentPage === 1}
                 onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                style={{
-                  minWidth: "64px",
-                  height: "36px",
-                  color: currentPage === 1 ? "#94a3b8" : "#0f172a",
-                  fontWeight: 600,
-                }}
+                style={{ minWidth: "60px", height: "34px", color: currentPage === 1 ? "#94a3b8" : "#0f172a", fontWeight: 600 }}
               >
                 Back
               </button>
-              <span style={{ fontSize: "12px", fontWeight: 600, color: "#475569" }}>
-                {filteredOrders.length > 0 ? (
-                  <>
-                    Page {currentPage} of {Math.max(1, Math.ceil(filteredOrders.length / pageSize))} ({filteredOrders.length} orders)
-                  </>
-                ) : (
-                  "0 orders"
-                )}
+              <span style={{ fontSize: "12px", fontWeight: 600, color: "#475569", whiteSpace: "nowrap" }}>
+                {filteredOrders.length > 0
+                  ? `Page ${currentPage} of ${Math.max(1, Math.ceil(filteredOrders.length / pageSize))} (${filteredOrders.length})`
+                  : "0 orders"
+                }
               </span>
               <button
                 type="button"
                 className="bc-btn"
                 disabled={currentPage >= Math.ceil(filteredOrders.length / pageSize)}
                 onClick={() => setCurrentPage((p) => p + 1)}
-                style={{
-                  minWidth: "64px",
-                  height: "36px",
-                  color: currentPage >= Math.ceil(filteredOrders.length / pageSize) ? "#94a3b8" : "#0f172a",
-                  fontWeight: 600,
-                }}
+                style={{ minWidth: "60px", height: "34px", color: currentPage >= Math.ceil(filteredOrders.length / pageSize) ? "#94a3b8" : "#0f172a", fontWeight: 600 }}
               >
                 Next
               </button>
@@ -686,10 +660,10 @@ export default function BookingsPage() {
               boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
             }}
           >
-            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left", fontSize: "13px" }}>
+            <table style={{ width: "100%", minWidth: "1100px", borderCollapse: "collapse", textAlign: "left", fontSize: "13px" }}>
               <thead>
                 <tr style={{ background: "#0f172a", color: "#ffffff", fontSize: "12px", fontWeight: 700, letterSpacing: "0.02em" }}>
-                  <th style={{ width: "36px", padding: "10px", textAlign: "center" }}>
+                  <th style={{ width: "38px", padding: "11px 10px", textAlign: "center" }}>
                     <input
                       type="checkbox"
                       checked={
@@ -697,21 +671,20 @@ export default function BookingsPage() {
                         paginatedOrders.filter((o) => !o.alreadyBooked).every((o) => selectedOrderIds.includes(o.id))
                       }
                       onChange={toggleSelectAll}
-                      style={{ accentColor: "#16a34a", cursor: "pointer", width: "16px", height: "16px" }}
+                      style={{ accentColor: "#16a34a", cursor: "pointer", width: "15px", height: "15px" }}
                     />
                   </th>
-                  <th style={{ width: "36px", padding: "10px 6px", textAlign: "center" }}>#</th>
-                  <th style={{ padding: "10px 8px", minWidth: "90px" }}>Order</th>
-                  <th style={{ padding: "10px 8px", minWidth: "120px" }}>Name</th>
-                  <th style={{ padding: "10px 8px", minWidth: "115px" }}>Phone</th>
-                  <th style={{ padding: "10px 8px", minWidth: "220px" }}>Address</th>
-                  <th style={{ padding: "10px 8px", minWidth: "90px" }}>City</th>
-                  <th style={{ padding: "10px 8px", minWidth: "135px" }}>City</th>
-                  <th style={{ padding: "10px 8px", width: "85px" }}>COD</th>
-                  <th style={{ padding: "10px 8px", width: "70px" }}>KG</th>
-                  <th style={{ padding: "10px 8px", width: "105px" }}>Type</th>
-                  <th style={{ width: "36px", padding: "10px 4px", textAlign: "center" }}></th>
-                  <th style={{ width: "36px", padding: "10px 4px", textAlign: "center" }}></th>
+                  <th style={{ width: "40px", padding: "11px 6px", textAlign: "center" }}>#</th>
+                  <th style={{ padding: "11px 10px", minWidth: "100px" }}>Order</th>
+                  <th style={{ padding: "11px 10px", minWidth: "150px" }}>Customer Name</th>
+                  <th style={{ padding: "11px 10px", minWidth: "130px" }}>Phone</th>
+                  <th style={{ padding: "11px 10px", minWidth: "260px" }}>Delivery Address</th>
+                  <th style={{ padding: "11px 10px", minWidth: "150px" }}>City</th>
+                  <th style={{ padding: "11px 10px", width: "90px" }}>COD (PKR)</th>
+                  <th style={{ padding: "11px 10px", width: "70px" }}>KG</th>
+                  <th style={{ padding: "11px 10px", width: "110px" }}>Type</th>
+                  <th style={{ width: "36px", padding: "11px 4px", textAlign: "center" }}></th>
+                  <th style={{ width: "36px", padding: "11px 4px", textAlign: "center" }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -1089,7 +1062,7 @@ export default function BookingsPage() {
             {selectedShipmentIds.length > 0 && (
               <Form method="post" className="bc-card" style={{ background: "#fafafa", border: "1px solid var(--bc-line)", marginTop: "12px" }}>
                 <input type="hidden" name="intent" value="CREATE_LOADSHEET" />
-                <input type="hidden" name="courier" value={selectedCourier} />
+                <input type="hidden" name="courier" value={selectedCourierKey} />
                 <input type="hidden" name="shipmentIds" value={selectedShipmentIds.join(",")} />
 
                 <h3 className="bc-subtitle" style={{ margin: "0 0 12px" }}>

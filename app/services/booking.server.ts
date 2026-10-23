@@ -198,126 +198,112 @@ export function normalizeCourierName(courier: string): string {
 }
 
 /**
- * Fetches unfulfilled Shopify orders ready for courier booking
- * Queries live Shopify GraphQL first, then seamlessly falls back to synced database orders
+ * Fetches unfulfilled Shopify orders ready for courier booking.
+ * Queries live Shopify GraphQL. Only falls back to database if admin client
+ * is completely unavailable (offline mode / no session).
  */
 export async function fetchUnfulfilledOrders(
   admin: any,
   shopifyStoreId: string,
   limit = 100,
 ): Promise<UnfulfilledOrder[]> {
-  // 1. First, attempt to load live from Shopify GraphQL if admin client is available
+  // 1. Always try live Shopify GraphQL first when admin is available
   if (admin) {
     try {
       const response = await admin.graphql(UNFULFILLED_ORDERS_QUERY, { variables: { first: limit } });
       const payload = await response.json();
       const orderNodes = (payload?.data?.orders?.edges || []).map((edge: any) => edge.node);
 
-      if (orderNodes.length > 0) {
-        // Get all existing active forward shipments for this store to identify already booked orders
-        const existingShipments = await prisma.shipmentTrack.findMany({
-          where: { shopifyStoreId },
-          select: { orderNumber: true, trackingNumber: true, courier: true },
-        }).catch(() => []);
+      // Get all existing active forward shipments for this store to identify already booked orders
+      const existingShipments = await prisma.shipmentTrack.findMany({
+        where: { shopifyStoreId },
+        select: { orderNumber: true, trackingNumber: true, courier: true },
+      }).catch(() => []);
 
-        const bookedOrderMap = new Map<string, { trackingNumber: string; courier: string }>();
-        for (const ship of existingShipments) {
-          bookedOrderMap.set(ship.orderNumber, { trackingNumber: ship.trackingNumber, courier: ship.courier });
-        }
-
-        return orderNodes.map((node: any) => {
-          const orderNumber = String(node.name || "");
-          const totalPrice = Number(node.totalPriceSet?.shopMoney?.amount || 0);
-          const isCod = String(node.displayFinancialStatus || "").toUpperCase() === "PENDING";
-          const tags = Array.isArray(node.tags) ? node.tags : [];
-
-          const rawPhone = node.shippingAddress?.phone || node.customer?.phone || "";
-          const normalizedPhone = normalizePakistaniMobile(rawPhone);
-
-          const rawCity = node.shippingAddress?.city || "";
-          const address1 = node.shippingAddress?.address1 || "";
-          const address2 = node.shippingAddress?.address2 || "";
-          const fullAddress = `${address1} ${address2}`.trim();
-          const matchedCity = matchPakistaniCity(rawCity, fullAddress);
-
-          const items: BookingLineItem[] = (node.lineItems?.edges || []).map((e: any) => ({
-            id: e.node.id,
-            title: e.node.title,
-            quantity: e.node.quantity,
-            sku: e.node.sku || undefined,
-            grams: e.node.grams || 250,
-            price: Number(e.node.originalUnitPriceSet?.shopMoney?.amount || 0),
-          }));
-
-          const alreadyBooked = bookedOrderMap.has(orderNumber) || tags.some((t: string) => t.toLowerCase().startsWith("booked-") || t.toLowerCase().startsWith("cn:"));
-          const existingInfo = bookedOrderMap.get(orderNumber);
-
-          return {
-            id: node.id,
-            name: orderNumber,
-            createdAt: node.createdAt,
-            displayFinancialStatus: node.displayFinancialStatus || "PENDING",
-            isCod,
-            totalPrice,
-            suggestedCod: isCod ? totalPrice : 0,
-            suggestedWeight: estimatePackageWeight(items),
-            customerName: node.shippingAddress?.name || `${node.customer?.firstName || ""} ${node.customer?.lastName || ""}`.trim() || "Customer",
-            customerPhone: normalizedPhone,
-            customerEmail: node.customer?.email || "",
-            address1,
-            address2,
-            city: rawCity,
-            matchedCity,
-            province: node.shippingAddress?.province || "",
-            zip: node.shippingAddress?.zip || "",
-            country: node.shippingAddress?.country || "Pakistan",
-            items,
-            tags,
-            alreadyBooked,
-            existingTracking: existingInfo?.trackingNumber,
-            existingCourier: existingInfo?.courier,
-          };
-        });
+      const bookedOrderMap = new Map<string, { trackingNumber: string; courier: string }>();
+      for (const ship of existingShipments) {
+        bookedOrderMap.set(ship.orderNumber, { trackingNumber: ship.trackingNumber, courier: ship.courier });
       }
+
+      // Map Shopify nodes to UnfulfilledOrder — extracts real customer/address data
+      return orderNodes.map((node: any) => {
+        const orderNumber = String(node.name || "");
+        const totalPrice = Number(node.totalPriceSet?.shopMoney?.amount || 0);
+        const finStatus = String(node.displayFinancialStatus || "").toUpperCase();
+        const isCod = finStatus === "PENDING";
+        const tags = Array.isArray(node.tags) ? node.tags : [];
+
+        // Phone: prefer shipping address phone, fall back to customer phone
+        const rawPhone = node.shippingAddress?.phone || node.customer?.phone || "";
+        const normalizedPhone = rawPhone ? normalizePakistaniMobile(rawPhone) : "";
+
+        // Address fields from shippingAddress
+        const address1 = node.shippingAddress?.address1 || "";
+        const address2 = node.shippingAddress?.address2 || "";
+        const rawCity = node.shippingAddress?.city || "";
+        const fullAddress = [address1, address2].filter(Boolean).join(", ");
+        const matchedCity = matchPakistaniCity(rawCity, fullAddress);
+
+        // Customer name: prefer shippingAddress.name, fallback to firstName+lastName
+        const customerName =
+          node.shippingAddress?.name ||
+          [node.customer?.firstName, node.customer?.lastName].filter(Boolean).join(" ") ||
+          "Customer";
+
+        const items: BookingLineItem[] = (node.lineItems?.edges || []).map((e: any) => ({
+          id: e.node.id,
+          title: e.node.title,
+          quantity: e.node.quantity,
+          sku: e.node.sku || undefined,
+          grams: e.node.grams || 250,
+          price: Number(e.node.originalUnitPriceSet?.shopMoney?.amount || 0),
+        }));
+
+        const alreadyBooked =
+          bookedOrderMap.has(orderNumber) ||
+          tags.some((t: string) => t.toLowerCase().startsWith("booked-") || t.toLowerCase().startsWith("cn:"));
+        const existingInfo = bookedOrderMap.get(orderNumber);
+
+        return {
+          id: node.id,
+          name: orderNumber,
+          createdAt: node.createdAt,
+          displayFinancialStatus: node.displayFinancialStatus || "PENDING",
+          isCod,
+          totalPrice,
+          suggestedCod: isCod ? totalPrice : 0,
+          suggestedWeight: estimatePackageWeight(items),
+          customerName,
+          customerPhone: normalizedPhone,
+          customerEmail: node.customer?.email || "",
+          address1,
+          address2,
+          city: rawCity,
+          matchedCity,
+          province: node.shippingAddress?.province || "",
+          zip: node.shippingAddress?.zip || "",
+          country: node.shippingAddress?.country || "Pakistan",
+          items,
+          tags,
+          alreadyBooked,
+          existingTracking: existingInfo?.trackingNumber,
+          existingCourier: existingInfo?.courier,
+        };
+      });
     } catch (error) {
-      console.warn("[Booking] Live Shopify GraphQL query failed or timed out, falling back to local database:", error);
+      console.warn("[Booking] Live Shopify GraphQL query failed, falling back to local database:", error);
+      // Fall through to DB fallback only on error
     }
   }
 
-  // 2. Seamless Database Fallback: load unfulfilled orders stored in prisma.order
+  // 2. DB Fallback: ONLY runs when admin is unavailable (null/undefined) or GraphQL errored above.
+  // This is for development/offline mode only — never inflates real count when Shopify returns 0.
   try {
-    let dbOrders = await prisma.order.findMany({
+    const dbOrders = await prisma.order.findMany({
       where: { shopifyStoreId, fulfillmentStatus: "UNFULFILLED" },
       orderBy: { shopifyCreatedAt: "desc" },
       take: limit,
     }).catch(() => []);
-
-    // If store ID has 0 orders, also check across merchant stores or dev tenant
-    if (dbOrders.length === 0) {
-      const store = await prisma.shopifyStore.findUnique({
-        where: { id: shopifyStoreId },
-        select: { merchantId: true },
-      }).catch(() => null);
-
-      if (store?.merchantId) {
-        dbOrders = await prisma.order.findMany({
-          where: {
-            shopifyStore: { merchantId: store.merchantId },
-            fulfillmentStatus: "UNFULFILLED",
-          },
-          orderBy: { shopifyCreatedAt: "desc" },
-          take: limit,
-        }).catch(() => []);
-      }
-
-      if (dbOrders.length === 0) {
-        dbOrders = await prisma.order.findMany({
-          where: { fulfillmentStatus: "UNFULFILLED" },
-          orderBy: { shopifyCreatedAt: "desc" },
-          take: limit,
-        }).catch(() => []);
-      }
-    }
 
     const existingShipments = await prisma.shipmentTrack.findMany({
       where: { shopifyStoreId },
@@ -352,7 +338,7 @@ export async function fetchUnfulfilledOrders(
       const rawCity = shipping.city || "";
       const address1 = shipping.address1 || "";
       const address2 = shipping.address2 || "";
-      const fullAddress = `${address1} ${address2}`.trim();
+      const fullAddress = [address1, address2].filter(Boolean).join(", ");
       const matchedCity = matchPakistaniCity(rawCity, fullAddress);
 
       const alreadyBooked = bookedOrderMap.has(orderNumber);
