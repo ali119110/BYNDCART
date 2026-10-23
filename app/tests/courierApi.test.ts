@@ -60,7 +60,7 @@ test("PostEx accepts a return only when statusCode is 200 and a tracking number 
   assert.strictEqual(normalizeCourierStatus(result.carrierStatus), "LABEL_CREATED");
   const booking = calls.find((call) => call.url.includes("create-order"));
   assert.strictEqual(booking?.body.orderType, "Reversed");
-  assert.ok(calls.some((call) => call.url.includes("operationalCityType=pickup")), "PostEx city lookup should use the carrier's lowercase pickup value");
+  assert.ok(calls.some((call) => call.url.includes("operationalCityType=Pickup")), "PostEx city lookup should use the carrier's lowercase pickup value");
   assert.strictEqual(booking?.body.customerPhone, "03001234567");
   assert.strictEqual(booking?.body.invoicePayment, "0");
   assert.strictEqual(booking?.body.cityName, "Karachi");
