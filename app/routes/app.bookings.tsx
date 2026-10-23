@@ -1,6 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import { Form, Link, useActionData, useFetcher, useLoaderData, useNavigation } from "react-router";
 import { requireTenantContext } from "../services/tenant.server";
 import { assertPermission } from "../services/permissions.server";
 import {
@@ -14,7 +14,7 @@ import {
   getUnassignedBookedShipments,
   listLoadsheets,
 } from "../services/loadsheet.server";
-import { getDecryptedCourierCredentials } from "../services/courier.server";
+import { getDecryptedCourierCredentials, getMerchantCourierBookingOptions } from "../services/courier.server";
 import { isValidPakistaniMobile, MAJOR_PAKISTANI_CITIES } from "../services/pakistanLogistics";
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -101,6 +101,23 @@ export async function action({ request }: ActionFunctionArgs) {
   const intent = String(form.get("intent") || "");
 
   try {
+    if (intent === "LOAD_COURIER_OPTIONS") {
+      const providerName = String(form.get("providerName") || "").trim().toUpperCase();
+      try {
+        const options = await getMerchantCourierBookingOptions(shopifyStoreId, providerName);
+        return { intent, providerName, ...options, error: null };
+      } catch (error) {
+        return {
+          intent,
+          providerName,
+          pickupCities: [],
+          deliveryCities: [],
+          serviceTypes: [],
+          error: error instanceof Error ? error.message : `Could not load ${providerName} booking options from its API.`,
+        };
+      }
+    }
+
     if (intent === "BOOK_SINGLE") {
       const orderId = String(form.get("orderId") || "");
       const orderNumber = String(form.get("orderNumber") || "");
@@ -112,11 +129,21 @@ export async function action({ request }: ActionFunctionArgs) {
       const codAmountPKR = Number(form.get("codAmountPKR") || 0);
       const weightKg = Number(form.get("weightKg") || 0.5);
       const remarks = String(form.get("remarks") || "");
+      const serviceType = String(form.get("serviceType") || "Normal");
+      let items: Array<{ title: string; quantity: number; price?: number; sku?: string }> = [];
+      try {
+        const rawItems = String(form.get("items") || "[]");
+        const parsedItems = JSON.parse(rawItems);
+        if (Array.isArray(parsedItems)) items = parsedItems;
+      } catch {
+        return { intent, ok: false, message: "Invalid order line-item payload." };
+      }
 
       const result = await bookCourierShipment(admin, shopifyStoreId, session, {
         orderId,
         orderNumber,
         courier,
+        serviceType: serviceType as "Normal" | "Reverse" | "Replacement",
         customerName,
         customerPhone,
         customerAddress,
@@ -124,13 +151,15 @@ export async function action({ request }: ActionFunctionArgs) {
         codAmountPKR,
         weightKg,
         remarks,
+        items,
       });
 
       if (!result.success) {
-        return { ok: false, message: result.error || "Booking failed." };
+        return { intent, ok: false, message: result.error || "Booking failed.", booking: result };
       }
 
       return {
+        intent,
         ok: true,
         message: `Order ${orderNumber} successfully booked with ${courier}! Tracking: ${result.trackingNumber}`,
         booking: result,
@@ -189,7 +218,11 @@ export async function action({ request }: ActionFunctionArgs) {
     return { ok: false, message: "Unknown booking intent." };
   } catch (error) {
     if (error instanceof Response) throw error;
-    return { ok: false, message: error instanceof Error ? error.message : "Booking operation failed." };
+    return {
+      intent,
+      ok: false,
+      message: error instanceof Error ? error.message : "Booking operation failed.",
+    };
   }
 }
 
