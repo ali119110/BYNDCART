@@ -205,8 +205,9 @@ export function matchPakistaniCity(inputCity?: string | null, fullAddress?: stri
     }
   }
 
-  // Fallback to formatted input city or Karachi as regional default
-  return inputCity ? inputCity.trim() : "Karachi";
+  // Never invent a delivery city. Require an explicit choice when Shopify's city
+  // field and address do not identify one.
+  return inputCity ? inputCity.trim() : "";
 }
 
 /**
