@@ -2103,7 +2103,7 @@ export async function getMerchantCourierBookingOptions(
     data: {
       additionalConfig: {
         ...bookingOptionsObject(latest?.additionalConfig),
-        byndcartBookingOptionsCache: persisted,
+        byndcartBookingOptionsCache: JSON.parse(JSON.stringify(persisted)) as any,
       },
     },
   });
