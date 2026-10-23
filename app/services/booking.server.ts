@@ -125,6 +125,16 @@ const UNFULFILLED_ORDERS_QUERY = `#graphql
   }
 `;
 
+const BOOKING_ORDER_STATUS_QUERY = `#graphql
+  query VerifyBookingOrder($orderId: ID!) {
+    order(id: $orderId) {
+      id
+      name
+      displayFulfillmentStatus
+    }
+  }
+`;
+
 const FULFILLMENT_ORDERS_QUERY = `#graphql
   query GetOrderFulfillmentOrders($orderId: ID!) {
     order(id: $orderId) {
@@ -513,6 +523,52 @@ export async function bookCourierShipment(
       trackingNumber: "",
       error: "In-House Rider currently supports Normal bookings only.",
     };
+  }
+
+  // Revalidate the selected order against Shopify immediately before booking. The page may
+  // be stale, or a crafted request could otherwise book a fulfilled/cancelled order.
+  if (admin) {
+    try {
+      const verifyResponse = await admin.graphql(BOOKING_ORDER_STATUS_QUERY, {
+        variables: { orderId: input.orderId },
+      });
+      const verifyPayload = await verifyResponse.json();
+      if (verifyPayload?.errors?.length) {
+        throw new Error(verifyPayload.errors.map((item: any) => item.message).filter(Boolean).join("; "));
+      }
+      const liveOrder = verifyPayload?.data?.order;
+      if (!liveOrder || liveOrder.id !== input.orderId || liveOrder.name !== input.orderNumber) {
+        return {
+          success: false,
+          orderId: input.orderId,
+          orderNumber: input.orderNumber,
+          courier: normCourier,
+          trackingNumber: "",
+          error: "This order could not be confirmed in Shopify. Refresh the booking page and try again.",
+        };
+      }
+      if (String(liveOrder.displayFulfillmentStatus || "").toUpperCase() !== "UNFULFILLED") {
+        return {
+          success: false,
+          orderId: input.orderId,
+          orderNumber: input.orderNumber,
+          courier: normCourier,
+          trackingNumber: "",
+          error: "This order is no longer unfulfilled in Shopify. Refresh the booking page before booking.",
+        };
+      }
+    } catch (error) {
+      return {
+        success: false,
+        orderId: input.orderId,
+        orderNumber: input.orderNumber,
+        courier: normCourier,
+        trackingNumber: "",
+        error: error instanceof Error
+          ? `Shopify order verification failed: ${error.message}`
+          : "Could not verify this order with Shopify. No courier booking was submitted.",
+      };
+    }
   }
 
   // In-House Rider Booking
