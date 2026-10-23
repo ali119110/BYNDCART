@@ -226,11 +226,51 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 }
 
+type BookingUploadStep = {
+  orderNumber: string;
+  status: "pending" | "uploading" | "success" | "failed";
+  message?: string;
+};
+
+type BookingUploadProgress = {
+  total: number;
+  completed: number;
+  currentIndex: number;
+  status: "uploading" | "done";
+  steps: BookingUploadStep[];
+};
+
+type BulkBookingQueue = {
+  items: Array<Record<string, any>>;
+  index: number;
+};
+
+type CourierBookingOptionsResponse = {
+  intent?: string;
+  providerName?: string;
+  pickupCities?: string[];
+  deliveryCities?: string[];
+  serviceTypes?: string[];
+  citySource?: "carrier_api" | "local";
+  serviceTypeSource?: "carrier_api" | "integration";
+  error?: string | null;
+};
+
+function matchCarrierOption(value: string | undefined, options: string[]): string {
+  const normalized = String(value || "").trim().toLocaleLowerCase();
+  return options.find((option) => option.trim().toLocaleLowerCase() === normalized) || "";
+}
+
 export default function BookingsPage() {
   const { unfulfilledOrders, bookingLoadError, configuredCouriers, unassignedShipments, pastLoadsheets } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
+  const courierOptionsFetcher = useFetcher<CourierBookingOptionsResponse>();
+  const singleBookingFetcher = useFetcher<any>();
+  const [uploadProgress, setUploadProgress] = useState<BookingUploadProgress | null>(null);
+  const bulkBookingQueueRef = useRef<BulkBookingQueue | null>(null);
+  const handledBookingResponseRef = useRef<unknown>(null);
 
   const [activeTab, setActiveTab] = useState<"BOOK" | "LOADSHEET">("BOOK");
 
@@ -238,6 +278,32 @@ export default function BookingsPage() {
   const defaultCourierKey = configuredCouriers[0]?.key || "RIDER";
   const [selectedCourierKey, setSelectedCourierKey] = useState(defaultCourierKey);
   const activeCourier = configuredCouriers.find((c) => c.key === selectedCourierKey) || configuredCouriers[0];
+
+  useEffect(() => {
+    if (selectedCourierKey === "RIDER") return;
+    courierOptionsFetcher.submit(
+      { intent: "LOAD_COURIER_OPTIONS", providerName: selectedCourierKey },
+      { method: "post" },
+    );
+  }, [selectedCourierKey]);
+
+  const fetchedCourierOptions = courierOptionsFetcher.data;
+  const activeCourierOptions = fetchedCourierOptions?.intent === "LOAD_COURIER_OPTIONS"
+    && fetchedCourierOptions.providerName === selectedCourierKey
+    ? fetchedCourierOptions
+    : null;
+  const courierOptionsLoading = selectedCourierKey !== "RIDER"
+    && (courierOptionsFetcher.state !== "idle" || !activeCourierOptions);
+  const availableServiceTypes = selectedCourierKey === "RIDER"
+    ? ["Normal"]
+    : (activeCourierOptions?.serviceTypes || []);
+  const availableCityOptions = (serviceType: string) => {
+    if (selectedCourierKey === "RIDER") return MAJOR_PAKISTANI_CITIES;
+    if (!activeCourierOptions) return [];
+    return serviceType === "Reverse"
+      ? activeCourierOptions.pickupCities || []
+      : activeCourierOptions.deliveryCities || [];
+  };
 
   // Selection & Editing state for orders
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
