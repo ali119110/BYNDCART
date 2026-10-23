@@ -63,7 +63,8 @@ test("Pakistani Logistics - City matching and abbreviation aliases", () => {
 
   // Unknown city fallback
   assert.strictEqual(matchPakistaniCity("NonExistentCity123"), "NonExistentCity123");
-  assert.strictEqual(matchPakistaniCity(""), "Karachi");
+  assert.strictEqual(matchPakistaniCity(""), "", "missing city/address must not default to Karachi");
+  assert.strictEqual(matchPakistaniCity("", ""), "", "missing city and address must require an explicit selection");
 
   // Verify major cities list contains expected entries
   assert.ok(MAJOR_PAKISTANI_CITIES.includes("Karachi"));
