@@ -15,13 +15,21 @@ import {
   listLoadsheets,
 } from "../services/loadsheet.server";
 import { getDecryptedCourierCredentials } from "../services/courier.server";
-import { MAJOR_PAKISTANI_CITIES } from "../services/pakistanLogistics";
+import { isValidPakistaniMobile, MAJOR_PAKISTANI_CITIES } from "../services/pakistanLogistics";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { shopifyStoreId, admin } = await requireTenantContext(request);
 
-  // Load ONLY live Shopify unfulfilled orders (no DB fallback that inflates count)
-  const unfulfilledOrders = await fetchUnfulfilledOrders(admin, shopifyStoreId, 100);
+  // Booking must reflect the current Shopify state, never stale database snapshots.
+  let unfulfilledOrders: UnfulfilledOrder[] = [];
+  let bookingLoadError: string | null = null;
+  try {
+    unfulfilledOrders = await fetchUnfulfilledOrders(admin, shopifyStoreId, 100);
+  } catch (error) {
+    bookingLoadError = error instanceof Error
+      ? error.message
+      : "Unable to load current unfulfilled orders from Shopify. Reload the page and try again.";
+  }
 
   // Check which couriers have active credentials - pass credentials details for pickup address
   const [postexCreds, leopardsCreds, tcsCreds] = await Promise.all([
@@ -78,6 +86,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   return {
     unfulfilledOrders,
+    bookingLoadError,
     configuredCouriers,
     unassignedShipments,
     pastLoadsheets,
@@ -185,7 +194,7 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 export default function BookingsPage() {
-  const { unfulfilledOrders, configuredCouriers, unassignedShipments, pastLoadsheets } = useLoaderData<typeof loader>();
+  const { unfulfilledOrders, bookingLoadError, configuredCouriers, unassignedShipments, pastLoadsheets } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
@@ -216,6 +225,13 @@ export default function BookingsPage() {
   const [selectDate, setSelectDate] = useState("");
   const [financialFilter, setFinancialFilter] = useState("ALL");
   const [fulfillmentFilter, setFulfillmentFilter] = useState("ALL");
+  const [appliedFilters, setAppliedFilters] = useState({
+    searchOrder: "",
+    searchTag: "",
+    selectDate: "",
+    financialFilter: "ALL",
+    fulfillmentFilter: "ALL",
+  });
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -228,12 +244,12 @@ export default function BookingsPage() {
   const [selectedShipmentIds, setSelectedShipmentIds] = useState<string[]>([]);
   const [barcodeScanInput, setBarcodeScanInput] = useState("");
 
-  // Filtering orders
+  // Filtering orders only when the Search button is pressed.
   const filteredOrders = useMemo(() => {
     return unfulfilledOrders.filter((order) => {
       // Order search
-      if (searchOrder.trim()) {
-        const q = searchOrder.trim().toLowerCase();
+      if (appliedFilters.searchOrder.trim()) {
+        const q = appliedFilters.searchOrder.trim().toLowerCase();
         const matches =
           order.name.toLowerCase().includes(q) ||
           order.customerName.toLowerCase().includes(q) ||
@@ -243,35 +259,34 @@ export default function BookingsPage() {
       }
 
       // Tag search
-      if (searchTag.trim()) {
-        const t = searchTag.trim().toLowerCase();
+      if (appliedFilters.searchTag.trim()) {
+        const t = appliedFilters.searchTag.trim().toLowerCase();
         const matchesTag = order.tags.some((tag) => tag.toLowerCase().includes(t));
         if (!matchesTag) return false;
       }
 
       // Date filter
-      if (selectDate) {
+      if (appliedFilters.selectDate) {
         const orderDateStr = order.createdAt.slice(0, 10);
-        if (orderDateStr !== selectDate) return false;
+        if (orderDateStr !== appliedFilters.selectDate) return false;
       }
 
       // Financial status filter
-      if (financialFilter !== "ALL") {
+      if (appliedFilters.financialFilter !== "ALL") {
         const finStatus = (order.displayFinancialStatus || "").toUpperCase();
-        if (financialFilter === "PENDING" && finStatus !== "PENDING") return false;
-        if (financialFilter === "PAID" && finStatus !== "PAID") return false;
-        if (financialFilter === "PARTIALLY_PAID" && finStatus !== "PARTIALLY_PAID") return false;
-        if (financialFilter === "VOIDED" && finStatus !== "VOIDED") return false;
+        if (appliedFilters.financialFilter === "PENDING" && finStatus !== "PENDING") return false;
+        if (appliedFilters.financialFilter === "PAID" && finStatus !== "PAID") return false;
+        if (appliedFilters.financialFilter === "PARTIALLY_PAID" && finStatus !== "PARTIALLY_PAID") return false;
+        if (appliedFilters.financialFilter === "VOIDED" && finStatus !== "VOIDED") return false;
       }
 
-      // Fulfillment filter
-      if (fulfillmentFilter !== "ALL") {
-        if (fulfillmentFilter === "UNFULFILLED" && order.alreadyBooked) return false;
-      }
+      // The source query intentionally contains only unfulfilled orders.
+      if (appliedFilters.fulfillmentFilter !== "ALL"
+        && order.displayFulfillmentStatus !== appliedFilters.fulfillmentFilter) return false;
 
       return true;
     });
-  }, [unfulfilledOrders, searchOrder, searchTag, selectDate, financialFilter, fulfillmentFilter]);
+  }, [unfulfilledOrders, appliedFilters]);
 
   // Paginated slice
   const paginatedOrders = useMemo(() => {
@@ -305,25 +320,47 @@ export default function BookingsPage() {
     }));
   };
 
-  // Build bulk payload
+  // Build a complete, validated carrier payload from the current order snapshot.
   const bulkBookingPayload = useMemo(() => {
-    return selectedOrderIds.map((id) => {
+    return selectedOrderIds.flatMap((id) => {
       const order = unfulfilledOrders.find((o) => o.id === id);
+      if (!order || order.alreadyBooked) return [];
       const edit = orderEdits[id] || {};
-      return {
-        orderId: order?.id,
-        orderNumber: order?.name,
+      return [{
+        orderId: order.id,
+        orderNumber: order.name,
         courier: selectedCourierKey,
-        customerName: edit.name || order?.customerName,
-        customerPhone: edit.phone || order?.customerPhone,
-        customerAddress: edit.address || `${order?.address1 || ""} ${order?.address2 || ""}`.trim(),
-        cityName: edit.city || order?.matchedCity || "Karachi",
-        codAmountPKR: edit.cod !== undefined ? edit.cod : (order?.suggestedCod || 0),
-        weightKg: edit.weight !== undefined ? edit.weight : (order?.suggestedWeight || 0.5),
+        serviceType: selectedCourierKey === "RIDER" ? "Normal" : (edit.type || "Normal"),
+        customerName: edit.name !== undefined ? edit.name : order.customerName,
+        customerPhone: edit.phone !== undefined ? edit.phone : order.customerPhone,
+        customerAddress: edit.address !== undefined ? edit.address : [order.address1, order.address2].filter(Boolean).join(", ").trim(),
+        cityName: edit.city !== undefined ? edit.city : (order.matchedCity || ""),
+        codAmountPKR: edit.cod !== undefined ? edit.cod : order.suggestedCod,
+        weightKg: edit.weight !== undefined ? edit.weight : order.suggestedWeight,
         remarks: edit.remarks || "Allow customer to check flyer before payment",
-      };
+        items: order.items.map((item) => ({
+          title: item.title,
+          quantity: item.quantity,
+          price: item.price,
+          sku: item.sku,
+        })),
+      }];
     });
   }, [selectedOrderIds, unfulfilledOrders, orderEdits, selectedCourierKey]);
+
+  const selectedBookingIssues = bulkBookingPayload.filter((booking) => {
+    return !booking.orderId
+      || !String(booking.customerName || "").trim()
+      || !isValidPakistaniMobile(String(booking.customerPhone || ""))
+      || String(booking.customerAddress || "").trim().length < 8
+      || !String(booking.cityName || "").trim()
+      || !Number.isFinite(Number(booking.weightKg))
+      || Number(booking.weightKg) <= 0
+      || Number(booking.weightKg) > 50
+      || !Number.isFinite(Number(booking.codAmountPKR))
+      || Number(booking.codAmountPKR) < 0;
+  });
+  const canUploadSelectedOrders = bulkBookingPayload.length > 0 && selectedBookingIssues.length === 0;
 
   // Barcode scanner submission for loadsheet
   const handleBarcodeScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -346,12 +383,18 @@ export default function BookingsPage() {
   };
 
   return (
-    <div className="bc-page" style={{ maxWidth: "1500px", padding: "16px 20px" }}>
+    <div className="bc-page" style={{ width: "100%", maxWidth: "none", minWidth: 0, padding: "16px 20px", boxSizing: "border-box" }}>
 
+      {bookingLoadError && (
+        <div className="bc-note bad" role="alert" style={{ marginBottom: "12px" }}>
+          {bookingLoadError}
+        </div>
+      )}
       {actionData?.message && (
         <div
           className={`bc-note ${actionData.ok ? "ok" : "bad"}`}
           style={{ marginBottom: "12px" }}
+          role={actionData.ok ? "status" : "alert"}
         >
           {actionData.message}
         </div>
@@ -365,7 +408,7 @@ export default function BookingsPage() {
           onClick={() => setActiveTab("BOOK")}
           style={{ fontWeight: 700 }}
         >
-          Create Booking ({filteredOrders.length} Unfulfilled)
+          Create Booking ({unfulfilledOrders.length} Unfulfilled)
         </button>
         <button
           type="button"
@@ -572,6 +615,16 @@ export default function BookingsPage() {
             <button
               type="button"
               className="bc-btn"
+              onClick={() => {
+                setAppliedFilters({
+                  searchOrder,
+                  searchTag,
+                  selectDate,
+                  financialFilter,
+                  fulfillmentFilter,
+                });
+                setCurrentPage(1);
+              }}
               style={{
                 height: "38px",
                 padding: "0 24px",
@@ -603,22 +656,27 @@ export default function BookingsPage() {
               padding: "10px 14px",
             }}
           >
-            <div style={{ display: "flex", gap: "24px", flexWrap: "wrap", flex: 1 }}>
-              <div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px", flex: 1 }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: 0 }}>
+                <span style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Shipper Profile</span>
+                <input
+                  aria-label="Shipper Profile"
+                  readOnly
+                  value={activeCourier ? `FEAR | ${activeCourier.label} account` : ""}
+                  placeholder="Configure a courier account"
+                  style={{ height: "36px", width: "100%", boxSizing: "border-box", padding: "0 10px", border: "1px solid #cbd5e1", borderRadius: "5px", background: "#fff", color: "#0f172a", fontSize: "13px" }}
+                />
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: 0 }}>
                 <span style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Pickup Location</span>
-                <div style={{ fontSize: "13px", fontWeight: 600, color: "#0f172a", marginTop: "2px" }}>
-                  {activeCourier?.pickupAddress
-                    ? `${activeCourier.pickupAddress}, ${activeCourier.pickupCity}`
-                    : activeCourier?.pickupCity
-                    ? activeCourier.pickupCity
-                    : <span style={{ color: "#94a3b8" }}>Not set — configure in Courier Settings</span>
-                  }
-                </div>
-              </div>
-              <div>
-                <span style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Courier</span>
-                <div style={{ fontSize: "13px", fontWeight: 600, color: "#0f172a", marginTop: "2px" }}>{activeCourier?.label || "—"}</div>
-              </div>
+                <input
+                  aria-label="Pickup Location"
+                  readOnly
+                  value={activeCourier ? [activeCourier.pickupAddress, activeCourier.pickupCity].filter(Boolean).join(", ") : ""}
+                  placeholder="Not set — configure in Courier Settings"
+                  style={{ height: "36px", width: "100%", boxSizing: "border-box", padding: "0 10px", border: "1px solid #cbd5e1", borderRadius: "5px", background: "#fff", color: "#0f172a", fontSize: "13px" }}
+                />
+              </label>
             </div>
 
             {/* Back / Next Pagination */}
@@ -701,7 +759,7 @@ export default function BookingsPage() {
                     const currentName = edit.name !== undefined ? edit.name : order.customerName;
                     const currentPhone = edit.phone !== undefined ? edit.phone : order.customerPhone;
                     const currentAddress = edit.address !== undefined ? edit.address : `${order.address1 || ""} ${order.address2 || ""}`.trim();
-                    const currentCity = edit.city || order.matchedCity || "Lahore";
+                    const currentCity = edit.city !== undefined ? edit.city : order.matchedCity;
                     const currentCod = edit.cod !== undefined ? edit.cod : order.suggestedCod;
                     const currentWeight = edit.weight !== undefined ? edit.weight : order.suggestedWeight;
                     const currentType = edit.type || "Normal";
@@ -709,7 +767,16 @@ export default function BookingsPage() {
                     const isSelected = selectedOrderIds.includes(order.id);
 
                     // Validation status: phone has digits, address has content, city is chosen
-                    const isValid = Boolean(currentPhone && currentPhone.length >= 10 && currentAddress.length >= 5 && currentCity);
+                    const isValid = Boolean(
+                      currentName.trim()
+                      && isValidPakistaniMobile(currentPhone)
+                      && currentAddress.trim().length >= 8
+                      && currentCity
+                      && Number.isFinite(Number(currentWeight))
+                      && currentWeight > 0
+                      && Number.isFinite(Number(currentCod))
+                      && currentCod >= 0
+                    );
 
                     return (
                       <tr
@@ -903,7 +970,7 @@ export default function BookingsPage() {
                         <td style={{ padding: "8px 8px" }}>
                           <select
                             value={currentType}
-                            disabled={order.alreadyBooked}
+                            disabled={order.alreadyBooked || selectedCourierKey === "RIDER"}
                             onChange={(e) => handleEditOrder(order.id, "type", e.target.value)}
                             style={{
                               width: "100%",
@@ -918,8 +985,7 @@ export default function BookingsPage() {
                           >
                             <option value="Normal">Normal</option>
                             <option value="Reverse">Reverse</option>
-                            <option value="Overnight">Overnight</option>
-                            <option value="Detain">Detain</option>
+                            <option value="Replacement">Replacement</option>
                           </select>
                         </td>
 
@@ -994,31 +1060,36 @@ export default function BookingsPage() {
             </table>
           </div>
 
-          {/* Centered Big Prominent Upload Booking Button (Universal Courier Style) */}
+          {/* Centered Upload Booking action. Invalid data is blocked before it reaches the carrier API. */}
           <div style={{ textAlign: "center", margin: "28px 0 20px" }}>
+            {bulkBookingPayload.length > 0 && selectedBookingIssues.length > 0 && (
+              <p role="alert" style={{ color: "#b91c1c", fontSize: "13px", margin: "0 0 12px" }}>
+                Fix the highlighted customer details before uploading. {selectedBookingIssues.length} selected order(s) need attention.
+              </p>
+            )}
             <Form method="post" style={{ display: "inline-block" }}>
               <input type="hidden" name="intent" value="BOOK_BULK" />
               <input type="hidden" name="bulkPayload" value={JSON.stringify(bulkBookingPayload)} />
               <button
                 type="submit"
-                disabled={isSubmitting || selectedOrderIds.length === 0}
+                disabled={isSubmitting || !canUploadSelectedOrders}
                 style={{
-                  background: selectedOrderIds.length > 0 ? "#16a34a" : "#94a3b8",
+                  background: canUploadSelectedOrders ? "#16834b" : "#94a3b8",
                   color: "#ffffff",
                   border: "none",
                   padding: "13px 44px",
-                  borderRadius: "8px",
+                  borderRadius: "6px",
                   fontSize: "15px",
                   fontWeight: 700,
-                  letterSpacing: "0.02em",
-                  cursor: selectedOrderIds.length > 0 ? "pointer" : "not-allowed",
-                  boxShadow: selectedOrderIds.length > 0 ? "0 4px 14px rgba(22, 163, 74, 0.35)" : "none",
+                  letterSpacing: "0.01em",
+                  cursor: canUploadSelectedOrders ? "pointer" : "not-allowed",
+                  boxShadow: canUploadSelectedOrders ? "0 2px 5px rgba(15, 23, 42, 0.15)" : "none",
                   transition: "all 140ms ease",
                 }}
               >
                 {isSubmitting
                   ? "Uploading Booking..."
-                  : `Upload Booking${selectedOrderIds.length > 0 ? ` (${selectedOrderIds.length})` : ""}`}
+                  : `Upload Booking${bulkBookingPayload.length > 0 ? ` (${bulkBookingPayload.length})` : ""}`}
               </button>
             </Form>
           </div>
