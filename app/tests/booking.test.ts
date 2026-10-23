@@ -96,6 +96,85 @@ test("Barcode Generator - Code-128 SVG creation", () => {
   assert.ok(numSvg.includes("<rect"));
 });
 
+test("Booking service extracts COD from Shopify gateway and outstanding balance", async () => {
+  const orderNode = (input: {
+    name: string;
+    financialStatus: string;
+    gateways: string[];
+    total: string;
+    outstanding: string;
+  }) => ({
+    id: `gid://shopify/Order/${input.name.replace(/\D/g, "") || "1"}`,
+    name: input.name,
+    createdAt: "2026-10-23T10:00:00.000Z",
+    displayFinancialStatus: input.financialStatus,
+    displayFulfillmentStatus: "UNFULFILLED",
+    paymentGatewayNames: input.gateways,
+    tags: [],
+    currentTotalPriceSet: { shopMoney: { amount: input.total } },
+    totalPriceSet: { shopMoney: { amount: input.total } },
+    totalOutstandingSet: { shopMoney: { amount: input.outstanding } },
+    customer: { firstName: "Test", lastName: "Customer", email: "test@example.com", phone: "03001234567" },
+    shippingAddress: {
+      name: "Test Customer",
+      phone: "03001234567",
+      address1: "10 Test Road",
+      address2: "",
+      city: "Karachi",
+      province: "Sindh",
+      zip: "74000",
+      country: "Pakistan",
+    },
+    lineItems: { edges: [] },
+  });
+
+  const nodes = [
+    orderNode({
+      name: "#COD-100",
+      financialStatus: "PENDING",
+      gateways: ["Cash on Delivery (COD)"],
+      total: "12500.00",
+      outstanding: "12500.00",
+    }),
+    orderNode({
+      name: "#COD-PAID-101",
+      financialStatus: "PAID",
+      gateways: ["Cash on Delivery (COD)"],
+      total: "7990.00",
+      outstanding: "0.00",
+    }),
+    orderNode({
+      name: "#ONLINE-102",
+      financialStatus: "PENDING",
+      gateways: ["Shopify Payments"],
+      total: "3000.00",
+      outstanding: "3000.00",
+    }),
+  ];
+
+  const shipmentTrack = (prisma as any).shipmentTrack;
+  const originalFindMany = shipmentTrack.findMany;
+  shipmentTrack.findMany = async () => [];
+  try {
+    const { fetchUnfulfilledOrders } = await import("../services/booking.server");
+    const orders = await fetchUnfulfilledOrders({
+      graphql: async () => new Response(JSON.stringify({
+        data: { orders: { edges: nodes.map((node) => ({ node })) } },
+      }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    }, "store-cod-test", 100);
+
+    const codOrder = orders.find((order) => order.name === "#COD-100");
+    const paidCodOrder = orders.find((order) => order.name === "#COD-PAID-101");
+    const onlineOrder = orders.find((order) => order.name === "#ONLINE-102");
+
+    assert.strictEqual(codOrder?.suggestedCod, 12500);
+    assert.strictEqual(paidCodOrder?.suggestedCod, 7990, "COD gateway should retain the order total if a COD app marks it paid");
+    assert.strictEqual(onlineOrder?.suggestedCod, 0, "a pending online payment must not be mistaken for COD");
+  } finally {
+    shipmentTrack.findMany = originalFindMany;
+  }
+});
+
 test("Loadsheet Service - Loadsheet creation and parcel assignment", async () => {
   const mockShipments = [
     {
