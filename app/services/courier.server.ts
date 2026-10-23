@@ -1872,6 +1872,19 @@ function uniqueOptionStrings(values: unknown[]): string[] {
     .sort((a, b) => a.localeCompare(b));
 }
 
+function uniqueOptionStringsInOrder(values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const label = String(value || "").trim();
+    if (label && !seen.has(label)) {
+      seen.add(label);
+      result.push(label);
+    }
+  }
+  return result;
+}
+
 function normalizePostExOrderType(value: unknown): string | null {
   const label = String(value || "").trim();
   if (!label) return null;
@@ -1944,7 +1957,8 @@ async function fetchMerchantCourierBookingOptionsUncached(
     if (!typesResponse.ok || Number(typesPayload?.statusCode) !== 200 || !Array.isArray(typesPayload?.dist)) {
       throw new Error(apiPayloadMessage(typesPayload, `PostEx could not load its supported order types (HTTP ${typesResponse.status}).`));
     }
-    const serviceTypes = uniqueOptionStrings(typesPayload.dist
+    // Preserve the exact order from the carrier API while displaying friendly "Reverse" for "Reversed".
+    const serviceTypes = uniqueOptionStringsInOrder(typesPayload.dist
       .map((item: any) => normalizePostExOrderType(typeof item === "string" ? item : item?.orderType || item?.type || item?.name))
       .filter(Boolean));
     if (!serviceTypes.length) throw new Error("PostEx returned an empty supported-order-type list.");
