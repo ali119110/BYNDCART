@@ -300,7 +300,7 @@ export default function BookingsPage() {
   const availableCityOptions = (serviceType: string) => {
     if (selectedCourierKey === "RIDER") return MAJOR_PAKISTANI_CITIES;
     if (!activeCourierOptions) return [];
-    return serviceType === "Reverse"
+    return serviceType === "Reverse" || serviceType === "Reversed"
       ? activeCourierOptions.pickupCities || []
       : activeCourierOptions.deliveryCities || [];
   };
