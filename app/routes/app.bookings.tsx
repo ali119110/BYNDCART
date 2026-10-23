@@ -143,7 +143,7 @@ export async function action({ request }: ActionFunctionArgs) {
         orderId,
         orderNumber,
         courier,
-        serviceType: serviceType as "Normal" | "Reverse" | "Replacement" | "Overland",
+        serviceType,
         customerName,
         customerPhone,
         customerAddress,
