@@ -110,7 +110,10 @@ const UNFULFILLED_ORDERS_QUERY = `#graphql
                 title
                 quantity
                 sku
-                grams
+                weight {
+                  value
+                  unit
+                }
                 originalUnitPriceSet {
                   shopMoney {
                     amount
@@ -216,6 +219,24 @@ export function normalizeCourierName(courier: string): string {
  * Queries live Shopify GraphQL. Only falls back to database if admin client
  * is completely unavailable (offline mode / no session).
  */
+function lineItemWeightInGrams(weight: any): number {
+  const value = Number(weight?.value);
+  if (!Number.isFinite(value) || value <= 0) return 250;
+
+  switch (String(weight?.unit || "").toUpperCase()) {
+    case "GRAMS":
+      return value;
+    case "KILOGRAMS":
+      return value * 1000;
+    case "OUNCES":
+      return value * 28.349523125;
+    case "POUNDS":
+      return value * 453.59237;
+    default:
+      return 250;
+  }
+}
+
 export async function fetchUnfulfilledOrders(
   admin: any,
   shopifyStoreId: string,
@@ -279,7 +300,7 @@ export async function fetchUnfulfilledOrders(
           title: e.node.title,
           quantity: e.node.quantity,
           sku: e.node.sku || undefined,
-          grams: e.node.grams || 250,
+          grams: lineItemWeightInGrams(e.node.weight),
           price: Number(e.node.originalUnitPriceSet?.shopMoney?.amount || 0),
         }));
 
@@ -320,7 +341,8 @@ export async function fetchUnfulfilledOrders(
       return mappedOrders.filter((order) => !order.alreadyBooked);
     } catch (error) {
       console.error("[Booking] Live Shopify GraphQL query failed; refusing stale database orders:", error);
-      throw new Error("Unable to load current unfulfilled orders from Shopify. Check the app's order access and reload the page.");
+      const details = error instanceof Error ? error.message : "Unknown Shopify GraphQL error.";
+      throw new Error(`Unable to load current unfulfilled orders from Shopify: ${details}`);
     }
   }
 
