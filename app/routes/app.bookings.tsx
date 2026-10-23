@@ -343,6 +343,12 @@ export default function BookingsPage() {
   // Searchable city picker modal, scoped to the order currently being edited.
   const [cityPickerOrderId, setCityPickerOrderId] = useState<string | null>(null);
   const [citySearchQuery, setCitySearchQuery] = useState("");
+  const [cityPickerAnchor, setCityPickerAnchor] = useState<{
+    top: number;
+    left: number;
+    width: number;
+    maxHeight: number;
+  } | null>(null);
 
   // Loadsheet selection
   const [selectedShipmentIds, setSelectedShipmentIds] = useState<string[]>([]);
@@ -614,8 +620,20 @@ export default function BookingsPage() {
         </div>
       )}
 
-      {/* Main Tabs */}
-      <div style={{ display: "flex", gap: "8px", borderBottom: "1px solid #e2e8f0", paddingBottom: "10px", marginBottom: "16px" }}>
+      {/* Booking tools — primary actions, courier selector and settings share one responsive row */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: "8px",
+          borderBottom: "1px solid #e2e8f0",
+          paddingBottom: "10px",
+          marginBottom: "16px",
+          width: "100%",
+          minWidth: 0,
+        }}
+      >
         <button
           type="button"
           className={`bc-btn ${activeTab === "BOOK" ? "primary" : ""}`}
@@ -631,6 +649,62 @@ export default function BookingsPage() {
         >
           Rider Loadsheet & Scanner ({unassignedShipments.length} Ready)
         </button>
+
+        {activeTab === "BOOK" && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              flexWrap: "wrap",
+              gap: "8px",
+              minWidth: 0,
+              flex: "0 1 auto",
+            }}
+          >
+            <span style={{ color: "#64748b", fontSize: "12px", fontWeight: 700, whiteSpace: "nowrap" }}>COURIER</span>
+            {configuredCouriers.length === 0 ? (
+              <Link to="/app/couriers" style={{ color: "#dc2626", fontWeight: 700, fontSize: "13px", textDecoration: "none" }}>
+                Set up courier API
+              </Link>
+            ) : (
+              <select
+                aria-label="Select courier for booking"
+                value={selectedCourierKey}
+                onChange={(e) => {
+                  setSelectedCourierKey(e.target.value);
+                  setCityPickerOrderId(null);
+                  setCityPickerAnchor(null);
+                  setCitySearchQuery("");
+                }}
+                style={{
+                  boxSizing: "border-box",
+                  height: "38px",
+                  minWidth: "165px",
+                  maxWidth: "220px",
+                  padding: "0 12px",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "8px",
+                  fontSize: "13px",
+                  fontWeight: 700,
+                  background: "#0f172a",
+                  color: "#ffffff",
+                  cursor: "pointer",
+                }}
+              >
+                {configuredCouriers.map((courier) => (
+                  <option key={courier.key} value={courier.key}>{courier.label}</option>
+                ))}
+              </select>
+            )}
+            <Link
+              to="/app/couriers"
+              style={{ fontSize: "13px", color: "#2563eb", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap", padding: "8px 4px" }}
+            >
+              ⚙ Courier Settings
+            </Link>
+          </div>
+        )}
+
         <button
           type="button"
           className="bc-btn"
@@ -643,83 +717,6 @@ export default function BookingsPage() {
 
       {activeTab === "BOOK" && (
         <div>
-          {/* Courier Brand Header + Dropdown Selector */}
-          <div style={{ textAlign: "center", margin: "12px 0 18px" }}>
-            {/* Courier branding display */}
-            {activeCourier?.key === "POSTEX" && (
-              <div style={{ display: "inline-flex", alignItems: "baseline", gap: "2px" }}>
-                <span style={{ fontSize: "34px", fontWeight: 900, color: "#0f172a", letterSpacing: "-0.04em" }}>PostEx</span>
-                <span style={{ fontSize: "36px", fontWeight: 900, color: "#16a34a" }}>.</span>
-              </div>
-            )}
-            {activeCourier?.key === "LEOPARDS" && (
-              <div style={{ display: "inline-flex", alignItems: "baseline", gap: "6px" }}>
-                <span style={{ fontSize: "32px", fontWeight: 900, color: "#ca8a04", letterSpacing: "-0.03em" }}>LEOPARDS</span>
-                <span style={{ fontSize: "32px", fontWeight: 900, color: "#0f172a" }}>COURIER</span>
-              </div>
-            )}
-            {activeCourier?.key === "TCS" && (
-              <div style={{ display: "inline-flex", alignItems: "baseline", gap: "6px" }}>
-                <span style={{ fontSize: "32px", fontWeight: 900, color: "#dc2626", letterSpacing: "-0.03em" }}>TCS</span>
-                <span style={{ fontSize: "32px", fontWeight: 900, color: "#0f172a" }}>EXPRESS</span>
-              </div>
-            )}
-            {activeCourier?.key === "RIDER" && (
-              <div style={{ display: "inline-flex", alignItems: "baseline", gap: "6px" }}>
-                <span style={{ fontSize: "32px", fontWeight: 900, color: "#2563eb", letterSpacing: "-0.03em" }}>IN-HOUSE</span>
-                <span style={{ fontSize: "32px", fontWeight: 900, color: "#0f172a" }}>RIDER</span>
-              </div>
-            )}
-            {!activeCourier && (
-              <div style={{ fontSize: "20px", color: "#94a3b8", marginBottom: "8px" }}>No Couriers Configured</div>
-            )}
-            <p style={{ margin: "4px 0 12px", fontSize: "13px", fontWeight: 500, color: "#64748b" }}>
-              Create Booking with {activeCourier?.label || "—"}
-            </p>
-
-            {/* Courier List Dropdown — only shows configured couriers */}
-            <div style={{ display: "inline-flex", alignItems: "center", gap: "10px" }}>
-              {configuredCouriers.length === 0 ? (
-                <Link to="/app/couriers" style={{ color: "#dc2626", fontWeight: 700, fontSize: "13px", textDecoration: "none" }}>
-                  ⚠ No courier configured — Click to set up courier API
-                </Link>
-              ) : (
-                <select
-                  value={selectedCourierKey}
-                  onChange={(e) => {
-                    setSelectedCourierKey(e.target.value);
-                    setCityPickerOrderId(null);
-                    setCitySearchQuery("");
-                  }}
-                  style={{
-                    height: "38px",
-                    padding: "0 14px",
-                    border: "2px solid #0f172a",
-                    borderRadius: "8px",
-                    fontSize: "14px",
-                    fontWeight: 700,
-                    background: "#0f172a",
-                    color: "#ffffff",
-                    cursor: "pointer",
-                    minWidth: "220px",
-                  }}
-                >
-                  {configuredCouriers.map((c) => (
-                    <option key={c.key} value={c.key}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <Link
-                to="/app/couriers"
-                style={{ fontSize: "13px", color: "#2563eb", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}
-              >
-                ⚙ Courier Settings
-              </Link>
-            </div>
-          </div>
-
           {selectedCourierKey !== "RIDER" && (courierOptionsLoading || activeCourierOptions?.error) && (
             <div
               className={activeCourierOptions?.error ? "bc-note bad" : "bc-note"}
@@ -989,6 +986,22 @@ export default function BookingsPage() {
               min-width: 0;
               overflow: hidden;
             }
+            .bc-booking-table tbody tr {
+              height: 88px;
+            }
+            .bc-booking-table tbody td {
+              vertical-align: middle;
+            }
+            .bc-booking-table .bc-customer-email,
+            .bc-booking-table .bc-shopify-address-city {
+              display: block;
+              height: 14px;
+              line-height: 14px;
+              margin-top: 4px;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
             .bc-booking-table th {
               white-space: normal;
               overflow-wrap: anywhere;
@@ -1243,7 +1256,16 @@ export default function BookingsPage() {
                             aria-label={`Choose ${selectedCourierKey} city for ${order.name}`}
                             title={currentCity || "Search carrier cities"}
                             disabled={order.alreadyBooked || courierOptionsLoading || currentCityOptions.length === 0}
-                            onClick={() => {
+                            onClick={(event) => {
+                              const rect = event.currentTarget.getBoundingClientRect();
+                              const width = Math.min(rect.width, window.innerWidth - 16);
+                              const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+                              setCityPickerAnchor({
+                                top: rect.top,
+                                left,
+                                width,
+                                maxHeight: Math.max(160, Math.min(360, rect.top - 16)),
+                              });
                               setCityPickerOrderId(order.id);
                               setCitySearchQuery("");
                             }}
