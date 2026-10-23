@@ -261,12 +261,6 @@ function matchCarrierOption(value: string | undefined, options: string[]): strin
   return options.find((option) => option.trim().toLocaleLowerCase() === normalized) || "";
 }
 
-function currentCityForPicker(
-  order: UnfulfilledOrder,
-  edits: Record<string, { city?: string }>,
-): string {
-  return edits[order.id]?.city || order.city || order.matchedCity || "";
-}
 
 export default function BookingsPage() {
   const { unfulfilledOrders, bookingLoadError, configuredCouriers, unassignedShipments, pastLoadsheets } = useLoaderData<typeof loader>();
@@ -592,6 +586,12 @@ export default function BookingsPage() {
     ? availableCityOptions(cityPickerServiceType)
     : [];
   const normalizedCitySearch = citySearchQuery.trim().toLocaleLowerCase();
+  const cityPickerSelectedCity = cityPickerOrder
+    ? matchCarrierOption(
+      cityPickerEdit.city !== undefined ? cityPickerEdit.city : cityPickerOrder.matchedCity,
+      cityPickerOptions,
+    )
+    : "";
   const filteredCityPickerOptions = cityPickerOptions.filter((city) =>
     city.toLocaleLowerCase().includes(normalizedCitySearch)
   );
@@ -1768,7 +1768,7 @@ export default function BookingsPage() {
                   <button
                     type="button"
                     role="option"
-                    aria-selected={currentCityForPicker(cityPickerOrder, orderEdits) === city}
+                    aria-selected={cityPickerSelectedCity === city}
                     key={city}
                     onClick={() => {
                       handleEditOrder(cityPickerOrder.id, "city", city);
@@ -1786,16 +1786,16 @@ export default function BookingsPage() {
                       padding: "9px 12px",
                       border: "1px solid transparent",
                       borderRadius: "8px",
-                      background: currentCityForPicker(cityPickerOrder, orderEdits) === city ? "#eff6ff" : "#ffffff",
+                      background: cityPickerSelectedCity === city ? "#eff6ff" : "#ffffff",
                       color: "#0f172a",
                       fontSize: "13px",
-                      fontWeight: currentCityForPicker(cityPickerOrder, orderEdits) === city ? 700 : 500,
+                      fontWeight: cityPickerSelectedCity === city ? 700 : 500,
                       textAlign: "left",
                       cursor: "pointer",
                     }}
                   >
                     <span>{city}</span>
-                    {currentCityForPicker(cityPickerOrder, orderEdits) === city && <span aria-hidden="true" style={{ color: "#2563eb", fontWeight: 800 }}>✓</span>}
+                    {cityPickerSelectedCity === city && <span aria-hidden="true" style={{ color: "#2563eb", fontWeight: 800 }}>✓</span>}
                   </button>
                 ))
               )}
