@@ -242,7 +242,7 @@ async function validatePostExCity(token: string, cityName: string, orderType: "N
   const operationalCityType = orderType === "Reverse" ? "Pickup" : "Delivery";
   const normalized = cityName.trim().toLocaleLowerCase().replace(/\s+/g, " ");
   if (!normalized) throw new Error("Enter a city supported by PostEx.");
-  const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${operationalCityType}`, {
+  const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${operationalCityType.toLowerCase()}`, {
     method: "GET",
     headers: { token, Accept: "application/json" },
   });
@@ -326,7 +326,8 @@ export class PostExCourierAdapter implements ICourierAdapter {
       cityName,
       invoiceDivision: 1,
       items: quantity,
-      orderType,
+      // PostEx's order-types endpoint returns "Reversed"; the UI calls this mode "Reverse".
+      orderType: orderType === "Reverse" ? "Reversed" : orderType,
     };
     const pickupAddressCode = credentialValue(credentials, "pickupAddressCode");
     const storeAddressCode = credentialValue(credentials, "storeAddressCode");
@@ -1874,7 +1875,7 @@ export async function getMerchantCourierBookingOptions(
     if (!token) throw new Error("PostEx merchant API token is missing. Reconfigure PostEx in Courier Settings.");
 
     const fetchCityList = async (direction: "Pickup" | "Delivery"): Promise<string[]> => {
-      const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${direction}`, {
+      const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${direction.toLowerCase()}`, {
         method: "GET",
         headers: { token, Accept: "application/json" },
       });
