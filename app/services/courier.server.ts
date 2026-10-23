@@ -80,6 +80,8 @@ export interface ShipmentInput {
   cityName?: string;
   /** RETURN uses customer address as origin; FORWARD/EXCHANGE uses destinationAddress. */
   shipmentType?: "RETURN" | "FORWARD" | "EXCHANGE";
+  /** Carrier-specific API order type selected in the booking grid, e.g. PostEx Overland. */
+  courierServiceType?: string;
   originAddress?: any;
   destinationAddress?: any;
   weightKg?: number;
@@ -238,27 +240,48 @@ function resolveLeopardsCityId(cities: LeopardsCity[], cityName: string, purpose
   return id;
 }
 
-async function validatePostExCity(token: string, cityName: string, orderType: "Normal" | "Reverse" | "Replacement"): Promise<void> {
-  const operationalCityType = orderType === "Reverse" ? "Pickup" : "Delivery";
+async function validatePostExCity(
+  shopifyStoreId: string,
+  cityName: string,
+  orderType: string,
+  fallbackToken?: string,
+): Promise<void> {
+  const operationalCityType = orderType === "Reverse" || orderType === "Reversed" ? "Pickup" : "Delivery";
   const normalized = cityName.trim().toLocaleLowerCase().replace(/\s+/g, " ");
   if (!normalized) throw new Error("Enter a city supported by PostEx.");
-  const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${operationalCityType.toLowerCase()}`, {
-    method: "GET",
-    headers: { token, Accept: "application/json" },
-  });
-  const payload = await readJson(response);
-  if (!response.ok || Number(payload?.statusCode) !== 200 || !Array.isArray(payload?.dist)) {
-    throw new Error(apiPayloadMessage(payload, "PostEx could not verify its operational city list. Retry before booking."));
+
+  // Reuse the store's persisted carrier catalog so each booking does not call the city API again.
+  let availableCities: string[];
+  try {
+    const options = await getMerchantCourierBookingOptions(shopifyStoreId, "POSTEX");
+    availableCities = operationalCityType === "Pickup" ? options.pickupCities : options.deliveryCities;
+  } catch (error) {
+    // Direct-token fallback is only for adapter integrations without a saved merchant config
+    // (for example API adapter tests). A configured merchant always uses the persisted catalog.
+    const message = error instanceof Error ? error.message : "";
+    if (!fallbackToken || !message.includes("POSTEX is not configured or enabled")) throw error;
+    const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${operationalCityType}`, {
+      method: "GET",
+      headers: { token: fallbackToken, Accept: "application/json" },
+    });
+    const payload = await readJson(response);
+    if (!response.ok || Number(payload?.statusCode) !== 200 || !Array.isArray(payload?.dist)) {
+      throw new Error(apiPayloadMessage(payload, "PostEx could not verify its operational city list."));
+    }
+    const flag = operationalCityType === "Pickup" ? "isPickupCity" : "isDeliveryCity";
+    availableCities = uniqueOptionStrings(payload.dist
+      .filter((row: any) => row && (row[flag] === undefined || row[flag] === true || String(row[flag]).toLowerCase() === "true" || String(row[flag]) === "1"))
+      .map((row: any) => row.operationalCityName || row.cityName || row.name));
   }
-  const availableCities = payload.dist as Array<Record<string, any>>;
-  const city = availableCities.find((item) => String(item?.operationalCityName || "").trim().toLocaleLowerCase().replace(/\s+/g, " ") === normalized);
+
+  const city = availableCities.find((name) => name.trim().toLocaleLowerCase().replace(/\s+/g, " ") === normalized);
   if (!city) {
-    const names = availableCities.map((item) => String(item?.operationalCityName || "").trim()).filter(Boolean).slice(0, 8).join(", ");
-    throw new Error(`PostEx does not list "${cityName}" as a ${operationalCityType.toLowerCase()} city${names ? `. Examples returned by PostEx: ${names}` : ""}. Use the exact city name supplied by the carrier.`);
-  }
-  const supportValue = operationalCityType === "Pickup" ? city.isPickupCity : city.isDeliveryCity;
-  if (supportValue === false || String(supportValue).toLowerCase() === "false" || String(supportValue) === "0") {
-    throw new Error(`PostEx does not support ${operationalCityType.toLowerCase()} service in ${cityName}.`);
+    const names = availableCities.slice(0, 8).join(", ");
+    throw new Error(
+      'PostEx does not list "' + cityName + '" as a ' + operationalCityType.toLowerCase() + " city"
+      + (names ? ". Examples returned by PostEx: " + names : "")
+      + ". Use the exact city name supplied by the carrier."
+    );
   }
 }
 
@@ -294,11 +317,11 @@ export class PostExCourierAdapter implements ICourierAdapter {
     }
   }
 
-  private async createOrder(input: ShipmentInput, credentials: any, orderType: "Normal" | "Reverse" | "Replacement"): Promise<LabelResult> {
+  private async createOrder(input: ShipmentInput, credentials: any, orderType: string): Promise<LabelResult> {
     const token = credentialValue(credentials, "apiToken");
     if (!token) return unconfirmedBooking(this.providerName, "PostEx merchant API token is missing for this store.");
 
-    const isReturn = orderType === "Reverse";
+    const isReturn = orderType === "Reverse" || orderType === "Reversed";
     const address = isReturn ? input.originAddress : input.destinationAddress;
     const customerName = String(input.customerName || "").trim();
     const customerPhoneRaw = String(input.customerPhone || "").trim();
@@ -326,7 +349,7 @@ export class PostExCourierAdapter implements ICourierAdapter {
       cityName,
       invoiceDivision: 1,
       items: quantity,
-      // PostEx's order-types endpoint returns "Reversed"; the UI calls this mode "Reverse".
+      // The UI displays "Reversed" as "Reverse"; send the provider's literal type value.
       orderType: orderType === "Reverse" ? "Reversed" : orderType,
     };
     const pickupAddressCode = credentialValue(credentials, "pickupAddressCode");
@@ -335,7 +358,7 @@ export class PostExCourierAdapter implements ICourierAdapter {
     if (storeAddressCode) body.storeAddressCode = storeAddressCode;
 
     try {
-      await validatePostExCity(token, cityName, orderType);
+      await validatePostExCity(input.shopifyStoreId, cityName, orderType, token);
     } catch (error) {
       return unconfirmedBooking(this.providerName, error instanceof Error ? error.message : "PostEx could not verify the pickup or delivery city.");
     }
@@ -376,7 +399,11 @@ export class PostExCourierAdapter implements ICourierAdapter {
   }
 
   async createForwardShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
-    return this.createOrder(input, credentials, input.shipmentType === "EXCHANGE" ? "Replacement" : "Normal");
+    const selectedType = String(input.courierServiceType || "").trim();
+    const orderType = selectedType && selectedType !== "Reverse" && selectedType !== "Reversed"
+      ? selectedType
+      : input.shipmentType === "EXCHANGE" ? "Replacement" : "Normal";
+    return this.createOrder(input, credentials, orderType);
   }
 
   async trackShipment(trackingNumber: string, credentials?: any): Promise<TrackingStatusResult> {
@@ -510,7 +537,7 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
     let originCity: number;
     let destinationCity: number;
     try {
-      cities = await loadLeopardsCities(apiKey, apiPassword, apiRoot);
+      cities = await getCachedLeopardsCityRecords(input.shopifyStoreId, credentials);
       originCity = resolveLeopardsCityId(cities, senderCityName, "origin");
       destinationCity = resolveLeopardsCityId(cities, receiverCityName, "destination");
     } catch (error) {
@@ -1831,17 +1858,44 @@ export interface MerchantCourierBookingOptions {
   serviceTypeSource: "carrier_api" | "integration";
 }
 
+type FetchedMerchantCourierBookingOptions = MerchantCourierBookingOptions & {
+  cityRecords?: LeopardsCity[];
+};
+
+type PersistedMerchantCourierBookingOptions = FetchedMerchantCourierBookingOptions & {
+  credentialFingerprint: string;
+  cachedAt: string;
+};
+
 function uniqueOptionStrings(values: unknown[]): string[] {
   return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)))
     .sort((a, b) => a.localeCompare(b));
 }
 
+function uniqueOptionStringsInOrder(values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const label = String(value || "").trim();
+    if (label && !seen.has(label)) {
+      seen.add(label);
+      result.push(label);
+    }
+  }
+  return result;
+}
+
 function normalizePostExOrderType(value: unknown): string | null {
-  const normalized = String(value || "").trim().toLowerCase();
+  const label = String(value || "").trim();
+  if (!label) return null;
+  const normalized = label.toLowerCase();
   if (normalized === "normal") return "Normal";
-  if (normalized === "reverse" || normalized === "reversed") return "Reverse";
+  if (normalized === "reverse") return "Reverse";
+  if (normalized === "reversed") return "Reversed";
   if (normalized === "replacement") return "Replacement";
-  return null;
+  if (normalized === "overland") return "Overland";
+  // Preserve additional values returned by this merchant's own PostEx account rather than dropping them.
+  return label;
 }
 
 /**
@@ -1849,10 +1903,10 @@ function normalizePostExOrderType(value: unknown): string | null {
  * those lists. Some carrier contracts do not expose a service-type list endpoint; those modes are
  * restricted to the operations implemented by that carrier adapter instead of invented API data.
  */
-export async function getMerchantCourierBookingOptions(
+async function fetchMerchantCourierBookingOptionsUncached(
   shopifyStoreId: string,
   providerName: string,
-): Promise<MerchantCourierBookingOptions> {
+): Promise<FetchedMerchantCourierBookingOptions> {
   const provider = providerName.trim().toUpperCase();
   if (provider === "RIDER") {
     return {
@@ -1875,7 +1929,7 @@ export async function getMerchantCourierBookingOptions(
     if (!token) throw new Error("PostEx merchant API token is missing. Reconfigure PostEx in Courier Settings.");
 
     const fetchCityList = async (direction: "Pickup" | "Delivery"): Promise<string[]> => {
-      const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${direction.toLowerCase()}`, {
+      const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${direction}`, {
         method: "GET",
         headers: { token, Accept: "application/json" },
       });
@@ -1904,7 +1958,8 @@ export async function getMerchantCourierBookingOptions(
     if (!typesResponse.ok || Number(typesPayload?.statusCode) !== 200 || !Array.isArray(typesPayload?.dist)) {
       throw new Error(apiPayloadMessage(typesPayload, `PostEx could not load its supported order types (HTTP ${typesResponse.status}).`));
     }
-    const serviceTypes = uniqueOptionStrings(typesPayload.dist
+    // Preserve the exact order from the carrier API while displaying friendly "Reverse" for "Reversed".
+    const serviceTypes = uniqueOptionStringsInOrder(typesPayload.dist
       .map((item: any) => normalizePostExOrderType(typeof item === "string" ? item : item?.orderType || item?.type || item?.name))
       .filter(Boolean));
     if (!serviceTypes.length) throw new Error("PostEx returned an empty supported-order-type list.");
@@ -1937,6 +1992,7 @@ export async function getMerchantCourierBookingOptions(
       serviceTypes: ["Normal", "Reverse", "Replacement"],
       citySource: "carrier_api",
       serviceTypeSource: "integration",
+      cityRecords: cities,
     };
   }
 
@@ -1962,6 +2018,145 @@ export async function getMerchantCourierBookingOptions(
   }
 
   throw new Error(`Live booking options are not implemented for ${provider}.`);
+}
+
+function bookingOptionsObject(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {};
+}
+
+function bookingOptionsCredentialFingerprint(provider: string, credentials: Record<string, any>): string {
+  const keys = provider === "POSTEX"
+    ? ["apiToken"]
+    : provider === "LEOPARDS"
+      ? ["apiKey", "apiPassword", "environment"]
+      : ["clientId", "userName", "password", "costCenterCode"];
+  const identity = Object.fromEntries(keys.map((key) => [key, credentialValue(credentials, key)]));
+  return createHash("sha256").update(JSON.stringify({ provider, identity })).digest("hex");
+}
+
+function isValidPersistedBookingOptions(
+  value: any,
+  provider: string,
+  fingerprint: string,
+): value is PersistedMerchantCourierBookingOptions {
+  return Boolean(
+    value
+    && value.providerName === provider
+    && value.credentialFingerprint === fingerprint
+    && typeof value.cachedAt === "string"
+    && Array.isArray(value.pickupCities)
+    && Array.isArray(value.deliveryCities)
+    && Array.isArray(value.serviceTypes)
+    && (value.pickupCities.length > 0 || value.deliveryCities.length > 0)
+    && value.serviceTypes.length > 0
+    && (provider !== "LEOPARDS" || (Array.isArray(value.cityRecords) && value.cityRecords.length > 0))
+  );
+}
+
+/**
+ * Uses a store-scoped persistent city/type catalog. Carrier city endpoints are requested only
+ * for the first selection (or when the courier credentials/environment change), not on every
+ * page render or individual shipment booking.
+ */
+export async function getMerchantCourierBookingOptions(
+  shopifyStoreId: string,
+  providerName: string,
+): Promise<MerchantCourierBookingOptions> {
+  const provider = providerName.trim().toUpperCase();
+  if (provider === "RIDER") {
+    return {
+      providerName: provider,
+      pickupCities: [],
+      deliveryCities: [],
+      serviceTypes: ["Normal"],
+      citySource: "local",
+      serviceTypeSource: "integration",
+    };
+  }
+
+  const credentials = await getDecryptedCourierCredentials(shopifyStoreId, provider);
+  if (!credentials) {
+    throw new Error(`${provider} is not configured or enabled. Open Courier Settings, verify the saved API credentials, and retry.`);
+  }
+
+  const credentialFingerprint = bookingOptionsCredentialFingerprint(provider, credentials);
+  const configKey = { shopifyStoreId_providerName: { shopifyStoreId, providerName: provider } };
+  const existing = await prisma.merchantCourierConfig.findUnique({
+    where: configKey,
+    select: { additionalConfig: true },
+  });
+  const currentAdditionalConfig = bookingOptionsObject(existing?.additionalConfig);
+  const cached = currentAdditionalConfig.byndcartBookingOptionsCache;
+
+  if (isValidPersistedBookingOptions(cached, provider, credentialFingerprint)) {
+    return {
+      providerName: cached.providerName,
+      pickupCities: cached.pickupCities,
+      deliveryCities: cached.deliveryCities,
+      serviceTypes: cached.serviceTypes,
+      citySource: cached.citySource,
+      serviceTypeSource: cached.serviceTypeSource,
+    };
+  }
+
+  const fetched = await fetchMerchantCourierBookingOptionsUncached(shopifyStoreId, provider);
+  const persisted: PersistedMerchantCourierBookingOptions = {
+    ...fetched,
+    credentialFingerprint,
+    cachedAt: new Date().toISOString(),
+  };
+
+  // Re-read before update so unrelated courier settings in additionalConfig are preserved.
+  const latest = await prisma.merchantCourierConfig.findUnique({
+    where: configKey,
+    select: { additionalConfig: true },
+  });
+  await prisma.merchantCourierConfig.update({
+    where: configKey,
+    data: {
+      additionalConfig: {
+        ...bookingOptionsObject(latest?.additionalConfig),
+        byndcartBookingOptionsCache: JSON.parse(JSON.stringify(persisted)) as any,
+      },
+    },
+  });
+
+  return {
+    providerName: fetched.providerName,
+    pickupCities: fetched.pickupCities,
+    deliveryCities: fetched.deliveryCities,
+    serviceTypes: fetched.serviceTypes,
+    citySource: fetched.citySource,
+    serviceTypeSource: fetched.serviceTypeSource,
+  };
+}
+
+async function getCachedLeopardsCityRecords(shopifyStoreId: string, credentials?: any): Promise<LeopardsCity[]> {
+  // This call fetches once if the catalog is missing or credentials have changed.
+  try {
+    await getMerchantCourierBookingOptions(shopifyStoreId, "LEOPARDS");
+  } catch (error) {
+    // Adapter calls without a saved merchant config can still use the supplied credentials.
+    const message = error instanceof Error ? error.message : "";
+    if (!credentials || !message.includes("LEOPARDS is not configured or enabled")) throw error;
+    return loadLeopardsCities(
+      credentialValue(credentials, "apiKey"),
+      credentialValue(credentials, "apiPassword"),
+      leopardsApiRoot(credentials),
+    );
+  }
+
+  const config = await prisma.merchantCourierConfig.findUnique({
+    where: { shopifyStoreId_providerName: { shopifyStoreId, providerName: "LEOPARDS" } },
+    select: { additionalConfig: true },
+  });
+  const cache = bookingOptionsObject(bookingOptionsObject(config?.additionalConfig).byndcartBookingOptionsCache);
+  if (Array.isArray(cache.cityRecords) && cache.cityRecords.length > 0) {
+    return cache.cityRecords as LeopardsCity[];
+  }
+  throw new Error("Leopards city catalog is not cached. Reopen the Booking page after verifying the courier connection.");
 }
 
 /**

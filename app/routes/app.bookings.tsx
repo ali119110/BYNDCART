@@ -143,7 +143,7 @@ export async function action({ request }: ActionFunctionArgs) {
         orderId,
         orderNumber,
         courier,
-        serviceType: serviceType as "Normal" | "Reverse" | "Replacement",
+        serviceType,
         customerName,
         customerPhone,
         customerAddress,
@@ -300,7 +300,7 @@ export default function BookingsPage() {
   const availableCityOptions = (serviceType: string) => {
     if (selectedCourierKey === "RIDER") return MAJOR_PAKISTANI_CITIES;
     if (!activeCourierOptions) return [];
-    return serviceType === "Reverse"
+    return serviceType === "Reverse" || serviceType === "Reversed"
       ? activeCourierOptions.pickupCities || []
       : activeCourierOptions.deliveryCities || [];
   };
@@ -940,19 +940,84 @@ export default function BookingsPage() {
           </div>
 
           {/* Universal Courier Orders Table */}
+          <style>{`
+            .bc-booking-table-wrap {
+              width: 100%;
+              min-width: 0;
+              overflow-x: hidden;
+            }
+            .bc-booking-table {
+              width: 100%;
+              min-width: 0;
+              table-layout: fixed;
+              border-collapse: separate;
+              border-spacing: 0;
+            }
+            .bc-booking-table th,
+            .bc-booking-table td {
+              box-sizing: border-box;
+              min-width: 0;
+              overflow: hidden;
+            }
+            .bc-booking-table th {
+              white-space: normal;
+              overflow-wrap: anywhere;
+              line-height: 1.25;
+            }
+            .bc-booking-table td input,
+            .bc-booking-table td select {
+              box-sizing: border-box;
+              max-width: 100%;
+              min-width: 0;
+            }
+            .bc-booking-table .bc-order-number {
+              display: block;
+              max-width: 100%;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+            @media (max-width: 1200px) {
+              .bc-booking-table th { font-size: 10px !important; letter-spacing: 0 !important; }
+              .bc-booking-table td input,
+              .bc-booking-table td select { font-size: 11px !important; padding-left: 5px !important; padding-right: 5px !important; }
+              .bc-booking-table .bc-customer-email,
+              .bc-booking-table .bc-shopify-address-city { display: none; }
+            }
+          `}</style>
           <div
+            className="bc-booking-table-wrap"
             style={{
-              overflowX: "auto",
+              overflowX: "hidden",
+              width: "100%",
+              minWidth: 0,
               background: "#ffffff",
               borderRadius: "8px",
               border: "1px solid #cbd5e1",
               boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
             }}
           >
-            <table style={{ width: "100%", minWidth: "1510px", tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, textAlign: "left", fontSize: "13px" }}>
+            <table
+              className="bc-booking-table"
+              style={{ width: "100%", minWidth: 0, tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, textAlign: "left", fontSize: "13px" }}
+            >
+              <colgroup>
+                <col style={{ width: "2.5%" }} />
+                <col style={{ width: "2.5%" }} />
+                <col style={{ width: "7.5%" }} />
+                <col style={{ width: "13.5%" }} />
+                <col style={{ width: "10%" }} />
+                <col style={{ width: "19%" }} />
+                <col style={{ width: "12.5%" }} />
+                <col style={{ width: "8%" }} />
+                <col style={{ width: "6.5%" }} />
+                <col style={{ width: "11%" }} />
+                <col style={{ width: "3.5%" }} />
+                <col style={{ width: "3.5%" }} />
+              </colgroup>
               <thead>
                 <tr style={{ background: "#0f172a", color: "#ffffff", fontSize: "12px", fontWeight: 700, letterSpacing: "0.02em" }}>
-                  <th style={{ width: "38px", padding: "11px 10px", textAlign: "center" }}>
+                  <th style={{ padding: "8px 4px", textAlign: "center" }}>
                     <input
                       type="checkbox"
                       checked={
@@ -963,17 +1028,17 @@ export default function BookingsPage() {
                       style={{ accentColor: "#16a34a", cursor: "pointer", width: "15px", height: "15px" }}
                     />
                   </th>
-                  <th style={{ width: "40px", padding: "11px 6px", textAlign: "center" }}>#</th>
-                  <th style={{ padding: "11px 10px", minWidth: "100px" }}>Order</th>
-                  <th style={{ padding: "11px 10px", width: "175px" }}>Customer</th>
-                  <th style={{ padding: "11px 10px", width: "145px" }}>Phone</th>
-                  <th style={{ padding: "11px 10px", width: "280px" }}>Delivery Address</th>
-                  <th style={{ padding: "11px 10px", width: "220px" }}>City</th>
-                  <th style={{ padding: "11px 10px", width: "105px" }}>COD (PKR)</th>
-                  <th style={{ padding: "11px 10px", width: "82px" }}>Weight (kg)</th>
-                  <th style={{ padding: "11px 10px", width: "140px" }}>Service type</th>
-                  <th style={{ width: "36px", padding: "11px 4px", textAlign: "center" }}></th>
-                  <th style={{ width: "36px", padding: "11px 4px", textAlign: "center" }}></th>
+                  <th style={{ padding: "8px 3px", textAlign: "center" }}>#</th>
+                  <th style={{ padding: "8px 5px" }}>Order</th>
+                  <th style={{ padding: "8px 5px" }}>Customer</th>
+                  <th style={{ padding: "8px 5px" }}>Phone</th>
+                  <th style={{ padding: "8px 5px" }}>Delivery Address</th>
+                  <th style={{ padding: "8px 5px" }}>City</th>
+                  <th style={{ padding: "8px 5px" }}>COD (PKR)</th>
+                  <th style={{ padding: "8px 5px" }}>Weight (kg)</th>
+                  <th style={{ padding: "8px 5px" }}>Service type</th>
+                  <th style={{ padding: "8px 3px", textAlign: "center" }}></th>
+                  <th style={{ padding: "8px 3px", textAlign: "center" }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -1044,7 +1109,7 @@ export default function BookingsPage() {
                         {/* Order Number Link */}
                         <td style={{ padding: "8px 8px" }}>
                           <span
-                            className="bc-order-link"
+                            className="bc-order-link bc-order-number"
                             style={{
                               color: "#0d9488",
                               fontWeight: 700,
@@ -1084,7 +1149,7 @@ export default function BookingsPage() {
                             }}
                           />
                           {order.customerEmail && (
-                            <div title={order.customerEmail} style={{ marginTop: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#64748b", fontSize: "11px" }}>
+                            <div className="bc-customer-email" title={order.customerEmail} style={{ marginTop: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#64748b", fontSize: "11px" }}>
                               {order.customerEmail}
                             </div>
                           )}
@@ -1136,7 +1201,7 @@ export default function BookingsPage() {
                               color: "#0f172a",
                             }}
                           />
-                          <div title={order.city || ""} style={{ margin: "5px 0 4px", color: "#64748b", fontSize: "11px" }}>
+                          <div className="bc-shopify-address-city" title={order.city || ""} style={{ margin: "5px 0 4px", color: "#64748b", fontSize: "11px" }}>
                             Shopify city: {order.city || "Not supplied"}
                           </div>
                         </td>

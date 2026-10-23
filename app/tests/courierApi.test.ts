@@ -7,7 +7,9 @@ process.env.NODE_ENV = "test";
 
 import test from "node:test";
 import assert from "node:assert";
-import { CourierRegistry, normalizeCourierStatus } from "../services/courier.server";
+import prisma from "../db.server";
+import { encryptCredential } from "../utils/encryption.server";
+import { CourierRegistry, getMerchantCourierBookingOptions, normalizeCourierStatus } from "../services/courier.server";
 
 const originalFetch = globalThis.fetch;
 
@@ -18,6 +20,75 @@ test.after(() => {
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
+
+test("PostEx booking options cache all four API types and city lists in the database", async () => {
+  const delegate = (prisma as any).merchantCourierConfig;
+  const originalFindUnique = delegate.findUnique;
+  const originalUpdate = delegate.update;
+  const originalFetch = globalThis.fetch;
+  const config: any = {
+    id: "courier-config-postex-test",
+    shopifyStoreId: "store-catalog-test",
+    providerName: "POSTEX",
+    encryptedApiToken: encryptCredential(JSON.stringify({
+      __byndcartCredentialBundle: 1,
+      fields: { apiToken: "postex-test-token" },
+    })),
+    enabled: true,
+    isLive: true,
+    additionalConfig: null,
+  };
+  delegate.findUnique = async () => config;
+  delegate.update = async ({ data }: any) => {
+    config.additionalConfig = data.additionalConfig;
+    return config;
+  };
+
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    requests.push(url);
+    if (url.includes("get-operational-city")) {
+      return jsonResponse({
+        statusCode: "200",
+        statusMessage: "SUCCESSFULLY OPERATED",
+        dist: [
+          { operationalCityName: "Karachi", isPickupCity: true, isDeliveryCity: true },
+          { operationalCityName: "Lahore", isPickupCity: true, isDeliveryCity: true },
+        ],
+      });
+    }
+    if (url.includes("get-order-types")) {
+      return jsonResponse({
+        statusCode: "200",
+        statusMessage: "SUCCESSFULLY OPERATED",
+        dist: ["Normal", "Reversed", "Overland", "Replacement"],
+      });
+    }
+    return jsonResponse({ statusCode: "404", message: "Unexpected test endpoint" }, 404);
+  }) as typeof fetch;
+
+  try {
+    const first = await getMerchantCourierBookingOptions("store-catalog-test", "POSTEX");
+    assert.deepStrictEqual(first.serviceTypes, ["Normal", "Reversed", "Overland", "Replacement"]);
+    assert.ok(first.deliveryCities.includes("Karachi"));
+    const firstRequestCount = requests.length;
+    assert.strictEqual(firstRequestCount, 3, "one pickup list, one delivery list, and one type list should be fetched");
+
+    const second = await getMerchantCourierBookingOptions("store-catalog-test", "POSTEX");
+    assert.deepStrictEqual(second.serviceTypes, ["Normal", "Reversed", "Overland", "Replacement"]);
+    assert.strictEqual(requests.length, firstRequestCount, "subsequent reads should use the persisted catalog");
+    const stored = (config.additionalConfig as any)?.byndcartBookingOptionsCache;
+    assert.ok(stored?.credentialFingerprint);
+    assert.ok(stored?.cachedAt);
+    assert.ok(stored?.pickupCities?.includes("Karachi"));
+    assert.ok(stored?.deliveryCities?.includes("Lahore"));
+  } finally {
+    delegate.findUnique = originalFindUnique;
+    delegate.update = originalUpdate;
+    globalThis.fetch = originalFetch;
+  }
+});
 
 test("PostEx accepts a return only when statusCode is 200 and a tracking number is present", async () => {
   const calls: Array<{ url: string; body?: any }> = [];
@@ -60,7 +131,7 @@ test("PostEx accepts a return only when statusCode is 200 and a tracking number 
   assert.strictEqual(normalizeCourierStatus(result.carrierStatus), "LABEL_CREATED");
   const booking = calls.find((call) => call.url.includes("create-order"));
   assert.strictEqual(booking?.body.orderType, "Reversed");
-  assert.ok(calls.some((call) => call.url.includes("operationalCityType=pickup")), "PostEx city lookup should use the carrier's lowercase pickup value");
+  assert.ok(calls.some((call) => call.url.includes("operationalCityType=Pickup")), "PostEx city lookup should use the carrier's lowercase pickup value");
   assert.strictEqual(booking?.body.customerPhone, "03001234567");
   assert.strictEqual(booking?.body.invoicePayment, "0");
   assert.strictEqual(booking?.body.cityName, "Karachi");
