@@ -244,14 +244,36 @@ async function validatePostExCity(
   shopifyStoreId: string,
   cityName: string,
   orderType: string,
+  fallbackToken?: string,
 ): Promise<void> {
   const operationalCityType = orderType === "Reverse" || orderType === "Reversed" ? "Pickup" : "Delivery";
   const normalized = cityName.trim().toLocaleLowerCase().replace(/\s+/g, " ");
   if (!normalized) throw new Error("Enter a city supported by PostEx.");
 
   // Reuse the store's persisted carrier catalog so each booking does not call the city API again.
-  const options = await getMerchantCourierBookingOptions(shopifyStoreId, "POSTEX");
-  const availableCities = operationalCityType === "Pickup" ? options.pickupCities : options.deliveryCities;
+  let availableCities: string[];
+  try {
+    const options = await getMerchantCourierBookingOptions(shopifyStoreId, "POSTEX");
+    availableCities = operationalCityType === "Pickup" ? options.pickupCities : options.deliveryCities;
+  } catch (error) {
+    // Direct-token fallback is only for adapter integrations without a saved merchant config
+    // (for example API adapter tests). A configured merchant always uses the persisted catalog.
+    const message = error instanceof Error ? error.message : "";
+    if (!fallbackToken || !message.includes("POSTEX is not configured or enabled")) throw error;
+    const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${operationalCityType}`, {
+      method: "GET",
+      headers: { token: fallbackToken, Accept: "application/json" },
+    });
+    const payload = await readJson(response);
+    if (!response.ok || Number(payload?.statusCode) !== 200 || !Array.isArray(payload?.dist)) {
+      throw new Error(apiPayloadMessage(payload, "PostEx could not verify its operational city list."));
+    }
+    const flag = operationalCityType === "Pickup" ? "isPickupCity" : "isDeliveryCity";
+    availableCities = uniqueOptionStrings(payload.dist
+      .filter((row: any) => row && (row[flag] === undefined || row[flag] === true || String(row[flag]).toLowerCase() === "true" || String(row[flag]) === "1"))
+      .map((row: any) => row.operationalCityName || row.cityName || row.name));
+  }
+
   const city = availableCities.find((name) => name.trim().toLocaleLowerCase().replace(/\s+/g, " ") === normalized);
   if (!city) {
     const names = availableCities.slice(0, 8).join(", ");
@@ -336,7 +358,7 @@ export class PostExCourierAdapter implements ICourierAdapter {
     if (storeAddressCode) body.storeAddressCode = storeAddressCode;
 
     try {
-      await validatePostExCity(input.shopifyStoreId, cityName, orderType);
+      await validatePostExCity(input.shopifyStoreId, cityName, orderType, token);
     } catch (error) {
       return unconfirmedBooking(this.providerName, error instanceof Error ? error.message : "PostEx could not verify the pickup or delivery city.");
     }
@@ -514,7 +536,7 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
     let originCity: number;
     let destinationCity: number;
     try {
-      cities = await getCachedLeopardsCityRecords(input.shopifyStoreId);
+      cities = await getCachedLeopardsCityRecords(input.shopifyStoreId, credentials);
       originCity = resolveLeopardsCityId(cities, senderCityName, "origin");
       destinationCity = resolveLeopardsCityId(cities, receiverCityName, "destination");
     } catch (error) {
@@ -2095,9 +2117,21 @@ export async function getMerchantCourierBookingOptions(
   };
 }
 
-async function getCachedLeopardsCityRecords(shopifyStoreId: string): Promise<LeopardsCity[]> {
+async function getCachedLeopardsCityRecords(shopifyStoreId: string, credentials?: any): Promise<LeopardsCity[]> {
   // This call fetches once if the catalog is missing or credentials have changed.
-  await getMerchantCourierBookingOptions(shopifyStoreId, "LEOPARDS");
+  try {
+    await getMerchantCourierBookingOptions(shopifyStoreId, "LEOPARDS");
+  } catch (error) {
+    // Adapter calls without a saved merchant config can still use the supplied credentials.
+    const message = error instanceof Error ? error.message : "";
+    if (!credentials || !message.includes("LEOPARDS is not configured or enabled")) throw error;
+    return loadLeopardsCities(
+      credentialValue(credentials, "apiKey"),
+      credentialValue(credentials, "apiPassword"),
+      leopardsApiRoot(credentials),
+    );
+  }
+
   const config = await prisma.merchantCourierConfig.findUnique({
     where: { shopifyStoreId_providerName: { shopifyStoreId, providerName: "LEOPARDS" } },
     select: { additionalConfig: true },
