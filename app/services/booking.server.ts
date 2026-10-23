@@ -49,7 +49,7 @@ export interface SingleBookingInput {
   orderId: string;
   orderNumber: string;
   courier: string; // POSTEX, LEOPARDS, TCS, RIDER
-  serviceType?: "Normal" | "Reverse" | "Replacement";
+  serviceType?: "Normal" | "Reverse" | "Replacement" | "Overland";
   customerName: string;
   customerPhone: string;
   customerAddress: string;
@@ -81,8 +81,19 @@ const UNFULFILLED_ORDERS_QUERY = `#graphql
           createdAt
           displayFinancialStatus
           displayFulfillmentStatus
+          paymentGatewayNames
           tags
+          currentTotalPriceSet {
+            shopMoney {
+              amount
+            }
+          }
           totalPriceSet {
+            shopMoney {
+              amount
+            }
+          }
+          totalOutstandingSet {
             shopMoney {
               amount
             }
@@ -273,9 +284,24 @@ export async function fetchUnfulfilledOrders(
       // Map Shopify nodes to UnfulfilledOrder — extracts real customer/address data
       const mappedOrders: UnfulfilledOrder[] = orderNodes.map((node: any) => {
         const orderNumber = String(node.name || "");
-        const totalPrice = Number(node.totalPriceSet?.shopMoney?.amount || 0);
+        const totalPrice = Number(
+          node.currentTotalPriceSet?.shopMoney?.amount
+          ?? node.totalPriceSet?.shopMoney?.amount
+          ?? 0
+        );
         const finStatus = String(node.displayFinancialStatus || "").toUpperCase();
-        const isCod = finStatus === "PENDING";
+        const paymentGateways: string[] = Array.isArray(node.paymentGatewayNames)
+          ? node.paymentGatewayNames.map((name: unknown) => String(name || "").trim()).filter(Boolean)
+          : [];
+        const hasCodGateway = paymentGateways.some((gateway) =>
+          /cash\s*on\s*delivery|\bcod\b|\bcash\b|\bmanual\b/i.test(gateway)
+        );
+        const isCod = hasCodGateway
+          || (paymentGateways.length === 0 && (finStatus === "PENDING" || finStatus === "AUTHORIZED"));
+        const rawOutstanding = node.totalOutstandingSet?.shopMoney?.amount;
+        const outstandingAmount = rawOutstanding === undefined || rawOutstanding === null
+          ? totalPrice
+          : Number(rawOutstanding);
         const tags = Array.isArray(node.tags) ? node.tags : [];
 
         // Phone: prefer shipping address phone, fall back to customer phone
@@ -317,7 +343,12 @@ export async function fetchUnfulfilledOrders(
           displayFulfillmentStatus: String(node.displayFulfillmentStatus || "UNFULFILLED").toUpperCase(),
           isCod,
           totalPrice,
-          suggestedCod: isCod ? totalPrice : 0,
+          // On COD/manual-gateway orders, collect the outstanding balance. Some COD apps
+          // mark the Shopify order paid prematurely; if that leaves zero outstanding, use the
+          // current order total because the carrier still needs the COD amount.
+          suggestedCod: isCod
+            ? (Number.isFinite(outstandingAmount) && outstandingAmount > 0 ? outstandingAmount : totalPrice)
+            : 0,
           suggestedWeight: estimatePackageWeight(items),
           customerName,
           customerPhone: normalizedPhone,
