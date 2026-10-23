@@ -80,6 +80,8 @@ export interface ShipmentInput {
   cityName?: string;
   /** RETURN uses customer address as origin; FORWARD/EXCHANGE uses destinationAddress. */
   shipmentType?: "RETURN" | "FORWARD" | "EXCHANGE";
+  /** Carrier-specific API order type selected in the booking grid, e.g. PostEx Overland. */
+  courierServiceType?: string;
   originAddress?: any;
   destinationAddress?: any;
   weightKg?: number;
@@ -238,27 +240,26 @@ function resolveLeopardsCityId(cities: LeopardsCity[], cityName: string, purpose
   return id;
 }
 
-async function validatePostExCity(token: string, cityName: string, orderType: "Normal" | "Reverse" | "Replacement"): Promise<void> {
+async function validatePostExCity(
+  shopifyStoreId: string,
+  cityName: string,
+  orderType: "Normal" | "Reverse" | "Replacement" | "Overland",
+): Promise<void> {
   const operationalCityType = orderType === "Reverse" ? "Pickup" : "Delivery";
   const normalized = cityName.trim().toLocaleLowerCase().replace(/\s+/g, " ");
   if (!normalized) throw new Error("Enter a city supported by PostEx.");
-  const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${operationalCityType.toLowerCase()}`, {
-    method: "GET",
-    headers: { token, Accept: "application/json" },
-  });
-  const payload = await readJson(response);
-  if (!response.ok || Number(payload?.statusCode) !== 200 || !Array.isArray(payload?.dist)) {
-    throw new Error(apiPayloadMessage(payload, "PostEx could not verify its operational city list. Retry before booking."));
-  }
-  const availableCities = payload.dist as Array<Record<string, any>>;
-  const city = availableCities.find((item) => String(item?.operationalCityName || "").trim().toLocaleLowerCase().replace(/\s+/g, " ") === normalized);
+
+  // Reuse the store's persisted carrier catalog so each booking does not call the city API again.
+  const options = await getMerchantCourierBookingOptions(shopifyStoreId, "POSTEX");
+  const availableCities = operationalCityType === "Pickup" ? options.pickupCities : options.deliveryCities;
+  const city = availableCities.find((name) => name.trim().toLocaleLowerCase().replace(/\s+/g, " ") === normalized);
   if (!city) {
-    const names = availableCities.map((item) => String(item?.operationalCityName || "").trim()).filter(Boolean).slice(0, 8).join(", ");
-    throw new Error(`PostEx does not list "${cityName}" as a ${operationalCityType.toLowerCase()} city${names ? `. Examples returned by PostEx: ${names}` : ""}. Use the exact city name supplied by the carrier.`);
-  }
-  const supportValue = operationalCityType === "Pickup" ? city.isPickupCity : city.isDeliveryCity;
-  if (supportValue === false || String(supportValue).toLowerCase() === "false" || String(supportValue) === "0") {
-    throw new Error(`PostEx does not support ${operationalCityType.toLowerCase()} service in ${cityName}.`);
+    const names = availableCities.slice(0, 8).join(", ");
+    throw new Error(
+      'PostEx does not list "' + cityName + '" as a ' + operationalCityType.toLowerCase() + " city"
+      + (names ? ". Examples returned by PostEx: " + names : "")
+      + ". Use the exact city name supplied by the carrier."
+    );
   }
 }
 
@@ -294,7 +295,7 @@ export class PostExCourierAdapter implements ICourierAdapter {
     }
   }
 
-  private async createOrder(input: ShipmentInput, credentials: any, orderType: "Normal" | "Reverse" | "Replacement"): Promise<LabelResult> {
+  private async createOrder(input: ShipmentInput, credentials: any, orderType: "Normal" | "Reverse" | "Replacement" | "Overland"): Promise<LabelResult> {
     const token = credentialValue(credentials, "apiToken");
     if (!token) return unconfirmedBooking(this.providerName, "PostEx merchant API token is missing for this store.");
 
@@ -335,7 +336,7 @@ export class PostExCourierAdapter implements ICourierAdapter {
     if (storeAddressCode) body.storeAddressCode = storeAddressCode;
 
     try {
-      await validatePostExCity(token, cityName, orderType);
+      await validatePostExCity(input.shopifyStoreId, cityName, orderType);
     } catch (error) {
       return unconfirmedBooking(this.providerName, error instanceof Error ? error.message : "PostEx could not verify the pickup or delivery city.");
     }
@@ -376,7 +377,11 @@ export class PostExCourierAdapter implements ICourierAdapter {
   }
 
   async createForwardShipment(input: ShipmentInput, credentials?: any): Promise<LabelResult> {
-    return this.createOrder(input, credentials, input.shipmentType === "EXCHANGE" ? "Replacement" : "Normal");
+    const selectedType = input.courierServiceType;
+    const orderType = selectedType === "Overland"
+      ? "Overland"
+      : input.shipmentType === "EXCHANGE" ? "Replacement" : "Normal";
+    return this.createOrder(input, credentials, orderType);
   }
 
   async trackShipment(trackingNumber: string, credentials?: any): Promise<TrackingStatusResult> {
@@ -1837,11 +1842,15 @@ function uniqueOptionStrings(values: unknown[]): string[] {
 }
 
 function normalizePostExOrderType(value: unknown): string | null {
-  const normalized = String(value || "").trim().toLowerCase();
+  const label = String(value || "").trim();
+  if (!label) return null;
+  const normalized = label.toLowerCase();
   if (normalized === "normal") return "Normal";
   if (normalized === "reverse" || normalized === "reversed") return "Reverse";
   if (normalized === "replacement") return "Replacement";
-  return null;
+  if (normalized === "overland") return "Overland";
+  // Preserve additional values returned by this merchant's own PostEx account rather than dropping them.
+  return label;
 }
 
 /**
