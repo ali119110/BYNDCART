@@ -904,7 +904,7 @@ export default function BookingsPage() {
               boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
             }}
           >
-            <table style={{ width: "100%", minWidth: "1100px", borderCollapse: "collapse", textAlign: "left", fontSize: "13px" }}>
+            <table style={{ width: "100%", minWidth: "1510px", tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, textAlign: "left", fontSize: "13px" }}>
               <thead>
                 <tr style={{ background: "#0f172a", color: "#ffffff", fontSize: "12px", fontWeight: 700, letterSpacing: "0.02em" }}>
                   <th style={{ width: "38px", padding: "11px 10px", textAlign: "center" }}>
@@ -920,13 +920,13 @@ export default function BookingsPage() {
                   </th>
                   <th style={{ width: "40px", padding: "11px 6px", textAlign: "center" }}>#</th>
                   <th style={{ padding: "11px 10px", minWidth: "100px" }}>Order</th>
-                  <th style={{ padding: "11px 10px", minWidth: "150px" }}>Customer Name</th>
-                  <th style={{ padding: "11px 10px", minWidth: "130px" }}>Phone</th>
-                  <th style={{ padding: "11px 10px", minWidth: "260px" }}>Delivery Address</th>
-                  <th style={{ padding: "11px 10px", minWidth: "150px" }}>City</th>
-                  <th style={{ padding: "11px 10px", width: "90px" }}>COD (PKR)</th>
-                  <th style={{ padding: "11px 10px", width: "70px" }}>KG</th>
-                  <th style={{ padding: "11px 10px", width: "110px" }}>Type</th>
+                  <th style={{ padding: "11px 10px", width: "175px" }}>Customer</th>
+                  <th style={{ padding: "11px 10px", width: "145px" }}>Phone</th>
+                  <th style={{ padding: "11px 10px", width: "280px" }}>Delivery Address</th>
+                  <th style={{ padding: "11px 10px", width: "220px" }}>City</th>
+                  <th style={{ padding: "11px 10px", width: "105px" }}>COD (PKR)</th>
+                  <th style={{ padding: "11px 10px", width: "82px" }}>Weight (kg)</th>
+                  <th style={{ padding: "11px 10px", width: "140px" }}>Service type</th>
                   <th style={{ width: "36px", padding: "11px 4px", textAlign: "center" }}></th>
                   <th style={{ width: "36px", padding: "11px 4px", textAlign: "center" }}></th>
                 </tr>
@@ -934,7 +934,7 @@ export default function BookingsPage() {
               <tbody>
                 {paginatedOrders.length === 0 ? (
                   <tr>
-                    <td colSpan={13} style={{ padding: "36px 16px", textAlign: "center", color: "#64748b" }}>
+                    <td colSpan={12} style={{ padding: "36px 16px", textAlign: "center", color: "#64748b" }}>
                       No unfulfilled orders found matching your search criteria.
                     </td>
                   </tr>
@@ -945,10 +945,14 @@ export default function BookingsPage() {
                     const currentName = edit.name !== undefined ? edit.name : order.customerName;
                     const currentPhone = edit.phone !== undefined ? edit.phone : order.customerPhone;
                     const currentAddress = edit.address !== undefined ? edit.address : `${order.address1 || ""} ${order.address2 || ""}`.trim();
-                    const currentCity = edit.city !== undefined ? edit.city : order.matchedCity;
                     const currentCod = edit.cod !== undefined ? edit.cod : order.suggestedCod;
                     const currentWeight = edit.weight !== undefined ? edit.weight : order.suggestedWeight;
-                    const currentType = edit.type || "Normal";
+                    const currentType = selectedCourierKey === "RIDER"
+                      ? "Normal"
+                      : (availableServiceTypes.includes(edit.type || "Normal") ? (edit.type || "Normal") : (availableServiceTypes[0] || ""));
+                    const currentCityOptions = availableCityOptions(currentType);
+                    const currentCityCandidate = edit.city !== undefined ? edit.city : order.matchedCity;
+                    const currentCity = matchCarrierOption(currentCityCandidate, currentCityOptions);
 
                     const isSelected = selectedOrderIds.includes(order.id);
 
@@ -958,6 +962,7 @@ export default function BookingsPage() {
                       && isValidPakistaniMobile(currentPhone)
                       && currentAddress.trim().length >= 8
                       && currentCity
+                      && availableServiceTypes.includes(currentType)
                       && Number.isFinite(Number(currentWeight))
                       && currentWeight > 0
                       && Number.isFinite(Number(currentCod))
