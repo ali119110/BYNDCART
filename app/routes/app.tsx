@@ -105,7 +105,8 @@ const styles = (
       position: relative;
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-start;
+      align-content: flex-start;
       flex-wrap: wrap;
       gap: 4px;
       width: calc(100% - 48px);
@@ -122,7 +123,7 @@ const styles = (
 
     .bc-app-nav-link {
       display: inline-flex;
-      flex: 1 1 auto;
+      flex: 0 0 auto;
       align-items: center;
       justify-content: center;
       min-width: max-content;
@@ -230,7 +231,8 @@ const styles = (
       }
 
       .bc-app-nav-link {
-        flex: 0 1 auto;
+        flex: 0 0 auto;
+        min-width: max-content;
         min-height: 38px;
         padding: 0 9px;
         font-size: 12px;
@@ -242,11 +244,16 @@ const styles = (
     }
 
     @media (max-width: 420px) {
+      .bc-app-nav {
+        justify-content: flex-start;
+        align-content: flex-start;
+      }
+
       .bc-app-nav-link {
-        flex: 1 1 calc(50% - 4px);
-        min-width: 0;
-        white-space: normal;
-        text-align: center;
+        flex: 0 0 auto;
+        min-width: max-content;
+        white-space: nowrap;
+        text-align: left;
       }
     }
 
