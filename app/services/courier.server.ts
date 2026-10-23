@@ -1836,6 +1836,15 @@ export interface MerchantCourierBookingOptions {
   serviceTypeSource: "carrier_api" | "integration";
 }
 
+type FetchedMerchantCourierBookingOptions = MerchantCourierBookingOptions & {
+  cityRecords?: LeopardsCity[];
+};
+
+type PersistedMerchantCourierBookingOptions = FetchedMerchantCourierBookingOptions & {
+  credentialFingerprint: string;
+  cachedAt: string;
+};
+
 function uniqueOptionStrings(values: unknown[]): string[] {
   return Array.from(new Set(values.map((value) => String(value || "").trim()).filter(Boolean)))
     .sort((a, b) => a.localeCompare(b));
@@ -1858,10 +1867,10 @@ function normalizePostExOrderType(value: unknown): string | null {
  * those lists. Some carrier contracts do not expose a service-type list endpoint; those modes are
  * restricted to the operations implemented by that carrier adapter instead of invented API data.
  */
-export async function getMerchantCourierBookingOptions(
+async function fetchMerchantCourierBookingOptionsUncached(
   shopifyStoreId: string,
   providerName: string,
-): Promise<MerchantCourierBookingOptions> {
+): Promise<FetchedMerchantCourierBookingOptions> {
   const provider = providerName.trim().toUpperCase();
   if (provider === "RIDER") {
     return {
@@ -1946,6 +1955,7 @@ export async function getMerchantCourierBookingOptions(
       serviceTypes: ["Normal", "Reverse", "Replacement"],
       citySource: "carrier_api",
       serviceTypeSource: "integration",
+      cityRecords: cities,
     };
   }
 
@@ -1971,6 +1981,133 @@ export async function getMerchantCourierBookingOptions(
   }
 
   throw new Error(`Live booking options are not implemented for ${provider}.`);
+}
+
+function bookingOptionsObject(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {};
+}
+
+function bookingOptionsCredentialFingerprint(provider: string, credentials: Record<string, any>): string {
+  const keys = provider === "POSTEX"
+    ? ["apiToken"]
+    : provider === "LEOPARDS"
+      ? ["apiKey", "apiPassword", "environment"]
+      : ["clientId", "userName", "password", "costCenterCode"];
+  const identity = Object.fromEntries(keys.map((key) => [key, credentialValue(credentials, key)]));
+  return createHash("sha256").update(JSON.stringify({ provider, identity })).digest("hex");
+}
+
+function isValidPersistedBookingOptions(
+  value: any,
+  provider: string,
+  fingerprint: string,
+): value is PersistedMerchantCourierBookingOptions {
+  return Boolean(
+    value
+    && value.providerName === provider
+    && value.credentialFingerprint === fingerprint
+    && typeof value.cachedAt === "string"
+    && Array.isArray(value.pickupCities)
+    && Array.isArray(value.deliveryCities)
+    && Array.isArray(value.serviceTypes)
+    && (value.pickupCities.length > 0 || value.deliveryCities.length > 0)
+    && value.serviceTypes.length > 0
+    && (provider !== "LEOPARDS" || (Array.isArray(value.cityRecords) && value.cityRecords.length > 0))
+  );
+}
+
+/**
+ * Uses a store-scoped persistent city/type catalog. Carrier city endpoints are requested only
+ * for the first selection (or when the courier credentials/environment change), not on every
+ * page render or individual shipment booking.
+ */
+export async function getMerchantCourierBookingOptions(
+  shopifyStoreId: string,
+  providerName: string,
+): Promise<MerchantCourierBookingOptions> {
+  const provider = providerName.trim().toUpperCase();
+  if (provider === "RIDER") {
+    return {
+      providerName: provider,
+      pickupCities: [],
+      deliveryCities: [],
+      serviceTypes: ["Normal"],
+      citySource: "local",
+      serviceTypeSource: "integration",
+    };
+  }
+
+  const credentials = await getDecryptedCourierCredentials(shopifyStoreId, provider);
+  if (!credentials) {
+    throw new Error(`${provider} is not configured or enabled. Open Courier Settings, verify the saved API credentials, and retry.`);
+  }
+
+  const credentialFingerprint = bookingOptionsCredentialFingerprint(provider, credentials);
+  const configKey = { shopifyStoreId_providerName: { shopifyStoreId, providerName: provider } };
+  const existing = await prisma.merchantCourierConfig.findUnique({
+    where: configKey,
+    select: { additionalConfig: true },
+  });
+  const currentAdditionalConfig = bookingOptionsObject(existing?.additionalConfig);
+  const cached = currentAdditionalConfig.byndcartBookingOptionsCache;
+
+  if (isValidPersistedBookingOptions(cached, provider, credentialFingerprint)) {
+    return {
+      providerName: cached.providerName,
+      pickupCities: cached.pickupCities,
+      deliveryCities: cached.deliveryCities,
+      serviceTypes: cached.serviceTypes,
+      citySource: cached.citySource,
+      serviceTypeSource: cached.serviceTypeSource,
+    };
+  }
+
+  const fetched = await fetchMerchantCourierBookingOptionsUncached(shopifyStoreId, provider);
+  const persisted: PersistedMerchantCourierBookingOptions = {
+    ...fetched,
+    credentialFingerprint,
+    cachedAt: new Date().toISOString(),
+  };
+
+  // Re-read before update so unrelated courier settings in additionalConfig are preserved.
+  const latest = await prisma.merchantCourierConfig.findUnique({
+    where: configKey,
+    select: { additionalConfig: true },
+  });
+  await prisma.merchantCourierConfig.update({
+    where: configKey,
+    data: {
+      additionalConfig: {
+        ...bookingOptionsObject(latest?.additionalConfig),
+        byndcartBookingOptionsCache: persisted,
+      },
+    },
+  });
+
+  return {
+    providerName: fetched.providerName,
+    pickupCities: fetched.pickupCities,
+    deliveryCities: fetched.deliveryCities,
+    serviceTypes: fetched.serviceTypes,
+    citySource: fetched.citySource,
+    serviceTypeSource: fetched.serviceTypeSource,
+  };
+}
+
+async function getCachedLeopardsCityRecords(shopifyStoreId: string): Promise<LeopardsCity[]> {
+  // This call fetches once if the catalog is missing or credentials have changed.
+  await getMerchantCourierBookingOptions(shopifyStoreId, "LEOPARDS");
+  const config = await prisma.merchantCourierConfig.findUnique({
+    where: { shopifyStoreId_providerName: { shopifyStoreId, providerName: "LEOPARDS" } },
+    select: { additionalConfig: true },
+  });
+  const cache = bookingOptionsObject(bookingOptionsObject(config?.additionalConfig).byndcartBookingOptionsCache);
+  if (Array.isArray(cache.cityRecords) && cache.cityRecords.length > 0) {
+    return cache.cityRecords as LeopardsCity[];
+  }
+  throw new Error("Leopards city catalog is not cached. Reopen the Booking page after verifying the courier connection.");
 }
 
 /**
