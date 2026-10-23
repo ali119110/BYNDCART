@@ -686,7 +686,11 @@ export default function BookingsPage() {
               ) : (
                 <select
                   value={selectedCourierKey}
-                  onChange={(e) => setSelectedCourierKey(e.target.value)}
+                  onChange={(e) => {
+                    setSelectedCourierKey(e.target.value);
+                    setCityPickerOrderId(null);
+                    setCitySearchQuery("");
+                  }}
                   style={{
                     height: "38px",
                     padding: "0 14px",
@@ -1718,7 +1722,7 @@ export default function BookingsPage() {
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "14px", padding: "18px 20px 12px", borderBottom: "1px solid #e2e8f0" }}>
               <div style={{ minWidth: 0 }}>
                 <h3 id="bc-city-picker-title" style={{ margin: 0, color: "#0f172a", fontSize: "18px", lineHeight: 1.3, fontWeight: 750 }}>
-                  Select delivery city
+                  {cityPickerServiceType === "Reverse" || cityPickerServiceType === "Reversed" ? "Select pickup city" : "Select delivery city"}
                 </h3>
                 <p style={{ margin: "5px 0 0", color: "#64748b", fontSize: "12px", lineHeight: 1.5 }}>
                   Order {cityPickerOrder.name} · {activeCourier?.label || selectedCourierKey} · {cityPickerServiceType === "Reverse" || cityPickerServiceType === "Reversed" ? "Pickup cities" : "Delivery cities"}
