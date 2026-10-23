@@ -1892,7 +1892,7 @@ async function fetchMerchantCourierBookingOptionsUncached(
     if (!token) throw new Error("PostEx merchant API token is missing. Reconfigure PostEx in Courier Settings.");
 
     const fetchCityList = async (direction: "Pickup" | "Delivery"): Promise<string[]> => {
-      const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${direction.toLowerCase()}`, {
+      const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${direction}`, {
         method: "GET",
         headers: { token, Accept: "application/json" },
       });
