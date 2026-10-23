@@ -720,7 +720,7 @@ export default function BookingsPage() {
             </div>
           </div>
 
-          {selectedCourierKey !== "RIDER" && (
+          {selectedCourierKey !== "RIDER" && (courierOptionsLoading || activeCourierOptions?.error) && (
             <div
               className={activeCourierOptions?.error ? "bc-note bad" : "bc-note"}
               role={activeCourierOptions?.error ? "alert" : "status"}
@@ -729,9 +729,7 @@ export default function BookingsPage() {
             >
               {courierOptionsLoading
                 ? `Loading ${activeCourier?.label || selectedCourierKey} cities and order types from the carrier API…`
-                : activeCourierOptions?.error
-                  ? activeCourierOptions.error
-                  : `Loaded ${(activeCourierOptions?.deliveryCities || []).length} delivery cities and ${(activeCourierOptions?.serviceTypes || []).length} supported booking types for ${activeCourier?.label || selectedCourierKey}.${activeCourierOptions?.serviceTypeSource === "integration" ? " This carrier does not expose an order-type list endpoint in the connected API contract; only the integration's supported modes are shown." : ""}`}
+                : activeCourierOptions?.error}
             </div>
           )}
 
@@ -1120,7 +1118,7 @@ export default function BookingsPage() {
                         }}
                       >
                         {/* Checkbox */}
-                        <td style={{ textAlign: "center", padding: "8px 10px" }}>
+                        <td style={{ verticalAlign: "middle", textAlign: "center", padding: "8px 10px" }}>
                           {!order.alreadyBooked ? (
                             <input
                               type="checkbox"
@@ -1134,12 +1132,12 @@ export default function BookingsPage() {
                         </td>
 
                         {/* # Row Index */}
-                        <td style={{ textAlign: "center", padding: "8px 6px", fontSize: "12px", color: "#64748b", fontWeight: 600 }}>
+                        <td style={{ verticalAlign: "middle", textAlign: "center", padding: "8px 6px", fontSize: "12px", color: "#64748b", fontWeight: 600 }}>
                           {rowNumber}
                         </td>
 
                         {/* Order Number Link */}
-                        <td style={{ padding: "8px 8px" }}>
+                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
                           <span
                             className="bc-order-link bc-order-number"
                             style={{
@@ -1160,7 +1158,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Customer name and email */}
-                        <td style={{ padding: "8px 8px", verticalAlign: "top" }}>
+                        <td style={{ verticalAlign: "middle", padding: "8px 8px", verticalAlign: "top" }}>
                           <input
                             type="text"
                             value={currentName}
@@ -1188,7 +1186,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Phone */}
-                        <td style={{ padding: "8px 8px", verticalAlign: "top" }}>
+                        <td style={{ verticalAlign: "middle", padding: "8px 8px", verticalAlign: "top" }}>
                           <input
                             type="text"
                             value={currentPhone}
@@ -1212,7 +1210,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Delivery address and carrier-supported city in a single, aligned column */}
-                        <td style={{ padding: "8px 8px", verticalAlign: "top" }}>
+                        <td style={{ verticalAlign: "middle", padding: "8px 8px", verticalAlign: "top" }}>
                           <input
                             type="text"
                             value={currentAddress}
@@ -1239,7 +1237,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Searchable, courier-specific city picker */}
-                        <td style={{ padding: "8px 6px", verticalAlign: "top" }}>
+                        <td style={{ verticalAlign: "middle", padding: "8px 6px", verticalAlign: "top" }}>
                           <button
                             type="button"
                             aria-label={`Choose ${selectedCourierKey} city for ${order.name}`}
@@ -1278,7 +1276,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* COD Amount */}
-                        <td style={{ padding: "8px 8px" }}>
+                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
                           <input
                             type="number"
                             min="0"
@@ -1303,7 +1301,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* KG Weight */}
-                        <td style={{ padding: "8px 8px" }}>
+                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
                           <input
                             type="number"
                             step="0.1"
@@ -1329,7 +1327,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Service Type */}
-                        <td style={{ padding: "8px 8px" }}>
+                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
                           <select
                             value={currentType}
                             disabled={order.alreadyBooked || selectedCourierKey === "RIDER" || courierOptionsLoading || availableServiceTypes.length === 0}
@@ -1353,7 +1351,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* View Items Icon (📑) */}
-                        <td style={{ textAlign: "center", padding: "8px 4px" }}>
+                        <td style={{ verticalAlign: "middle", textAlign: "center", padding: "8px 4px" }}>
                           <button
                             type="button"
                             title="View order line items"
@@ -1376,7 +1374,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Validation Status Icon (✔ or ✖) */}
-                        <td style={{ textAlign: "center", padding: "8px 4px" }}>
+                        <td style={{ verticalAlign: "middle", textAlign: "center", padding: "8px 4px" }}>
                           {isValid ? (
                             <span
                               title="Ready to book"
