@@ -73,7 +73,7 @@ export interface BookingResult {
 
 const UNFULFILLED_ORDERS_QUERY = `#graphql
   query UnfulfilledOrders($first: Int!) {
-    orders(first: $first, query: "fulfillment_status:unfulfilled", sortKey: CREATED_AT, reverse: true) {
+    orders(first: $first, query: "status:open AND fulfillment_status:unfulfilled", sortKey: CREATED_AT, reverse: true) {
       edges {
         node {
           id
@@ -238,7 +238,7 @@ export async function fetchUnfulfilledOrders(
       }
 
       // Map Shopify nodes to UnfulfilledOrder — extracts real customer/address data
-      const mappedOrders = orderNodes.map((node: any) => {
+      const mappedOrders: UnfulfilledOrder[] = orderNodes.map((node: any) => {
         const orderNumber = String(node.name || "");
         const totalPrice = Number(node.totalPriceSet?.shopMoney?.amount || 0);
         const finStatus = String(node.displayFinancialStatus || "").toUpperCase();
@@ -330,7 +330,7 @@ export async function fetchUnfulfilledOrders(
       bookedOrderMap.set(ship.orderNumber, { trackingNumber: ship.trackingNumber, courier: ship.courier });
     }
 
-    const mappedOrders = dbOrders.map((order) => {
+    const mappedOrders: UnfulfilledOrder[] = dbOrders.map((order) => {
       const orderNumber = order.orderNumber;
       const totalPrice = Number(order.totalPrice || 0);
       const finStatus = (order.financialStatus || "").toUpperCase();
@@ -485,13 +485,13 @@ export async function bookCourierShipment(
   const serviceType = input.serviceType || "Normal";
   const shipmentType = serviceType === "Reverse" ? "RETURN" : serviceType === "Replacement" ? "EXCHANGE" : "FORWARD";
 
-  const normalizedPhone = normalizePakistaniMobile(input.customerPhone);
+  const normalizedPhone = normalizePakistaniMobile(String(input.customerPhone || ""));
   let validationError: string | null = null;
-  if (!input.orderId || !input.orderNumber.trim()) validationError = "Select a valid Shopify order before booking.";
-  else if (!input.customerName.trim()) validationError = "Customer name is required.";
+  if (!input.orderId || !String(input.orderNumber || "").trim()) validationError = "Select a valid Shopify order before booking.";
+  else if (!String(input.customerName || "").trim()) validationError = "Customer name is required.";
   else if (!isValidPakistaniMobile(normalizedPhone)) validationError = "Enter a valid Pakistani mobile number (e.g. 03001234567).";
-  else if (!input.customerAddress.trim() || input.customerAddress.trim().length < 8) validationError = "Enter a complete delivery address (at least 8 characters).";
-  else if (!input.cityName.trim()) validationError = "Select the customer's city before booking.";
+  else if (!String(input.customerAddress || "").trim() || String(input.customerAddress || "").trim().length < 8) validationError = "Enter a complete delivery address (at least 8 characters).";
+  else if (!String(input.cityName || "").trim()) validationError = "Select the customer's city before booking.";
   else if (!Number.isFinite(Number(input.weightKg)) || Number(input.weightKg) <= 0 || Number(input.weightKg) > 50) validationError = "Weight must be between 0.1 and 50 kg.";
   else if (!Number.isFinite(Number(input.codAmountPKR)) || Number(input.codAmountPKR) < 0) validationError = "COD amount must be zero or greater.";
   if (validationError) {
