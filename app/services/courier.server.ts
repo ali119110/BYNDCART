@@ -515,7 +515,7 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
     let originCity: number;
     let destinationCity: number;
     try {
-      cities = await loadLeopardsCities(apiKey, apiPassword, apiRoot);
+      cities = await getCachedLeopardsCityRecords(input.shopifyStoreId);
       originCity = resolveLeopardsCityId(cities, senderCityName, "origin");
       destinationCity = resolveLeopardsCityId(cities, receiverCityName, "destination");
     } catch (error) {
