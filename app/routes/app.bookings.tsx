@@ -1017,7 +1017,7 @@ export default function BookingsPage() {
               </colgroup>
               <thead>
                 <tr style={{ background: "#0f172a", color: "#ffffff", fontSize: "12px", fontWeight: 700, letterSpacing: "0.02em" }}>
-                  <th style={{ width: "38px", padding: "11px 10px", textAlign: "center" }}>
+                  <th style={{ padding: "8px 4px", textAlign: "center" }}>
                     <input
                       type="checkbox"
                       checked={
@@ -1028,17 +1028,17 @@ export default function BookingsPage() {
                       style={{ accentColor: "#16a34a", cursor: "pointer", width: "15px", height: "15px" }}
                     />
                   </th>
-                  <th style={{ width: "40px", padding: "11px 6px", textAlign: "center" }}>#</th>
-                  <th style={{ padding: "11px 10px", minWidth: "100px" }}>Order</th>
-                  <th style={{ padding: "11px 10px", width: "175px" }}>Customer</th>
-                  <th style={{ padding: "11px 10px", width: "145px" }}>Phone</th>
-                  <th style={{ padding: "11px 10px", width: "280px" }}>Delivery Address</th>
-                  <th style={{ padding: "11px 10px", width: "220px" }}>City</th>
-                  <th style={{ padding: "11px 10px", width: "105px" }}>COD (PKR)</th>
-                  <th style={{ padding: "11px 10px", width: "82px" }}>Weight (kg)</th>
-                  <th style={{ padding: "11px 10px", width: "140px" }}>Service type</th>
-                  <th style={{ width: "36px", padding: "11px 4px", textAlign: "center" }}></th>
-                  <th style={{ width: "36px", padding: "11px 4px", textAlign: "center" }}></th>
+                  <th style={{ padding: "8px 3px", textAlign: "center" }}>#</th>
+                  <th style={{ padding: "8px 5px" }}>Order</th>
+                  <th style={{ padding: "8px 5px" }}>Customer</th>
+                  <th style={{ padding: "8px 5px" }}>Phone</th>
+                  <th style={{ padding: "8px 5px" }}>Delivery Address</th>
+                  <th style={{ padding: "8px 5px" }}>City</th>
+                  <th style={{ padding: "8px 5px" }}>COD (PKR)</th>
+                  <th style={{ padding: "8px 5px" }}>Weight (kg)</th>
+                  <th style={{ padding: "8px 5px" }}>Service type</th>
+                  <th style={{ padding: "8px 3px", textAlign: "center" }}></th>
+                  <th style={{ padding: "8px 3px", textAlign: "center" }}></th>
                 </tr>
               </thead>
               <tbody>
@@ -1109,7 +1109,7 @@ export default function BookingsPage() {
                         {/* Order Number Link */}
                         <td style={{ padding: "8px 8px" }}>
                           <span
-                            className="bc-order-link"
+                            className="bc-order-link bc-order-number"
                             style={{
                               color: "#0d9488",
                               fontWeight: 700,
@@ -1149,7 +1149,7 @@ export default function BookingsPage() {
                             }}
                           />
                           {order.customerEmail && (
-                            <div title={order.customerEmail} style={{ marginTop: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#64748b", fontSize: "11px" }}>
+                            <div className="bc-customer-email" title={order.customerEmail} style={{ marginTop: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#64748b", fontSize: "11px" }}>
                               {order.customerEmail}
                             </div>
                           )}
@@ -1201,7 +1201,7 @@ export default function BookingsPage() {
                               color: "#0f172a",
                             }}
                           />
-                          <div title={order.city || ""} style={{ margin: "5px 0 4px", color: "#64748b", fontSize: "11px" }}>
+                          <div className="bc-shopify-address-city" title={order.city || ""} style={{ margin: "5px 0 4px", color: "#64748b", fontSize: "11px" }}>
                             Shopify city: {order.city || "Not supplied"}
                           </div>
                         </td>
