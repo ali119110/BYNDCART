@@ -1890,7 +1890,8 @@ function normalizePostExOrderType(value: unknown): string | null {
   if (!label) return null;
   const normalized = label.toLowerCase();
   if (normalized === "normal") return "Normal";
-  if (normalized === "reverse" || normalized === "reversed") return "Reverse";
+  if (normalized === "reverse") return "Reverse";
+  if (normalized === "reversed") return "Reversed";
   if (normalized === "replacement") return "Replacement";
   if (normalized === "overland") return "Overland";
   // Preserve additional values returned by this merchant's own PostEx account rather than dropping them.
