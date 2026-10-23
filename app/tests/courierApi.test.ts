@@ -80,6 +80,7 @@ test("PostEx booking options cache all four API types and city lists in the data
     assert.deepStrictEqual(second.serviceTypes, ["Normal", "Reversed", "Overland", "Replacement"]);
     assert.strictEqual(requests.length, firstRequestCount, "subsequent reads should use the persisted catalog");
     const stored = (config.additionalConfig as any)?.byndcartBookingOptionsCache;
+    assert.strictEqual(stored?.cacheVersion, 2, "a corrected city lookup version should be persisted");
     assert.ok(stored?.credentialFingerprint);
     assert.ok(stored?.cachedAt);
     assert.ok(stored?.pickupCities?.includes("Karachi"));
