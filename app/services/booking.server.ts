@@ -548,7 +548,9 @@ export async function bookCourierShipment(
 ): Promise<BookingResult> {
   const normCourier = normalizeCourierName(input.courier);
   const serviceType = input.serviceType || "Normal";
-  const shipmentType = serviceType === "Reverse" ? "RETURN" : serviceType === "Replacement" ? "EXCHANGE" : "FORWARD";
+  const shipmentType = serviceType === "Reverse" || serviceType === "Reversed"
+    ? "RETURN"
+    : serviceType === "Replacement" ? "EXCHANGE" : "FORWARD";
 
   const normalizedPhone = normalizePakistaniMobile(String(input.customerPhone || ""));
   let validationError: string | null = null;
@@ -772,6 +774,7 @@ export async function bookCourierShipment(
       customerPhone: input.customerPhone,
       cityName: input.cityName,
       shipmentType: shipmentType as "RETURN" | "FORWARD" | "EXCHANGE",
+      courierServiceType: serviceType,
       destinationAddress: shipmentType === "RETURN"
         ? {
             address1: (credentials.credentials as any)?.warehouseAddress || (credentials as any).warehouseAddress || "",
