@@ -23,6 +23,7 @@ export interface UnfulfilledOrder {
   name: string;
   createdAt: string;
   displayFinancialStatus: string;
+  displayFulfillmentStatus: string;
   isCod: boolean;
   totalPrice: number;
   suggestedCod: number;
@@ -48,6 +49,7 @@ export interface SingleBookingInput {
   orderId: string;
   orderNumber: string;
   courier: string; // POSTEX, LEOPARDS, TCS, RIDER
+  serviceType?: "Normal" | "Reverse" | "Replacement";
   customerName: string;
   customerPhone: string;
   customerAddress: string;
@@ -212,11 +214,21 @@ export async function fetchUnfulfilledOrders(
     try {
       const response = await admin.graphql(UNFULFILLED_ORDERS_QUERY, { variables: { first: limit } });
       const payload = await response.json();
-      const orderNodes = (payload?.data?.orders?.edges || []).map((edge: any) => edge.node);
+      if (payload?.errors?.length) {
+        throw new Error(payload.errors.map((entry: any) => entry.message).filter(Boolean).join("; "));
+      }
+      if (!payload?.data?.orders || !Array.isArray(payload.data.orders.edges)) {
+        throw new Error("Shopify returned an unexpected orders response.");
+      }
+
+      // Do not trust the search query alone: only show genuinely unfulfilled orders.
+      const orderNodes = payload.data.orders.edges
+        .map((edge: any) => edge.node)
+        .filter((node: any) => String(node?.displayFulfillmentStatus || "").toUpperCase() === "UNFULFILLED");
 
       // Get all existing active forward shipments for this store to identify already booked orders
       const existingShipments = await prisma.shipmentTrack.findMany({
-        where: { shopifyStoreId },
+        where: { shopifyStoreId, type: "FORWARD", status: { not: "FAILED" } },
         select: { orderNumber: true, trackingNumber: true, courier: true },
       }).catch(() => []);
 
@@ -226,7 +238,7 @@ export async function fetchUnfulfilledOrders(
       }
 
       // Map Shopify nodes to UnfulfilledOrder — extracts real customer/address data
-      return orderNodes.map((node: any) => {
+      const mappedOrders = orderNodes.map((node: any) => {
         const orderNumber = String(node.name || "");
         const totalPrice = Number(node.totalPriceSet?.shopMoney?.amount || 0);
         const finStatus = String(node.displayFinancialStatus || "").toUpperCase();
@@ -269,6 +281,7 @@ export async function fetchUnfulfilledOrders(
           name: orderNumber,
           createdAt: node.createdAt,
           displayFinancialStatus: node.displayFinancialStatus || "PENDING",
+          displayFulfillmentStatus: String(node.displayFulfillmentStatus || "UNFULFILLED").toUpperCase(),
           isCod,
           totalPrice,
           suggestedCod: isCod ? totalPrice : 0,
@@ -290,14 +303,16 @@ export async function fetchUnfulfilledOrders(
           existingCourier: existingInfo?.courier,
         };
       });
+
+      // Do not offer an order again if a forward label already exists, or Shopify has its booking tag.
+      return mappedOrders.filter((order) => !order.alreadyBooked);
     } catch (error) {
-      console.warn("[Booking] Live Shopify GraphQL query failed, falling back to local database:", error);
-      // Fall through to DB fallback only on error
+      console.error("[Booking] Live Shopify GraphQL query failed; refusing stale database orders:", error);
+      throw new Error("Unable to load current unfulfilled orders from Shopify. Check the app's order access and reload the page.");
     }
   }
 
-  // 2. DB Fallback: ONLY runs when admin is unavailable (null/undefined) or GraphQL errored above.
-  // This is for development/offline mode only — never inflates real count when Shopify returns 0.
+  // 2. Database fallback is only for local/offline development when no Shopify admin client exists.
   try {
     const dbOrders = await prisma.order.findMany({
       where: { shopifyStoreId, fulfillmentStatus: "UNFULFILLED" },
@@ -306,7 +321,7 @@ export async function fetchUnfulfilledOrders(
     }).catch(() => []);
 
     const existingShipments = await prisma.shipmentTrack.findMany({
-      where: { shopifyStoreId },
+      where: { shopifyStoreId, type: "FORWARD", status: { not: "FAILED" } },
       select: { orderNumber: true, trackingNumber: true, courier: true },
     }).catch(() => []);
 
@@ -315,7 +330,7 @@ export async function fetchUnfulfilledOrders(
       bookedOrderMap.set(ship.orderNumber, { trackingNumber: ship.trackingNumber, courier: ship.courier });
     }
 
-    return dbOrders.map((order) => {
+    const mappedOrders = dbOrders.map((order) => {
       const orderNumber = order.orderNumber;
       const totalPrice = Number(order.totalPrice || 0);
       const finStatus = (order.financialStatus || "").toUpperCase();
@@ -349,6 +364,7 @@ export async function fetchUnfulfilledOrders(
         name: orderNumber,
         createdAt: order.shopifyCreatedAt.toISOString(),
         displayFinancialStatus: order.financialStatus || "PENDING",
+        displayFulfillmentStatus: String(order.fulfillmentStatus || "UNFULFILLED").toUpperCase(),
         isCod,
         totalPrice,
         suggestedCod: isCod ? totalPrice : 0,
@@ -370,6 +386,7 @@ export async function fetchUnfulfilledOrders(
         existingCourier: existingInfo?.courier,
       };
     });
+    return mappedOrders.filter((order) => !order.alreadyBooked);
   } catch (error) {
     console.error("[Booking] Database fallback for unfulfilled orders failed:", error);
     return [];
@@ -465,6 +482,38 @@ export async function bookCourierShipment(
   input: SingleBookingInput,
 ): Promise<BookingResult> {
   const normCourier = normalizeCourierName(input.courier);
+  const serviceType = input.serviceType || "Normal";
+  const shipmentType = serviceType === "Reverse" ? "RETURN" : serviceType === "Replacement" ? "EXCHANGE" : "FORWARD";
+
+  const normalizedPhone = normalizePakistaniMobile(input.customerPhone);
+  let validationError: string | null = null;
+  if (!input.orderId || !input.orderNumber.trim()) validationError = "Select a valid Shopify order before booking.";
+  else if (!input.customerName.trim()) validationError = "Customer name is required.";
+  else if (!isValidPakistaniMobile(normalizedPhone)) validationError = "Enter a valid Pakistani mobile number (e.g. 03001234567).";
+  else if (!input.customerAddress.trim() || input.customerAddress.trim().length < 8) validationError = "Enter a complete delivery address (at least 8 characters).";
+  else if (!input.cityName.trim()) validationError = "Select the customer's city before booking.";
+  else if (!Number.isFinite(Number(input.weightKg)) || Number(input.weightKg) <= 0 || Number(input.weightKg) > 50) validationError = "Weight must be between 0.1 and 50 kg.";
+  else if (!Number.isFinite(Number(input.codAmountPKR)) || Number(input.codAmountPKR) < 0) validationError = "COD amount must be zero or greater.";
+  if (validationError) {
+    return {
+      success: false,
+      orderId: input.orderId,
+      orderNumber: input.orderNumber,
+      courier: normCourier,
+      trackingNumber: "",
+      error: validationError,
+    };
+  }
+  if (normCourier === "RIDER" && serviceType !== "Normal") {
+    return {
+      success: false,
+      orderId: input.orderId,
+      orderNumber: input.orderNumber,
+      courier: normCourier,
+      trackingNumber: "",
+      error: "In-House Rider currently supports Normal bookings only.",
+    };
+  }
 
   // In-House Rider Booking
   if (normCourier === "RIDER") {
@@ -573,21 +622,34 @@ export async function bookCourierShipment(
       customerName: input.customerName,
       customerPhone: input.customerPhone,
       cityName: input.cityName,
-      shipmentType: "FORWARD" as const,
-      destinationAddress: {
-        address1: input.customerAddress,
-        city: input.cityName,
-      },
-      originAddress: {
-        city: (credentials as any).warehouseCity || credentials.credentials?.warehouseCity || "Karachi",
-      },
+      shipmentType: shipmentType as "RETURN" | "FORWARD" | "EXCHANGE",
+      destinationAddress: shipmentType === "RETURN"
+        ? {
+            address1: (credentials.credentials as any)?.warehouseAddress || (credentials as any).warehouseAddress || "",
+            city: (credentials.credentials as any)?.warehouseCity || (credentials as any).warehouseCity || "Karachi",
+          }
+        : {
+            address1: input.customerAddress,
+            city: input.cityName,
+          },
+      originAddress: shipmentType === "RETURN"
+        ? {
+            address1: input.customerAddress,
+            city: input.cityName,
+          }
+        : {
+            address1: (credentials.credentials as any)?.warehouseAddress || (credentials as any).warehouseAddress || "",
+            city: (credentials as any).warehouseCity || credentials.credentials?.warehouseCity || "Karachi",
+          },
       weightKg: Number(input.weightKg) || 0.5,
-      codAmountPKR: Number(input.codAmountPKR) || 0,
+      codAmountPKR: shipmentType === "RETURN" ? 0 : Number(input.codAmountPKR) || 0,
       remarks: input.remarks,
       items: input.items || [{ title: input.orderNumber, quantity: 1, price: input.codAmountPKR }],
     };
 
-    const labelResult: LabelResult = await adapter.createForwardShipment(bookingPayload, credentials);
+    const labelResult: LabelResult = shipmentType === "RETURN"
+      ? await adapter.createReverseShipment(bookingPayload, credentials)
+      : await adapter.createForwardShipment(bookingPayload, credentials);
 
     if (!labelResult.success || !labelResult.trackingNumber) {
       return {
@@ -607,26 +669,29 @@ export async function bookCourierShipment(
       where: { trackingNumber },
       update: {
         status: "LABEL_CREATED",
+        type: shipmentType,
         labelUrl: labelResult.labelUrl,
         destinationCity: input.cityName,
-        codAmount: input.codAmountPKR.toFixed(2),
+        codAmount: (shipmentType === "RETURN" ? 0 : input.codAmountPKR).toFixed(2),
       },
       create: {
         shopifyStoreId,
         shopifyOrderId: input.orderId,
         orderNumber: input.orderNumber,
-        type: "FORWARD",
+        type: shipmentType,
         courier: normCourier,
         trackingNumber,
         labelUrl: labelResult.labelUrl,
         status: "LABEL_CREATED",
         destinationCity: input.cityName,
-        codAmount: input.codAmountPKR.toFixed(2),
+        codAmount: (shipmentType === "RETURN" ? 0 : input.codAmountPKR).toFixed(2),
       },
     });
 
-    // Fulfill in Shopify
-    const fulfillment = await fulfillOrderInShopify(admin, input.orderId, normCourier, trackingNumber);
+    // A reverse pickup must not fulfill the original Shopify order.
+    const fulfillment = shipmentType === "RETURN"
+      ? { success: true as const, fulfillmentId: undefined }
+      : await fulfillOrderInShopify(admin, input.orderId, normCourier, trackingNumber);
 
     // Tag in Shopify
     await tagShopifyOrder(admin, input.orderId, normCourier, trackingNumber);
