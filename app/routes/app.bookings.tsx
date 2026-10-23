@@ -688,34 +688,56 @@ export default function BookingsPage() {
             </div>
           </div>
 
-          {/* Search & Filter Row — all in one line */}
+          {selectedCourierKey !== "RIDER" && (
+            <div
+              className={activeCourierOptions?.error ? "bc-note bad" : "bc-note"}
+              role={activeCourierOptions?.error ? "alert" : "status"}
+              aria-live="polite"
+              style={{ margin: "0 0 12px", fontSize: "13px" }}
+            >
+              {courierOptionsLoading
+                ? `Loading ${activeCourier?.label || selectedCourierKey} cities and order types from the carrier API…`
+                : activeCourierOptions?.error
+                  ? activeCourierOptions.error
+                  : `Loaded ${(activeCourierOptions?.deliveryCities || []).length} delivery cities and ${(activeCourierOptions?.serviceTypes || []).length} supported booking types for ${activeCourier?.label || selectedCourierKey}.${activeCourierOptions?.serviceTypeSource === "integration" ? " This carrier does not expose an order-type list endpoint in the connected API contract; only the integration's supported modes are shown." : ""}`}
+            </div>
+          )}
+
+          {/* Responsive search and filter bar */}
           <div
             style={{
               display: "flex",
               flexWrap: "wrap",
-              gap: "8px",
+              gap: "10px",
               alignItems: "center",
+              width: "100%",
+              boxSizing: "border-box",
               background: "#ffffff",
-              padding: "12px 14px",
-              borderRadius: "8px",
-              border: "1px solid #cbd5e1",
-              boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+              padding: "12px",
+              borderRadius: "10px",
+              border: "1px solid #dbe3ee",
+              boxShadow: "0 2px 6px rgba(15, 23, 42, 0.04)",
               marginBottom: "14px",
             }}
           >
             <input
               type="text"
-              placeholder="Search Order"
+              aria-label="Search order"
+              placeholder="Search order / customer"
               value={searchOrder}
               onChange={(e) => {
                 setSearchOrder(e.target.value);
                 setCurrentPage(1);
               }}
               style={{
-                height: "38px",
+                flex: "1 1 185px",
+                minWidth: 0,
+                width: "100%",
+                boxSizing: "border-box",
+                height: "40px",
                 padding: "0 12px",
                 border: "1px solid #cbd5e1",
-                borderRadius: "6px",
+                borderRadius: "7px",
                 fontSize: "13px",
                 background: "#ffffff",
                 color: "#0f172a",
@@ -723,17 +745,22 @@ export default function BookingsPage() {
             />
             <input
               type="text"
-              placeholder="Search Tag"
+              aria-label="Search tag"
+              placeholder="Search tag"
               value={searchTag}
               onChange={(e) => {
                 setSearchTag(e.target.value);
                 setCurrentPage(1);
               }}
               style={{
-                height: "38px",
+                flex: "1 1 150px",
+                minWidth: 0,
+                width: "100%",
+                boxSizing: "border-box",
+                height: "40px",
                 padding: "0 12px",
                 border: "1px solid #cbd5e1",
-                borderRadius: "6px",
+                borderRadius: "7px",
                 fontSize: "13px",
                 background: "#ffffff",
                 color: "#0f172a",
@@ -741,62 +768,77 @@ export default function BookingsPage() {
             />
             <input
               type="date"
+              aria-label="Filter by order date"
               value={selectDate}
               onChange={(e) => {
                 setSelectDate(e.target.value);
                 setCurrentPage(1);
               }}
               style={{
-                height: "38px",
+                flex: "1 1 145px",
+                minWidth: 0,
+                width: "100%",
+                boxSizing: "border-box",
+                height: "40px",
                 padding: "0 10px",
                 border: "1px solid #cbd5e1",
-                borderRadius: "6px",
+                borderRadius: "7px",
                 fontSize: "13px",
                 background: "#ffffff",
                 color: "#0f172a",
               }}
             />
             <select
+              aria-label="Filter by financial status"
               value={financialFilter}
               onChange={(e) => {
                 setFinancialFilter(e.target.value);
                 setCurrentPage(1);
               }}
               style={{
-                height: "38px",
+                flex: "1 1 165px",
+                minWidth: 0,
+                width: "100%",
+                boxSizing: "border-box",
+                height: "40px",
                 padding: "0 10px",
                 border: "1px solid #cbd5e1",
-                borderRadius: "6px",
+                borderRadius: "7px",
                 fontSize: "13px",
                 background: "#ffffff",
                 color: "#0f172a",
               }}
             >
-              <option value="ALL">Financial Status</option>
+              <option value="ALL">Financial status</option>
               <option value="PENDING">Pending (COD)</option>
               <option value="PAID">Paid</option>
-              <option value="PARTIALLY_PAID">Partially Paid</option>
+              <option value="PARTIALLY_PAID">Partially paid</option>
               <option value="VOIDED">Voided</option>
             </select>
             <select
+              aria-label="Filter by fulfillment status"
               value={fulfillmentFilter}
               onChange={(e) => {
                 setFulfillmentFilter(e.target.value);
                 setCurrentPage(1);
               }}
               style={{
-                height: "38px",
+                flex: "1 1 165px",
+                minWidth: 0,
+                width: "100%",
+                boxSizing: "border-box",
+                height: "40px",
                 padding: "0 10px",
                 border: "1px solid #cbd5e1",
-                borderRadius: "6px",
+                borderRadius: "7px",
                 fontSize: "13px",
                 background: "#ffffff",
                 color: "#0f172a",
               }}
             >
-              <option value="ALL">Fulfillment Status</option>
+              <option value="ALL">Fulfillment status</option>
               <option value="UNFULFILLED">Unfulfilled</option>
-              <option value="PARTIALLY_FULFILLED">Partially Fulfilled</option>
+              <option value="PARTIALLY_FULFILLED">Partially fulfilled</option>
             </select>
             <button
               type="button"
@@ -812,15 +854,18 @@ export default function BookingsPage() {
                 setCurrentPage(1);
               }}
               style={{
-                height: "38px",
-                padding: "0 24px",
+                flex: "0 0 auto",
+                minWidth: "112px",
+                height: "40px",
+                padding: "0 20px",
                 background: "#16a34a",
                 color: "#ffffff",
                 border: "1px solid #15803d",
-                borderRadius: "6px",
+                borderRadius: "7px",
                 fontWeight: 700,
-                fontSize: "14px",
+                fontSize: "13px",
                 cursor: "pointer",
+                boxShadow: "0 1px 2px rgba(15, 23, 42, 0.12)",
               }}
             >
               Search
