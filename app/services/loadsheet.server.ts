@@ -21,20 +21,31 @@ export async function createLoadsheet(
     throw new Error("Select at least one booked shipment to generate a loadsheet.");
   }
 
-  const courierUpper = input.courier.trim().toUpperCase();
-
-  // Load selected shipments
+  // A loadsheet is a courier handover manifest: only open forward parcels can be included.
+  const requestedIds = Array.from(new Set(input.shipmentIds));
   const shipments = await prisma.shipmentTrack.findMany({
     where: {
       shopifyStoreId,
-      id: { in: input.shipmentIds },
+      id: { in: requestedIds },
+      type: "FORWARD",
+      loadsheetId: null,
+      status: { notIn: ["CANCELLED", "FAILED", "DELIVERED"] },
     },
   });
 
   if (!shipments.length) {
-    throw new Error("No matching shipments found.");
+    throw new Error("No eligible forward shipments found. Returns, exchanges, delivered parcels, and shipments already assigned to a loadsheet cannot be included.");
+  }
+  if (shipments.length !== requestedIds.length) {
+    throw new Error("One or more selected shipments are no longer eligible for handover. Refresh the list and select only open forward parcels.");
+  }
+  const courierNames = Array.from(new Set(shipments.map((shipment) => shipment.courier.toUpperCase())));
+  if (courierNames.length !== 1) {
+    throw new Error("Create a separate loadsheet for each courier. The selected parcels contain more than one courier.");
   }
 
+  // Use the courier stored on the shipments, never a stale booking dropdown value.
+  const courierUpper = courierNames[0];
   const totalCod = shipments.reduce((sum, s) => sum + Number(s.codAmount || 0), 0);
   const parcelCount = shipments.length;
 
@@ -91,8 +102,9 @@ export async function createLoadsheet(
 export async function getUnassignedBookedShipments(shopifyStoreId: string, courier?: string) {
   const where: any = {
     shopifyStoreId,
+    type: "FORWARD",
     loadsheetId: null,
-    status: { notIn: ["CANCELLED"] },
+    status: { notIn: ["CANCELLED", "FAILED", "DELIVERED"] },
   };
 
   if (courier && courier !== "ALL") {

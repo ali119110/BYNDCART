@@ -1,6 +1,6 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import { Form, Link, useActionData, useFetcher, useLoaderData, useNavigation } from "react-router";
 import { requireTenantContext } from "../services/tenant.server";
 import { assertPermission } from "../services/permissions.server";
 import {
@@ -14,7 +14,7 @@ import {
   getUnassignedBookedShipments,
   listLoadsheets,
 } from "../services/loadsheet.server";
-import { getDecryptedCourierCredentials } from "../services/courier.server";
+import { getDecryptedCourierCredentials, getMerchantCourierBookingOptions } from "../services/courier.server";
 import { isValidPakistaniMobile, MAJOR_PAKISTANI_CITIES } from "../services/pakistanLogistics";
 
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -101,6 +101,23 @@ export async function action({ request }: ActionFunctionArgs) {
   const intent = String(form.get("intent") || "");
 
   try {
+    if (intent === "LOAD_COURIER_OPTIONS") {
+      const providerName = String(form.get("providerName") || "").trim().toUpperCase();
+      try {
+        const options = await getMerchantCourierBookingOptions(shopifyStoreId, providerName);
+        return { ...options, intent, error: null };
+      } catch (error) {
+        return {
+          intent,
+          providerName,
+          pickupCities: [],
+          deliveryCities: [],
+          serviceTypes: [],
+          error: error instanceof Error ? error.message : `Could not load ${providerName} booking options from its API.`,
+        };
+      }
+    }
+
     if (intent === "BOOK_SINGLE") {
       const orderId = String(form.get("orderId") || "");
       const orderNumber = String(form.get("orderNumber") || "");
@@ -112,11 +129,21 @@ export async function action({ request }: ActionFunctionArgs) {
       const codAmountPKR = Number(form.get("codAmountPKR") || 0);
       const weightKg = Number(form.get("weightKg") || 0.5);
       const remarks = String(form.get("remarks") || "");
+      const serviceType = String(form.get("serviceType") || "Normal");
+      let items: Array<{ title: string; quantity: number; price?: number; sku?: string }> = [];
+      try {
+        const rawItems = String(form.get("items") || "[]");
+        const parsedItems = JSON.parse(rawItems);
+        if (Array.isArray(parsedItems)) items = parsedItems;
+      } catch {
+        return { intent, ok: false, message: "Invalid order line-item payload." };
+      }
 
       const result = await bookCourierShipment(admin, shopifyStoreId, session, {
         orderId,
         orderNumber,
         courier,
+        serviceType: serviceType as "Normal" | "Reverse" | "Replacement",
         customerName,
         customerPhone,
         customerAddress,
@@ -124,13 +151,15 @@ export async function action({ request }: ActionFunctionArgs) {
         codAmountPKR,
         weightKg,
         remarks,
+        items,
       });
 
       if (!result.success) {
-        return { ok: false, message: result.error || "Booking failed." };
+        return { intent, ok: false, message: result.error || "Booking failed.", booking: result };
       }
 
       return {
+        intent,
         ok: true,
         message: `Order ${orderNumber} successfully booked with ${courier}! Tracking: ${result.trackingNumber}`,
         booking: result,
@@ -189,8 +218,47 @@ export async function action({ request }: ActionFunctionArgs) {
     return { ok: false, message: "Unknown booking intent." };
   } catch (error) {
     if (error instanceof Response) throw error;
-    return { ok: false, message: error instanceof Error ? error.message : "Booking operation failed." };
+    return {
+      intent,
+      ok: false,
+      message: error instanceof Error ? error.message : "Booking operation failed.",
+    };
   }
+}
+
+type BookingUploadStep = {
+  orderNumber: string;
+  status: "pending" | "uploading" | "success" | "failed";
+  message?: string;
+};
+
+type BookingUploadProgress = {
+  total: number;
+  completed: number;
+  currentIndex: number;
+  status: "uploading" | "done";
+  steps: BookingUploadStep[];
+};
+
+type BulkBookingQueue = {
+  items: Array<Record<string, any>>;
+  index: number;
+};
+
+type CourierBookingOptionsResponse = {
+  intent?: string;
+  providerName?: string;
+  pickupCities?: string[];
+  deliveryCities?: string[];
+  serviceTypes?: string[];
+  citySource?: "carrier_api" | "local";
+  serviceTypeSource?: "carrier_api" | "integration";
+  error?: string | null;
+};
+
+function matchCarrierOption(value: string | undefined, options: string[]): string {
+  const normalized = String(value || "").trim().toLocaleLowerCase();
+  return options.find((option) => option.trim().toLocaleLowerCase() === normalized) || "";
 }
 
 export default function BookingsPage() {
@@ -198,6 +266,11 @@ export default function BookingsPage() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
+  const courierOptionsFetcher = useFetcher<CourierBookingOptionsResponse>();
+  const singleBookingFetcher = useFetcher<any>();
+  const [uploadProgress, setUploadProgress] = useState<BookingUploadProgress | null>(null);
+  const bulkBookingQueueRef = useRef<BulkBookingQueue | null>(null);
+  const handledBookingResponseRef = useRef<unknown>(null);
 
   const [activeTab, setActiveTab] = useState<"BOOK" | "LOADSHEET">("BOOK");
 
@@ -205,6 +278,32 @@ export default function BookingsPage() {
   const defaultCourierKey = configuredCouriers[0]?.key || "RIDER";
   const [selectedCourierKey, setSelectedCourierKey] = useState(defaultCourierKey);
   const activeCourier = configuredCouriers.find((c) => c.key === selectedCourierKey) || configuredCouriers[0];
+
+  useEffect(() => {
+    if (selectedCourierKey === "RIDER") return;
+    courierOptionsFetcher.submit(
+      { intent: "LOAD_COURIER_OPTIONS", providerName: selectedCourierKey },
+      { method: "post" },
+    );
+  }, [selectedCourierKey]);
+
+  const fetchedCourierOptions = courierOptionsFetcher.data;
+  const activeCourierOptions = fetchedCourierOptions?.intent === "LOAD_COURIER_OPTIONS"
+    && fetchedCourierOptions.providerName === selectedCourierKey
+    ? fetchedCourierOptions
+    : null;
+  const courierOptionsLoading = selectedCourierKey !== "RIDER"
+    && (courierOptionsFetcher.state !== "idle" || !activeCourierOptions);
+  const availableServiceTypes = selectedCourierKey === "RIDER"
+    ? ["Normal"]
+    : (activeCourierOptions?.serviceTypes || []);
+  const availableCityOptions = (serviceType: string) => {
+    if (selectedCourierKey === "RIDER") return MAJOR_PAKISTANI_CITIES;
+    if (!activeCourierOptions) return [];
+    return serviceType === "Reverse"
+      ? activeCourierOptions.pickupCities || []
+      : activeCourierOptions.deliveryCities || [];
+  };
 
   // Selection & Editing state for orders
   const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
@@ -320,21 +419,28 @@ export default function BookingsPage() {
     }));
   };
 
-  // Build a complete, validated carrier payload from the current order snapshot.
+  // Build each courier payload against the current carrier's own city/type lists.
   const bulkBookingPayload = useMemo(() => {
     return selectedOrderIds.flatMap((id) => {
       const order = unfulfilledOrders.find((o) => o.id === id);
       if (!order || order.alreadyBooked) return [];
       const edit = orderEdits[id] || {};
+      const serviceType = selectedCourierKey === "RIDER"
+        ? "Normal"
+        : (availableServiceTypes.includes(edit.type || "Normal") ? (edit.type || "Normal") : (availableServiceTypes[0] || ""));
+      const cityOptions = availableCityOptions(serviceType);
+      const requestedCity = edit.city !== undefined ? edit.city : (order.matchedCity || "");
+      const cityName = matchCarrierOption(requestedCity, cityOptions);
+
       return [{
         orderId: order.id,
         orderNumber: order.name,
         courier: selectedCourierKey,
-        serviceType: selectedCourierKey === "RIDER" ? "Normal" : (edit.type || "Normal"),
+        serviceType,
         customerName: edit.name !== undefined ? edit.name : order.customerName,
         customerPhone: edit.phone !== undefined ? edit.phone : order.customerPhone,
         customerAddress: edit.address !== undefined ? edit.address : [order.address1, order.address2].filter(Boolean).join(", ").trim(),
-        cityName: edit.city !== undefined ? edit.city : (order.matchedCity || ""),
+        cityName,
         codAmountPKR: edit.cod !== undefined ? edit.cod : order.suggestedCod,
         weightKg: edit.weight !== undefined ? edit.weight : order.suggestedWeight,
         remarks: edit.remarks || "Allow customer to check flyer before payment",
@@ -346,7 +452,7 @@ export default function BookingsPage() {
         })),
       }];
     });
-  }, [selectedOrderIds, unfulfilledOrders, orderEdits, selectedCourierKey]);
+  }, [selectedOrderIds, unfulfilledOrders, orderEdits, selectedCourierKey, activeCourierOptions, availableServiceTypes]);
 
   const selectedBookingIssues = bulkBookingPayload.filter((booking) => {
     return !booking.orderId
@@ -354,13 +460,93 @@ export default function BookingsPage() {
       || !isValidPakistaniMobile(String(booking.customerPhone || ""))
       || String(booking.customerAddress || "").trim().length < 8
       || !String(booking.cityName || "").trim()
+      || !availableServiceTypes.includes(booking.serviceType)
       || !Number.isFinite(Number(booking.weightKg))
       || Number(booking.weightKg) <= 0
       || Number(booking.weightKg) > 50
       || !Number.isFinite(Number(booking.codAmountPKR))
       || Number(booking.codAmountPKR) < 0;
   });
-  const canUploadSelectedOrders = bulkBookingPayload.length > 0 && selectedBookingIssues.length === 0;
+  const canUploadSelectedOrders = bulkBookingPayload.length > 0
+    && selectedBookingIssues.length === 0
+    && !courierOptionsLoading
+    && (selectedCourierKey === "RIDER" || Boolean(activeCourierOptions && !activeCourierOptions.error));
+
+  const submitSingleBooking = (booking: Record<string, any>) => {
+    singleBookingFetcher.submit({
+      intent: "BOOK_SINGLE",
+      orderId: String(booking.orderId),
+      orderNumber: String(booking.orderNumber),
+      courier: String(booking.courier),
+      serviceType: String(booking.serviceType || "Normal"),
+      customerName: String(booking.customerName || ""),
+      customerPhone: String(booking.customerPhone || ""),
+      customerAddress: String(booking.customerAddress || ""),
+      cityName: String(booking.cityName || ""),
+      codAmountPKR: String(booking.codAmountPKR),
+      weightKg: String(booking.weightKg),
+      remarks: String(booking.remarks || ""),
+      items: JSON.stringify(booking.items || []),
+    }, { method: "post" });
+  };
+
+  const startBulkUpload = () => {
+    if (!canUploadSelectedOrders || bulkBookingQueueRef.current) return;
+    const items = bulkBookingPayload.map((booking) => ({ ...booking }));
+    const steps: BookingUploadStep[] = items.map((item, index) => ({
+      orderNumber: item.orderNumber,
+      status: index === 0 ? "uploading" : "pending",
+    }));
+    bulkBookingQueueRef.current = { items, index: 0 };
+    handledBookingResponseRef.current = singleBookingFetcher.data;
+    setUploadProgress({ total: items.length, completed: 0, currentIndex: 0, status: "uploading", steps });
+    submitSingleBooking(items[0]);
+  };
+
+  useEffect(() => {
+    if (singleBookingFetcher.state !== "idle") return;
+    const response = singleBookingFetcher.data;
+    if (!response || response.intent !== "BOOK_SINGLE" || response === handledBookingResponseRef.current) return;
+    const queue = bulkBookingQueueRef.current;
+    if (!queue) return;
+
+    handledBookingResponseRef.current = response;
+    const currentItem = queue.items[queue.index];
+    const results = [...(uploadProgress?.steps || [])];
+    results[queue.index] = {
+      orderNumber: currentItem.orderNumber,
+      status: response.ok ? "success" : "failed",
+      message: response.message,
+    };
+
+    const nextIndex = queue.index + 1;
+    if (nextIndex >= queue.items.length) {
+      bulkBookingQueueRef.current = null;
+      setUploadProgress({
+        total: queue.items.length,
+        completed: queue.items.length,
+        currentIndex: queue.items.length,
+        status: "done",
+        steps: results,
+      });
+      setSelectedOrderIds((current) => current.filter((id) => !queue.items.some((item) => item.orderId === id)));
+      return;
+    }
+
+    queue.index = nextIndex;
+    results[nextIndex] = {
+      orderNumber: queue.items[nextIndex].orderNumber,
+      status: "uploading",
+    };
+    setUploadProgress({
+      total: queue.items.length,
+      completed: nextIndex,
+      currentIndex: nextIndex,
+      status: "uploading",
+      steps: results,
+    });
+    submitSingleBooking(queue.items[nextIndex]);
+  }, [singleBookingFetcher.state, singleBookingFetcher.data, uploadProgress?.steps]);
 
   // Barcode scanner submission for loadsheet
   const handleBarcodeScan = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -466,9 +652,9 @@ export default function BookingsPage() {
             {/* Courier List Dropdown — only shows configured couriers */}
             <div style={{ display: "inline-flex", alignItems: "center", gap: "10px" }}>
               {configuredCouriers.length === 0 ? (
-                <a href="/app/couriers" style={{ color: "#dc2626", fontWeight: 700, fontSize: "13px" }}>
+                <Link to="/app/couriers" style={{ color: "#dc2626", fontWeight: 700, fontSize: "13px", textDecoration: "none" }}>
                   ⚠ No courier configured — Click to set up courier API
-                </a>
+                </Link>
               ) : (
                 <select
                   value={selectedCourierKey}
@@ -493,43 +679,65 @@ export default function BookingsPage() {
                   ))}
                 </select>
               )}
-              <a
-                href="/app/couriers"
-                style={{ fontSize: "12px", color: "#2563eb", fontWeight: 600, textDecoration: "none" }}
+              <Link
+                to="/app/couriers"
+                style={{ fontSize: "13px", color: "#2563eb", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}
               >
                 ⚙ Courier Settings
-              </a>
+              </Link>
             </div>
           </div>
 
-          {/* Search & Filter Row — all in one line */}
+          {selectedCourierKey !== "RIDER" && (
+            <div
+              className={activeCourierOptions?.error ? "bc-note bad" : "bc-note"}
+              role={activeCourierOptions?.error ? "alert" : "status"}
+              aria-live="polite"
+              style={{ margin: "0 0 12px", fontSize: "13px" }}
+            >
+              {courierOptionsLoading
+                ? `Loading ${activeCourier?.label || selectedCourierKey} cities and order types from the carrier API…`
+                : activeCourierOptions?.error
+                  ? activeCourierOptions.error
+                  : `Loaded ${(activeCourierOptions?.deliveryCities || []).length} delivery cities and ${(activeCourierOptions?.serviceTypes || []).length} supported booking types for ${activeCourier?.label || selectedCourierKey}.${activeCourierOptions?.serviceTypeSource === "integration" ? " This carrier does not expose an order-type list endpoint in the connected API contract; only the integration's supported modes are shown." : ""}`}
+            </div>
+          )}
+
+          {/* Responsive search and filter bar */}
           <div
             style={{
               display: "flex",
               flexWrap: "wrap",
-              gap: "8px",
+              gap: "10px",
               alignItems: "center",
+              width: "100%",
+              boxSizing: "border-box",
               background: "#ffffff",
-              padding: "12px 14px",
-              borderRadius: "8px",
-              border: "1px solid #cbd5e1",
-              boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
+              padding: "12px",
+              borderRadius: "10px",
+              border: "1px solid #dbe3ee",
+              boxShadow: "0 2px 6px rgba(15, 23, 42, 0.04)",
               marginBottom: "14px",
             }}
           >
             <input
               type="text"
-              placeholder="Search Order"
+              aria-label="Search order"
+              placeholder="Search order / customer"
               value={searchOrder}
               onChange={(e) => {
                 setSearchOrder(e.target.value);
                 setCurrentPage(1);
               }}
               style={{
-                height: "38px",
+                flex: "1 1 185px",
+                minWidth: 0,
+                width: "100%",
+                boxSizing: "border-box",
+                height: "40px",
                 padding: "0 12px",
                 border: "1px solid #cbd5e1",
-                borderRadius: "6px",
+                borderRadius: "7px",
                 fontSize: "13px",
                 background: "#ffffff",
                 color: "#0f172a",
@@ -537,17 +745,22 @@ export default function BookingsPage() {
             />
             <input
               type="text"
-              placeholder="Search Tag"
+              aria-label="Search tag"
+              placeholder="Search tag"
               value={searchTag}
               onChange={(e) => {
                 setSearchTag(e.target.value);
                 setCurrentPage(1);
               }}
               style={{
-                height: "38px",
+                flex: "1 1 150px",
+                minWidth: 0,
+                width: "100%",
+                boxSizing: "border-box",
+                height: "40px",
                 padding: "0 12px",
                 border: "1px solid #cbd5e1",
-                borderRadius: "6px",
+                borderRadius: "7px",
                 fontSize: "13px",
                 background: "#ffffff",
                 color: "#0f172a",
@@ -555,62 +768,77 @@ export default function BookingsPage() {
             />
             <input
               type="date"
+              aria-label="Filter by order date"
               value={selectDate}
               onChange={(e) => {
                 setSelectDate(e.target.value);
                 setCurrentPage(1);
               }}
               style={{
-                height: "38px",
+                flex: "1 1 145px",
+                minWidth: 0,
+                width: "100%",
+                boxSizing: "border-box",
+                height: "40px",
                 padding: "0 10px",
                 border: "1px solid #cbd5e1",
-                borderRadius: "6px",
+                borderRadius: "7px",
                 fontSize: "13px",
                 background: "#ffffff",
                 color: "#0f172a",
               }}
             />
             <select
+              aria-label="Filter by financial status"
               value={financialFilter}
               onChange={(e) => {
                 setFinancialFilter(e.target.value);
                 setCurrentPage(1);
               }}
               style={{
-                height: "38px",
+                flex: "1 1 165px",
+                minWidth: 0,
+                width: "100%",
+                boxSizing: "border-box",
+                height: "40px",
                 padding: "0 10px",
                 border: "1px solid #cbd5e1",
-                borderRadius: "6px",
+                borderRadius: "7px",
                 fontSize: "13px",
                 background: "#ffffff",
                 color: "#0f172a",
               }}
             >
-              <option value="ALL">Financial Status</option>
+              <option value="ALL">Financial status</option>
               <option value="PENDING">Pending (COD)</option>
               <option value="PAID">Paid</option>
-              <option value="PARTIALLY_PAID">Partially Paid</option>
+              <option value="PARTIALLY_PAID">Partially paid</option>
               <option value="VOIDED">Voided</option>
             </select>
             <select
+              aria-label="Filter by fulfillment status"
               value={fulfillmentFilter}
               onChange={(e) => {
                 setFulfillmentFilter(e.target.value);
                 setCurrentPage(1);
               }}
               style={{
-                height: "38px",
+                flex: "1 1 165px",
+                minWidth: 0,
+                width: "100%",
+                boxSizing: "border-box",
+                height: "40px",
                 padding: "0 10px",
                 border: "1px solid #cbd5e1",
-                borderRadius: "6px",
+                borderRadius: "7px",
                 fontSize: "13px",
                 background: "#ffffff",
                 color: "#0f172a",
               }}
             >
-              <option value="ALL">Fulfillment Status</option>
+              <option value="ALL">Fulfillment status</option>
               <option value="UNFULFILLED">Unfulfilled</option>
-              <option value="PARTIALLY_FULFILLED">Partially Fulfilled</option>
+              <option value="PARTIALLY_FULFILLED">Partially fulfilled</option>
             </select>
             <button
               type="button"
@@ -626,15 +854,18 @@ export default function BookingsPage() {
                 setCurrentPage(1);
               }}
               style={{
-                height: "38px",
-                padding: "0 24px",
+                flex: "0 0 auto",
+                minWidth: "112px",
+                height: "40px",
+                padding: "0 20px",
                 background: "#16a34a",
                 color: "#ffffff",
                 border: "1px solid #15803d",
-                borderRadius: "6px",
+                borderRadius: "7px",
                 fontWeight: 700,
-                fontSize: "14px",
+                fontSize: "13px",
                 cursor: "pointer",
+                boxShadow: "0 1px 2px rgba(15, 23, 42, 0.12)",
               }}
             >
               Search
@@ -718,7 +949,7 @@ export default function BookingsPage() {
               boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
             }}
           >
-            <table style={{ width: "100%", minWidth: "1100px", borderCollapse: "collapse", textAlign: "left", fontSize: "13px" }}>
+            <table style={{ width: "100%", minWidth: "1510px", tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, textAlign: "left", fontSize: "13px" }}>
               <thead>
                 <tr style={{ background: "#0f172a", color: "#ffffff", fontSize: "12px", fontWeight: 700, letterSpacing: "0.02em" }}>
                   <th style={{ width: "38px", padding: "11px 10px", textAlign: "center" }}>
@@ -734,13 +965,13 @@ export default function BookingsPage() {
                   </th>
                   <th style={{ width: "40px", padding: "11px 6px", textAlign: "center" }}>#</th>
                   <th style={{ padding: "11px 10px", minWidth: "100px" }}>Order</th>
-                  <th style={{ padding: "11px 10px", minWidth: "150px" }}>Customer Name</th>
-                  <th style={{ padding: "11px 10px", minWidth: "130px" }}>Phone</th>
-                  <th style={{ padding: "11px 10px", minWidth: "260px" }}>Delivery Address</th>
-                  <th style={{ padding: "11px 10px", minWidth: "150px" }}>City</th>
-                  <th style={{ padding: "11px 10px", width: "90px" }}>COD (PKR)</th>
-                  <th style={{ padding: "11px 10px", width: "70px" }}>KG</th>
-                  <th style={{ padding: "11px 10px", width: "110px" }}>Type</th>
+                  <th style={{ padding: "11px 10px", width: "175px" }}>Customer</th>
+                  <th style={{ padding: "11px 10px", width: "145px" }}>Phone</th>
+                  <th style={{ padding: "11px 10px", width: "280px" }}>Delivery Address</th>
+                  <th style={{ padding: "11px 10px", width: "220px" }}>City</th>
+                  <th style={{ padding: "11px 10px", width: "105px" }}>COD (PKR)</th>
+                  <th style={{ padding: "11px 10px", width: "82px" }}>Weight (kg)</th>
+                  <th style={{ padding: "11px 10px", width: "140px" }}>Service type</th>
                   <th style={{ width: "36px", padding: "11px 4px", textAlign: "center" }}></th>
                   <th style={{ width: "36px", padding: "11px 4px", textAlign: "center" }}></th>
                 </tr>
@@ -748,7 +979,7 @@ export default function BookingsPage() {
               <tbody>
                 {paginatedOrders.length === 0 ? (
                   <tr>
-                    <td colSpan={13} style={{ padding: "36px 16px", textAlign: "center", color: "#64748b" }}>
+                    <td colSpan={12} style={{ padding: "36px 16px", textAlign: "center", color: "#64748b" }}>
                       No unfulfilled orders found matching your search criteria.
                     </td>
                   </tr>
@@ -759,10 +990,14 @@ export default function BookingsPage() {
                     const currentName = edit.name !== undefined ? edit.name : order.customerName;
                     const currentPhone = edit.phone !== undefined ? edit.phone : order.customerPhone;
                     const currentAddress = edit.address !== undefined ? edit.address : `${order.address1 || ""} ${order.address2 || ""}`.trim();
-                    const currentCity = edit.city !== undefined ? edit.city : order.matchedCity;
                     const currentCod = edit.cod !== undefined ? edit.cod : order.suggestedCod;
                     const currentWeight = edit.weight !== undefined ? edit.weight : order.suggestedWeight;
-                    const currentType = edit.type || "Normal";
+                    const currentType = selectedCourierKey === "RIDER"
+                      ? "Normal"
+                      : (availableServiceTypes.includes(edit.type || "Normal") ? (edit.type || "Normal") : (availableServiceTypes[0] || ""));
+                    const currentCityOptions = availableCityOptions(currentType);
+                    const currentCityCandidate = edit.city !== undefined ? edit.city : order.matchedCity;
+                    const currentCity = matchCarrierOption(currentCityCandidate, currentCityOptions);
 
                     const isSelected = selectedOrderIds.includes(order.id);
 
@@ -772,6 +1007,7 @@ export default function BookingsPage() {
                       && isValidPakistaniMobile(currentPhone)
                       && currentAddress.trim().length >= 8
                       && currentCity
+                      && availableServiceTypes.includes(currentType)
                       && Number.isFinite(Number(currentWeight))
                       && currentWeight > 0
                       && Number.isFinite(Number(currentCod))
@@ -826,92 +1062,108 @@ export default function BookingsPage() {
                           )}
                         </td>
 
-                        {/* Name (Inline editable input) */}
-                        <td style={{ padding: "8px 8px" }}>
+                        {/* Customer name and email */}
+                        <td style={{ padding: "8px 8px", verticalAlign: "top" }}>
                           <input
                             type="text"
                             value={currentName}
+                            title={currentName}
                             disabled={order.alreadyBooked}
                             onChange={(e) => handleEditOrder(order.id, "name", e.target.value)}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "4px 8px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "5px 9px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
                           />
+                          {order.customerEmail && (
+                            <div title={order.customerEmail} style={{ marginTop: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#64748b", fontSize: "11px" }}>
+                              {order.customerEmail}
+                            </div>
+                          )}
                         </td>
 
-                        {/* Phone (Inline editable input) */}
-                        <td style={{ padding: "8px 8px" }}>
+                        {/* Phone */}
+                        <td style={{ padding: "8px 8px", verticalAlign: "top" }}>
                           <input
                             type="text"
                             value={currentPhone}
+                            title={currentPhone}
                             placeholder="03001234567"
                             disabled={order.alreadyBooked}
                             onChange={(e) => handleEditOrder(order.id, "phone", e.target.value)}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "4px 8px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "5px 9px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
                           />
                         </td>
 
-                        {/* Address (Inline editable input) */}
-                        <td style={{ padding: "8px 8px" }}>
+                        {/* Delivery address and carrier-supported city in a single, aligned column */}
+                        <td style={{ padding: "8px 8px", verticalAlign: "top" }}>
                           <input
                             type="text"
                             value={currentAddress}
+                            title={currentAddress}
                             placeholder="Street, Area, Building"
                             disabled={order.alreadyBooked}
                             onChange={(e) => handleEditOrder(order.id, "address", e.target.value)}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "4px 8px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "5px 9px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
                           />
+                          <div title={order.city || ""} style={{ margin: "5px 0 4px", color: "#64748b", fontSize: "11px" }}>
+                            Shopify city: {order.city || "Not supplied"}
+                          </div>
                         </td>
 
-                        {/* Shopify Original City */}
-                        <td style={{ padding: "8px 8px", color: "#475569", fontSize: "12px", fontWeight: 500 }}>
-                          {order.city || "—"}
-                        </td>
-
-                        {/* Matched City Dropdown */}
-                        <td style={{ padding: "8px 8px" }}>
+                        {/* Single City column: original city plus carrier's own city list */}
+                        <td style={{ padding: "8px 8px", verticalAlign: "top" }}>
                           <select
                             value={currentCity}
-                            disabled={order.alreadyBooked}
+                            disabled={order.alreadyBooked || courierOptionsLoading || currentCityOptions.length === 0}
                             onChange={(e) => handleEditOrder(order.id, "city", e.target.value)}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "2px 6px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "2px 7px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
                           >
-                            <option value="">Select City</option>
-                            {MAJOR_PAKISTANI_CITIES.map((city) => (
+                            <option value="">
+                              {courierOptionsLoading ? "Loading carrier cities…" : currentCityOptions.length ? "Select carrier city" : "Carrier city list unavailable"}
+                            </option>
+                            {currentCityOptions.map((city) => (
                               <option key={city} value={city}>
                                 {city}
                               </option>
@@ -929,12 +1181,14 @@ export default function BookingsPage() {
                             disabled={order.alreadyBooked}
                             onChange={(e) => handleEditOrder(order.id, "cod", Number(e.target.value))}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "4px 6px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "5px 8px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               textAlign: "right",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
@@ -953,12 +1207,14 @@ export default function BookingsPage() {
                             disabled={order.alreadyBooked}
                             onChange={(e) => handleEditOrder(order.id, "weight", Number(e.target.value))}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "4px 6px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "5px 6px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               textAlign: "center",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
@@ -970,22 +1226,23 @@ export default function BookingsPage() {
                         <td style={{ padding: "8px 8px" }}>
                           <select
                             value={currentType}
-                            disabled={order.alreadyBooked || selectedCourierKey === "RIDER"}
+                            disabled={order.alreadyBooked || selectedCourierKey === "RIDER" || courierOptionsLoading || availableServiceTypes.length === 0}
                             onChange={(e) => handleEditOrder(order.id, "type", e.target.value)}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "2px 6px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "2px 7px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
                           >
-                            <option value="Normal">Normal</option>
-                            <option value="Reverse">Reverse</option>
-                            <option value="Replacement">Replacement</option>
+                            {availableServiceTypes.length === 0 && <option value="">{courierOptionsLoading ? "Loading types…" : "No types available"}</option>}
+                            {availableServiceTypes.map((type) => <option key={type} value={type}>{type}</option>)}
                           </select>
                         </td>
 
@@ -1060,38 +1317,99 @@ export default function BookingsPage() {
             </table>
           </div>
 
-          {/* Centered Upload Booking action. Invalid data is blocked before it reaches the carrier API. */}
-          <div style={{ textAlign: "center", margin: "28px 0 20px" }}>
+          {/* Sequential Upload Booking action with per-order status */}
+          <div style={{ margin: "24px 0 20px", display: "flex", flexDirection: "column", alignItems: "center", gap: "12px" }}>
             {bulkBookingPayload.length > 0 && selectedBookingIssues.length > 0 && (
-              <p role="alert" style={{ color: "#b91c1c", fontSize: "13px", margin: "0 0 12px" }}>
+              <p role="alert" style={{ color: "#b91c1c", fontSize: "13px", margin: 0, textAlign: "center" }}>
                 Complete the customer details in the selected rows before uploading. {selectedBookingIssues.length} selected order(s) need attention.
               </p>
             )}
-            <Form method="post" style={{ display: "inline-block" }}>
-              <input type="hidden" name="intent" value="BOOK_BULK" />
-              <input type="hidden" name="bulkPayload" value={JSON.stringify(bulkBookingPayload)} />
-              <button
-                type="submit"
-                disabled={isSubmitting || !canUploadSelectedOrders}
+            {uploadProgress && (
+              <section
+                aria-live="polite"
+                aria-busy={uploadProgress.status === "uploading"}
                 style={{
-                  background: canUploadSelectedOrders ? "#16834b" : "#94a3b8",
-                  color: "#ffffff",
-                  border: "none",
-                  padding: "13px 44px",
-                  borderRadius: "6px",
-                  fontSize: "15px",
-                  fontWeight: 700,
-                  letterSpacing: "0.01em",
-                  cursor: canUploadSelectedOrders ? "pointer" : "not-allowed",
-                  boxShadow: canUploadSelectedOrders ? "0 2px 5px rgba(15, 23, 42, 0.15)" : "none",
-                  transition: "all 140ms ease",
+                  width: "min(100%, 940px)",
+                  boxSizing: "border-box",
+                  background: "#ffffff",
+                  border: "1px solid #dbe3ee",
+                  borderRadius: "12px",
+                  padding: "16px",
+                  boxShadow: "0 3px 10px rgba(15, 23, 42, 0.05)",
+                  textAlign: "left",
                 }}
               >
-                {isSubmitting
-                  ? "Uploading Booking..."
-                  : `Upload Booking${bulkBookingPayload.length > 0 ? ` (${bulkBookingPayload.length})` : ""}`}
-              </button>
-            </Form>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", marginBottom: "10px" }}>
+                  <strong style={{ color: "#0f172a", fontSize: "14px" }}>
+                    {uploadProgress.status === "uploading"
+                      ? `Uploading order ${uploadProgress.currentIndex + 1} of ${uploadProgress.total}: ${uploadProgress.steps[uploadProgress.currentIndex]?.orderNumber || ""}`
+                      : "Booking upload finished"}
+                  </strong>
+                  <span style={{ color: "#64748b", fontSize: "12px", fontWeight: 700 }}>
+                    {uploadProgress.completed} / {uploadProgress.total} processed
+                  </span>
+                </div>
+                <div
+                  role="progressbar"
+                  aria-label="Booking upload progress"
+                  aria-valuemin={0}
+                  aria-valuemax={uploadProgress.total}
+                  aria-valuenow={uploadProgress.completed}
+                  style={{ height: "7px", overflow: "hidden", background: "#e2e8f0", borderRadius: "999px", marginBottom: "14px" }}
+                >
+                  <div style={{ height: "100%", width: `${Math.round((uploadProgress.completed / Math.max(1, uploadProgress.total)) * 100)}%`, background: "#16a34a", borderRadius: "999px", transition: "width 160ms ease" }} />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "8px" }}>
+                  {uploadProgress.steps.map((step, index) => {
+                    const colors = step.status === "success"
+                      ? { bg: "#ecfdf5", border: "#a7f3d0", text: "#047857", label: "Booked" }
+                      : step.status === "failed"
+                        ? { bg: "#fef2f2", border: "#fecaca", text: "#b91c1c", label: "Failed" }
+                        : step.status === "uploading"
+                          ? { bg: "#eff6ff", border: "#bfdbfe", text: "#1d4ed8", label: "Uploading…" }
+                          : { bg: "#f8fafc", border: "#e2e8f0", text: "#64748b", label: "Queued" };
+                    return (
+                      <div key={`${step.orderNumber}-${index}`} title={step.message || step.orderNumber} style={{ minWidth: 0, padding: "9px 10px", border: `1px solid ${colors.border}`, background: colors.bg, color: colors.text, borderRadius: "8px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "7px", fontSize: "12px", fontWeight: 700 }}>
+                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "22px", height: "22px", flex: "0 0 22px", borderRadius: "50%", border: `1px solid ${colors.border}`, background: "#ffffff" }}>{index + 1}</span>
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{step.orderNumber}</span>
+                          <span style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>{colors.label}</span>
+                        </div>
+                        {step.status === "failed" && step.message && <div style={{ marginTop: "7px", fontSize: "11px", lineHeight: 1.4, overflowWrap: "anywhere" }}>{step.message}</div>}
+                      </div>
+                    );
+                  })}
+                </div>
+                {uploadProgress.status === "done" && (
+                  <p style={{ margin: "12px 0 0", color: "#334155", fontSize: "13px" }}>
+                    {uploadProgress.steps.filter((step) => step.status === "success").length} booked successfully · {uploadProgress.steps.filter((step) => step.status === "failed").length} failed.
+                  </p>
+                )}
+              </section>
+            )}
+
+            <button
+              type="button"
+              onClick={startBulkUpload}
+              disabled={isSubmitting || uploadProgress?.status === "uploading" || !canUploadSelectedOrders}
+              style={{
+                background: canUploadSelectedOrders && uploadProgress?.status !== "uploading" ? "#16834b" : "#94a3b8",
+                color: "#ffffff",
+                border: "none",
+                padding: "13px 38px",
+                borderRadius: "8px",
+                fontSize: "15px",
+                fontWeight: 700,
+                letterSpacing: "0.01em",
+                cursor: canUploadSelectedOrders && uploadProgress?.status !== "uploading" ? "pointer" : "not-allowed",
+                boxShadow: canUploadSelectedOrders && uploadProgress?.status !== "uploading" ? "0 2px 5px rgba(15, 23, 42, 0.15)" : "none",
+                transition: "all 140ms ease",
+              }}
+            >
+              {uploadProgress?.status === "uploading"
+                ? `Uploading order ${uploadProgress.currentIndex + 1} of ${uploadProgress.total}…`
+                : `Upload Booking${bulkBookingPayload.length > 0 ? ` (${bulkBookingPayload.length})` : ""}`}
+            </button>
           </div>
         </div>
       )}
