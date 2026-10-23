@@ -20,7 +20,6 @@ const navigationItems = [
   { label: "Returns", href: "/app/returns" },
   { label: "Exchanges", href: "/app/exchanges" },
   { label: "Customers", href: "/app/customers" },
-  { label: "Shipments", href: "/app/shipments" },
   { label: "Analytics", href: "/app/analytics" },
   { label: "Settings", href: "/app/settings" },
   { label: "Warehouse", href: "/app/warehouse" },
@@ -154,10 +153,11 @@ const styles = (
     }
 
     s-link[aria-current="page"] {
-      border-color: #d5d8dc;
-      background: #f4f5f6;
-      color: #202223 !important;
+      border-color: #bfdbfe;
+      background: #eff6ff;
+      color: #2563eb !important;
       font-weight: 700;
+      box-shadow: 0 1px 3px rgba(37, 99, 235, 0.12);
     }
 
     s-link::part(link) {

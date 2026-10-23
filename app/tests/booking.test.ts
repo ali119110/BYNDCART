@@ -75,7 +75,7 @@ test("Pakistani Logistics - City matching and abbreviation aliases", () => {
 test("Pakistani Logistics - Package weight estimation", () => {
   // Empty or missing weight defaults to 0.5 kg
   assert.strictEqual(estimatePackageWeight([]), 0.5);
-  assert.strictEqual(estimatePackageWeight(null), 0.5);
+  assert.strictEqual(estimatePackageWeight(null as any), 0.5);
   assert.strictEqual(estimatePackageWeight([{ quantity: 1, grams: 0 }]), 0.5);
 
   // Computed weight from grams

@@ -262,7 +262,7 @@ export default function Shipments() {
                 </tr>
               </thead>
               <tbody>
-                {shipments.map((shipment) => (
+                {shipments.map((shipment: any) => (
                   <tr key={shipment.id}>
                     <td><code>{shipment.id.slice(0, 8)}</code></td>
                     <td>{shipment.orderNumber}</td>

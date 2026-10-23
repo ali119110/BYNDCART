@@ -5,29 +5,52 @@
 
 :root {
   color-scheme: light;
-  --bc-bg: #f6f7f8;
+  --bc-bg: #f8fafc;
   --bc-surface: #ffffff;
-  --bc-surface-subtle: #fafbfc;
-  --bc-ink: #202223;
-  --bc-muted: #616a70;
-  --bc-subtle: #8c9196;
-  --bc-line: #e1e3e5;
-  --bc-line-strong: #c9cccf;
-  --bc-brand: #18181b;
-  --bc-brand-hover: #27272a;
-  --bc-brand-soft: #f4f4f5;
+  --bc-surface-subtle: #f8fafc;
+  --bc-ink: #0f172a;
+  --bc-muted: #64748b;
+  --bc-subtle: #94a3b8;
+  --bc-line: #e2e8f0;
+  --bc-line-strong: #cbd5e1;
+  --bc-brand: #2563eb;
+  --bc-brand-hover: #1d4ed8;
+  --bc-brand-soft: #eff6ff;
   --bc-brand-ink: #ffffff;
-  --bc-ok: #087f5b;
-  --bc-ok-bg: #e9f7f0;
-  --bc-warn: #916a00;
-  --bc-warn-bg: #fff6df;
-  --bc-bad: #b42318;
-  --bc-bad-bg: #fff0ee;
-  --bc-radius-sm: 8px;
-  --bc-radius: 12px;
-  --bc-radius-lg: 16px;
-  --bc-shadow: 0 1px 2px rgba(31, 33, 36, 0.04);
-  --bc-shadow-raised: 0 2px 6px rgba(31, 33, 36, 0.06);
+
+  /* Premium Green */
+  --bc-ok: #16a34a;
+  --bc-ok-hover: #15803d;
+  --bc-ok-bg: #ecfdf5;
+  --bc-ok-border: #bbf7d0;
+  --bc-ok-text: #166534;
+
+  /* Premium Red */
+  --bc-bad: #dc2626;
+  --bc-bad-hover: #b91c1c;
+  --bc-bad-bg: #fef2f2;
+  --bc-bad-border: #fecaca;
+  --bc-bad-text: #991b1b;
+
+  /* Premium Blue */
+  --bc-blue: #2563eb;
+  --bc-blue-hover: #1d4ed8;
+  --bc-blue-bg: #eff6ff;
+  --bc-blue-border: #bfdbfe;
+  --bc-blue-text: #1e40af;
+
+  /* Premium Amber */
+  --bc-warn: #d97706;
+  --bc-warn-hover: #b45309;
+  --bc-warn-bg: #fffbeb;
+  --bc-warn-border: #fde68a;
+  --bc-warn-text: #92400e;
+
+  --bc-radius-sm: 6px;
+  --bc-radius: 10px;
+  --bc-radius-lg: 14px;
+  --bc-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+  --bc-shadow-raised: 0 4px 6px -1px rgba(0, 0, 0, 0.07), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
   --bc-space-1: 4px;
   --bc-space-2: 8px;
   --bc-space-3: 12px;
@@ -36,7 +59,140 @@
   --bc-space-6: 24px;
   --bc-space-7: 28px;
   --bc-space-8: 32px;
-  --bc-control-height: 44px;
+  --bc-control-height: 40px;
+}
+
+/* =========================================================
+   BUTTON & COMPONENT SYSTEM
+   ========================================================= */
+.bc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--bc-line-strong);
+  border-radius: var(--bc-radius-sm);
+  background: var(--bc-surface);
+  color: var(--bc-ink);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 140ms cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+.bc-btn:hover:not(:disabled) {
+  background: var(--bc-surface-subtle);
+  border-color: #94a3b8;
+}
+
+.bc-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.bc-btn.primary,
+.bc-btn.green,
+.bc-btn.ok {
+  background: var(--bc-ok);
+  border-color: var(--bc-ok-hover);
+  color: #ffffff !important;
+}
+
+.bc-btn.primary:hover:not(:disabled),
+.bc-btn.green:hover:not(:disabled),
+.bc-btn.ok:hover:not(:disabled) {
+  background: var(--bc-ok-hover);
+  border-color: var(--bc-ok-hover);
+  box-shadow: 0 2px 8px rgba(22, 163, 74, 0.28);
+}
+
+.bc-btn.blue,
+.bc-btn.info {
+  background: var(--bc-blue);
+  border-color: var(--bc-blue-hover);
+  color: #ffffff !important;
+}
+
+.bc-btn.blue:hover:not(:disabled),
+.bc-btn.info:hover:not(:disabled) {
+  background: var(--bc-blue-hover);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.28);
+}
+
+.bc-btn.red,
+.bc-btn.bad,
+.bc-btn.danger {
+  background: var(--bc-bad);
+  border-color: var(--bc-bad-hover);
+  color: #ffffff !important;
+}
+
+.bc-btn.red:hover:not(:disabled),
+.bc-btn.bad:hover:not(:disabled),
+.bc-btn.danger:hover:not(:disabled) {
+  background: var(--bc-bad-hover);
+  box-shadow: 0 2px 8px rgba(220, 38, 38, 0.28);
+}
+
+/* Badges & Pills */
+.bc-badge,
+.bc-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+}
+
+.bc-badge.ok,
+.bc-pill.ok {
+  background: var(--bc-ok-bg);
+  color: var(--bc-ok-text);
+  border: 1px solid var(--bc-ok-border);
+}
+
+.bc-badge.bad,
+.bc-pill.bad {
+  background: var(--bc-bad-bg);
+  color: var(--bc-bad-text);
+  border: 1px solid var(--bc-bad-border);
+}
+
+.bc-badge.blue,
+.bc-badge.info,
+.bc-pill.blue,
+.bc-pill.info {
+  background: var(--bc-blue-bg);
+  color: var(--bc-blue-text);
+  border: 1px solid var(--bc-blue-border);
+}
+
+.bc-badge.warn,
+.bc-pill.warn {
+  background: var(--bc-warn-bg);
+  color: var(--bc-warn-text);
+  border: 1px solid var(--bc-warn-border);
+}
+
+/* Order Link */
+.bc-order-link {
+  color: #0d9488;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.bc-order-link:hover {
+  text-decoration: underline;
+  color: #0f766e;
 }
 
 html,
