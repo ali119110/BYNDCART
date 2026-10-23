@@ -1064,7 +1064,7 @@ export default function BookingsPage() {
           <div style={{ textAlign: "center", margin: "28px 0 20px" }}>
             {bulkBookingPayload.length > 0 && selectedBookingIssues.length > 0 && (
               <p role="alert" style={{ color: "#b91c1c", fontSize: "13px", margin: "0 0 12px" }}>
-                Fix the highlighted customer details before uploading. {selectedBookingIssues.length} selected order(s) need attention.
+                Complete the customer details in the selected rows before uploading. {selectedBookingIssues.length} selected order(s) need attention.
               </p>
             )}
             <Form method="post" style={{ display: "inline-block" }}>
