@@ -285,6 +285,180 @@ async function validatePostExCity(
   }
 }
 
+type PostExAddressCodes = {
+  pickupAddressCode: string;
+  storeAddressCode: string;
+};
+
+function postExAddressRows(payload: any): Array<Record<string, any>> {
+  const candidate = payload?.dist ?? payload?.data?.dist ?? payload?.data ?? payload?.addresses;
+  if (Array.isArray(candidate)) return candidate.filter((item) => item && typeof item === "object");
+  if (candidate && typeof candidate === "object") return [candidate];
+  return [];
+}
+
+function postExAddressCodeFromRow(row: Record<string, any>): string {
+  return String(
+    row.pickupAddressCode
+    || row.addressCode
+    || row.merchantAddressCode
+    || row.pickup_address_code
+    || row.address_code
+    || "",
+  ).trim();
+}
+
+function postExStoreAddressCodeFromRow(row: Record<string, any>): string {
+  return String(row.storeAddressCode || row.store_address_code || "").trim();
+}
+
+function postExAddressTypeFromRow(row: Record<string, any>): string {
+  return String(row.addressType || row.addressTypeName || row.type || row.name || row.addressName || "")
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * PostEx create-order v3 rejects a request if both pickupAddressCode and storeAddressCode
+ * are missing. Prefer a code explicitly saved in Courier Settings; otherwise retrieve a
+ * registered address code from the merchant API and cache it for the store/token.
+ */
+async function resolvePostExAddressCodes(
+  shopifyStoreId: string,
+  credentials: any,
+  orderType: string,
+): Promise<PostExAddressCodes> {
+  const explicitPickup = credentialValue(credentials, "pickupAddressCode");
+  const explicitStore = credentialValue(credentials, "storeAddressCode");
+  if (explicitPickup || explicitStore) {
+    return { pickupAddressCode: explicitPickup, storeAddressCode: explicitStore };
+  }
+
+  const token = credentialValue(credentials, "apiToken");
+  if (!token) throw new Error("PostEx merchant API token is missing for this store.");
+  const tokenFingerprint = createHash("sha256").update(token).digest("hex");
+
+  const configKey = { shopifyStoreId_providerName: { shopifyStoreId, providerName: "POSTEX" } };
+  let currentConfig: any = null;
+  try {
+    currentConfig = await prisma.merchantCourierConfig.findUnique({
+      where: configKey,
+      select: { additionalConfig: true },
+    });
+  } catch {
+    // Allows direct adapter integrations/tests with a token but no persisted merchant config.
+  }
+  const currentAdditionalConfig = currentConfig?.additionalConfig && typeof currentConfig.additionalConfig === "object"
+    ? currentConfig.additionalConfig as Record<string, any>
+    : {};
+  const cached = currentAdditionalConfig.byndcartPostExAddressCodes;
+  if (
+    cached
+    && cached.tokenFingerprint === tokenFingerprint
+    && (String(cached.pickupAddressCode || "").trim() || String(cached.storeAddressCode || "").trim())
+  ) {
+    return {
+      pickupAddressCode: String(cached.pickupAddressCode || "").trim(),
+      storeAddressCode: String(cached.storeAddressCode || "").trim(),
+    };
+  }
+
+  const endpoints = [
+    `${POSTEX_API_ROOT}/order/v1/get-pickup-address`,
+    `${POSTEX_API_ROOT}/order/v1/get-merchant-address?cityName=`,
+  ];
+  const lookupErrors: string[] = [];
+  let resolved: PostExAddressCodes | null = null;
+
+  for (const url of endpoints) {
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { token, Accept: "application/json" },
+      });
+      const payload = await readJson(response);
+      if (!response.ok || Number(payload?.statusCode) !== 200) {
+        lookupErrors.push(apiPayloadMessage(payload, `HTTP ${response.status} from PostEx address lookup`));
+        continue;
+      }
+
+      const rows = postExAddressRows(payload);
+      const rowsWithCodes = rows
+        .map((row) => ({
+          row,
+          pickup: postExAddressCodeFromRow(row),
+          store: postExStoreAddressCodeFromRow(row),
+          type: postExAddressTypeFromRow(row),
+        }))
+        .filter((entry) => entry.pickup || entry.store);
+
+      const rootPickup = String(payload?.pickupAddressCode || payload?.dist?.pickupAddressCode || "").trim();
+      const rootStore = String(payload?.storeAddressCode || payload?.dist?.storeAddressCode || "").trim();
+      if (rootPickup || rootStore) {
+        resolved = { pickupAddressCode: rootPickup, storeAddressCode: rootStore };
+        break;
+      }
+
+      if (rowsWithCodes.length) {
+        const isReturn = orderType === "Reverse" || orderType === "Reversed";
+        const preferred = isReturn
+          ? rowsWithCodes.find((entry) => /return|reverse/.test(entry.type))
+          : rowsWithCodes.find((entry) => /pickup|default|shipper/.test(entry.type));
+        const chosen = preferred || rowsWithCodes[0];
+        resolved = {
+          pickupAddressCode: chosen.pickup || rowsWithCodes.find((entry) => entry.pickup)?.pickup || "",
+          storeAddressCode: chosen.store || rowsWithCodes.find((entry) => entry.store)?.store || "",
+        };
+        if (resolved.pickupAddressCode || resolved.storeAddressCode) break;
+      }
+      lookupErrors.push("PostEx address endpoint succeeded but returned no usable address code.");
+    } catch {
+      lookupErrors.push("Could not reach a PostEx merchant-address endpoint.");
+    }
+  }
+
+  if (!resolved || (!resolved.pickupAddressCode && !resolved.storeAddressCode)) {
+    const detail = lookupErrors.find(Boolean);
+    throw new Error(
+      "PostEx requires a registered pickup address code or store address code. BYNDCART could not resolve one from your PostEx account. "
+      + "Add the code in Courier Settings or register a pickup address in PostEx, then retry."
+      + (detail ? ` PostEx lookup detail: ${detail}` : ""),
+    );
+  }
+
+  // Persist the resolved values without replacing the city/type catalog or other courier settings.
+  if (currentConfig) {
+    try {
+      const latest = await prisma.merchantCourierConfig.findUnique({
+        where: configKey,
+        select: { additionalConfig: true },
+      });
+      const latestAdditionalConfig = latest?.additionalConfig && typeof latest.additionalConfig === "object"
+        ? latest.additionalConfig as Record<string, any>
+        : {};
+      const latestCache = {
+        pickupAddressCode: resolved.pickupAddressCode,
+        storeAddressCode: resolved.storeAddressCode,
+        tokenFingerprint,
+        cachedAt: new Date().toISOString(),
+      };
+      await prisma.merchantCourierConfig.update({
+        where: configKey,
+        data: {
+          additionalConfig: JSON.parse(JSON.stringify({
+            ...latestAdditionalConfig,
+            byndcartPostExAddressCodes: latestCache,
+          })) as any,
+        },
+      });
+    } catch {
+      // Booking can proceed with the API-validated code even if the optional cache write fails.
+    }
+  }
+
+  return resolved;
+}
+
 // -----------------------------------------------------------------------------
 // 1. PostEx Merchant API (official guide v4.1.9)
 // Token header; create-order v3; tracking, airway-bill and cancellation endpoints.
@@ -352,10 +526,20 @@ export class PostExCourierAdapter implements ICourierAdapter {
       // The UI displays "Reversed" as "Reverse"; send the provider's literal type value.
       orderType: orderType === "Reverse" ? "Reversed" : orderType,
     };
-    const pickupAddressCode = credentialValue(credentials, "pickupAddressCode");
-    const storeAddressCode = credentialValue(credentials, "storeAddressCode");
-    if (pickupAddressCode) body.pickupAddressCode = pickupAddressCode;
-    if (storeAddressCode) body.storeAddressCode = storeAddressCode;
+    let addressCodes: PostExAddressCodes;
+    try {
+      addressCodes = await resolvePostExAddressCodes(input.shopifyStoreId, credentials, orderType);
+    } catch (error) {
+      return unconfirmedBooking(
+        this.providerName,
+        error instanceof Error ? error.message : "PostEx requires a valid pickup address code or store address code.",
+      );
+    }
+    if (addressCodes.pickupAddressCode) body.pickupAddressCode = addressCodes.pickupAddressCode;
+    if (addressCodes.storeAddressCode) body.storeAddressCode = addressCodes.storeAddressCode;
+    if (!body.pickupAddressCode && !body.storeAddressCode) {
+      return unconfirmedBooking(this.providerName, "PostEx requires at least one registered pickup or store address code.");
+    }
 
     try {
       await validatePostExCity(input.shopifyStoreId, cityName, orderType, token);
