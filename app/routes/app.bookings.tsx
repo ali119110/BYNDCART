@@ -1017,92 +1017,108 @@ export default function BookingsPage() {
                           )}
                         </td>
 
-                        {/* Name (Inline editable input) */}
-                        <td style={{ padding: "8px 8px" }}>
+                        {/* Customer name and email */}
+                        <td style={{ padding: "8px 8px", verticalAlign: "top" }}>
                           <input
                             type="text"
                             value={currentName}
+                            title={currentName}
                             disabled={order.alreadyBooked}
                             onChange={(e) => handleEditOrder(order.id, "name", e.target.value)}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "4px 8px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "5px 9px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
                           />
+                          {order.customerEmail && (
+                            <div title={order.customerEmail} style={{ marginTop: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#64748b", fontSize: "11px" }}>
+                              {order.customerEmail}
+                            </div>
+                          )}
                         </td>
 
-                        {/* Phone (Inline editable input) */}
-                        <td style={{ padding: "8px 8px" }}>
+                        {/* Phone */}
+                        <td style={{ padding: "8px 8px", verticalAlign: "top" }}>
                           <input
                             type="text"
                             value={currentPhone}
+                            title={currentPhone}
                             placeholder="03001234567"
                             disabled={order.alreadyBooked}
                             onChange={(e) => handleEditOrder(order.id, "phone", e.target.value)}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "4px 8px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "5px 9px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
                           />
                         </td>
 
-                        {/* Address (Inline editable input) */}
-                        <td style={{ padding: "8px 8px" }}>
+                        {/* Delivery address and carrier-supported city in a single, aligned column */}
+                        <td style={{ padding: "8px 8px", verticalAlign: "top" }}>
                           <input
                             type="text"
                             value={currentAddress}
+                            title={currentAddress}
                             placeholder="Street, Area, Building"
                             disabled={order.alreadyBooked}
                             onChange={(e) => handleEditOrder(order.id, "address", e.target.value)}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "4px 8px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "5px 9px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
                           />
+                          <div title={order.city || ""} style={{ margin: "5px 0 4px", color: "#64748b", fontSize: "11px" }}>
+                            Shopify city: {order.city || "Not supplied"}
+                          </div>
                         </td>
 
-                        {/* Shopify Original City */}
-                        <td style={{ padding: "8px 8px", color: "#475569", fontSize: "12px", fontWeight: 500 }}>
-                          {order.city || "—"}
-                        </td>
-
-                        {/* Matched City Dropdown */}
-                        <td style={{ padding: "8px 8px" }}>
+                        {/* Single City column: original city plus carrier's own city list */}
+                        <td style={{ padding: "8px 8px", verticalAlign: "top" }}>
                           <select
                             value={currentCity}
-                            disabled={order.alreadyBooked}
+                            disabled={order.alreadyBooked || courierOptionsLoading || currentCityOptions.length === 0}
                             onChange={(e) => handleEditOrder(order.id, "city", e.target.value)}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "2px 6px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "2px 7px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
                           >
-                            <option value="">Select City</option>
-                            {MAJOR_PAKISTANI_CITIES.map((city) => (
+                            <option value="">
+                              {courierOptionsLoading ? "Loading carrier cities…" : currentCityOptions.length ? "Select carrier city" : "Carrier city list unavailable"}
+                            </option>
+                            {currentCityOptions.map((city) => (
                               <option key={city} value={city}>
                                 {city}
                               </option>
