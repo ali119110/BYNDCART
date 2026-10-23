@@ -1367,7 +1367,7 @@ export default function BookingsPage() {
                     return (
                       <div key={`${step.orderNumber}-${index}`} title={step.message || step.orderNumber} style={{ minWidth: 0, padding: "9px 10px", border: `1px solid ${colors.border}`, background: colors.bg, color: colors.text, borderRadius: "8px" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: "7px", fontSize: "12px", fontWeight: 700 }}>
-                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "22px", height: "22px", flex: "0 0 22px", borderRadius: "50%", border: `1px solid ${colors.border}", background: "#ffffff" }}>{index + 1}</span>
+                          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "22px", height: "22px", flex: "0 0 22px", borderRadius: "50%", border: `1px solid ${colors.border}`, background: "#ffffff" }}>{index + 1}</span>
                           <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{step.orderNumber}</span>
                           <span style={{ marginLeft: "auto", whiteSpace: "nowrap" }}>{colors.label}</span>
                         </div>
@@ -1406,7 +1406,6 @@ export default function BookingsPage() {
                 ? `Uploading order ${uploadProgress.currentIndex + 1} of ${uploadProgress.total}…`
                 : `Upload Booking${bulkBookingPayload.length > 0 ? ` (${bulkBookingPayload.length})` : ""}`}
             </button>
-          </div>
           </div>
         </div>
       )}
