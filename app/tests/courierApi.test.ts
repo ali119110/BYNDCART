@@ -124,7 +124,7 @@ test("PostEx accepts a return only when statusCode is 200 and a tracking number 
     cityName: "Karachi",
     originAddress: { address1: "12 Clifton Block 5", city: "Karachi" },
     items: [{ title: "Kurta", quantity: 1 }],
-  }, { apiToken: "store-token" });
+  }, { apiToken: "store-token", pickupAddressCode: "PICKUP-001" });
 
   assert.strictEqual(result.success, true);
   assert.strictEqual(result.isLive, true);
@@ -133,10 +133,73 @@ test("PostEx accepts a return only when statusCode is 200 and a tracking number 
   assert.strictEqual(normalizeCourierStatus(result.carrierStatus), "LABEL_CREATED");
   const booking = calls.find((call) => call.url.includes("create-order"));
   assert.strictEqual(booking?.body.orderType, "Reversed");
+  assert.strictEqual(booking?.body.pickupAddressCode, "PICKUP-001");
   assert.ok(calls.some((call) => call.url.endsWith("/order/v2/get-operational-city")), "PostEx should validate against the no-filter operational-city catalog");
   assert.strictEqual(booking?.body.customerPhone, "03001234567");
   assert.strictEqual(booking?.body.invoicePayment, "0");
   assert.strictEqual(booking?.body.cityName, "Karachi");
+});
+
+test("PostEx resolves a missing pickup address code from the registered-address API before booking", async () => {
+  const calls: Array<{ url: string; body?: any }> = [];
+  const delegate = (prisma as any).merchantCourierConfig;
+  const originalFindUnique = delegate.findUnique;
+  const originalUpdate = delegate.update;
+
+  // This test represents a saved-token adapter call where no address code was supplied.
+  // Returning null forces the resolver to query PostEx rather than relying on a persisted cache.
+  delegate.findUnique = async () => null;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    calls.push({ url, body });
+    if (url.includes("get-pickup-address")) {
+      return jsonResponse({
+        statusCode: "200",
+        statusMessage: "SUCCESSFULLY OPERATED",
+        dist: [
+          { addressCode: "PICKUP-001", addressType: "Pickup Address", cityName: "Karachi" },
+        ],
+      });
+    }
+    if (url.includes("get-operational-city")) {
+      return jsonResponse({
+        statusCode: "200",
+        statusMessage: "SUCCESSFULLY OPERATED",
+        dist: [{ operationalCityName: "Karachi", isPickupCity: true, isDeliveryCity: true }],
+      });
+    }
+    if (url.includes("create-order")) {
+      return jsonResponse({
+        statusCode: "200",
+        statusMessage: "ORDER HAS BEEN CREATED",
+        dist: { trackingNumber: "PE1003", orderStatus: "UnBooked" },
+      });
+    }
+    return jsonResponse({ statusCode: "500", statusMessage: "Unexpected test endpoint" }, 500);
+  }) as typeof fetch;
+
+  try {
+    const result = await CourierRegistry.get("POSTEX").createForwardShipment({
+      shopifyStoreId: "store-address-test",
+      orderId: "gid://shopify/Order/1003",
+      orderNumber: "#1003",
+      customerName: "Ayesha Khan",
+      customerPhone: "03001234567",
+      cityName: "Karachi",
+      destinationAddress: { address1: "12 Clifton Block 5", city: "Karachi" },
+      items: [{ title: "Kurta", quantity: 1 }],
+    }, { apiToken: "store-token" });
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.trackingNumber, "PE1003");
+    const booking = calls.find((call) => call.url.includes("create-order"));
+    assert.strictEqual(booking?.body.pickupAddressCode, "PICKUP-001");
+    assert.ok(calls.some((call) => call.url.includes("get-pickup-address")), "registered pickup addresses should be queried when no code was saved");
+  } finally {
+    delegate.findUnique = originalFindUnique;
+    delegate.update = originalUpdate;
+  }
 });
 
 test("PostEx does not treat a successful HTTP body without a tracking number as a booking", async () => {
@@ -156,7 +219,7 @@ test("PostEx does not treat a successful HTTP body without a tracking number as 
     customerPhone: "03001234567",
     cityName: "Lahore",
     originAddress: { address1: "22 Mall Road Lahore", city: "Lahore" },
-  }, { apiToken: "store-token" });
+  }, { apiToken: "store-token", pickupAddressCode: "PICKUP-001" });
 
   assert.strictEqual(result.success, false);
   assert.strictEqual(result.trackingNumber, "");
