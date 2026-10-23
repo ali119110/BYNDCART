@@ -1,5 +1,5 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { Outlet, useLoaderData, useLocation, useRouteError } from "react-router";
+import { Link, Outlet, useLoaderData, useLocation, useNavigation, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 
@@ -32,25 +32,36 @@ const navigationItems = [
 
 function AppNavigation() {
   const { pathname } = useLocation();
+  const navigation = useNavigation();
+  const isNavigating = navigation.state !== "idle";
 
   return (
-    <s-app-nav aria-label="Primary navigation">
-      {navigationItems.map((item) => {
-        const isActive = item.href === "/app"
-          ? pathname === "/app" || pathname === "/app/"
-          : pathname === item.href || pathname.startsWith(`${item.href}/`);
+    <>
+      {isNavigating && (
+        <div className="bc-navigation-progress" role="progressbar" aria-label="Loading panel">
+          <span />
+        </div>
+      )}
+      <nav className="bc-app-nav" aria-label="Primary navigation" aria-busy={isNavigating}>
+        {navigationItems.map((item) => {
+          const isActive = item.href === "/app"
+            ? pathname === "/app" || pathname === "/app/"
+            : pathname === item.href || pathname.startsWith(`${item.href}/`);
 
-        return (
-          <s-link
-            key={item.href}
-            href={item.href}
-            aria-current={isActive ? "page" : undefined}
-          >
-            {item.label}
-          </s-link>
-        );
-      })}
-    </s-app-nav>
+          return (
+            <Link
+              key={item.href}
+              to={item.href}
+              prefetch="intent"
+              aria-current={isActive ? "page" : undefined}
+              className="bc-app-nav-link"
+            >
+              {item.label}
+            </Link>
+          );
+        })}
+      </nav>
+    </>
   );
 }
 
@@ -90,79 +101,84 @@ const styles = (
       overflow-x: clip;
     }
 
-    s-app-nav {
+    .bc-app-nav {
+      position: relative;
       display: flex;
       align-items: center;
-      flex-wrap: nowrap;
-      gap: 3px;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 4px;
       width: calc(100% - 48px);
-      max-width: 1440px;
+      max-width: 1500px;
       margin: 16px auto 22px;
       padding: 7px;
       box-sizing: border-box;
-      overflow-x: auto;
-      overflow-y: hidden;
-      overscroll-behavior-x: contain;
-      -webkit-overflow-scrolling: touch;
+      overflow: visible;
       border: 1px solid var(--bc-shell-line);
       border-radius: 14px;
       background: var(--bc-shell-surface);
       box-shadow: 0 2px 8px rgba(31, 33, 36, 0.035);
-      --s-link-color-f4125: #202223;
-      --s-link-color-hover-f4125: #202223;
-      --s-link-color-active-f4125: #202223;
-      --p-color-text-link-f4125: #202223;
-      --p-color-text-link-hover-f4125: #202223;
-      --p-color-text-link-active-f4125: #202223;
-      scrollbar-width: thin;
-      scrollbar-color: #c9cccf transparent;
     }
 
-    s-app-nav::-webkit-scrollbar {
-      height: 4px;
-    }
-
-    s-app-nav::-webkit-scrollbar-thumb {
-      border-radius: 999px;
-      background: #c9cccf;
-    }
-
-    s-link {
+    .bc-app-nav-link {
       display: inline-flex;
-      flex: 0 0 auto;
+      flex: 1 1 auto;
       align-items: center;
       justify-content: center;
+      min-width: max-content;
       min-height: 39px;
-      padding: 0 12px;
+      padding: 0 10px;
+      box-sizing: border-box;
       border: 1px solid transparent;
       border-radius: 9px;
-      color: #202223 !important;
+      color: #202223;
       font-size: 13px;
       font-weight: 600;
       line-height: 1.2;
       text-decoration: none;
       white-space: nowrap;
       cursor: pointer;
-      transition: background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+      transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
     }
 
-    s-link:hover,
-    s-link:focus-visible {
+    .bc-app-nav-link:hover,
+    .bc-app-nav-link:focus-visible {
       background: #f6f7f8;
-      color: #202223 !important;
+      color: #202223;
     }
 
-    s-link[aria-current="page"] {
+    .bc-app-nav-link[aria-current="page"] {
       border-color: #bfdbfe;
       background: #eff6ff;
-      color: #2563eb !important;
+      color: #2563eb;
       font-weight: 700;
       box-shadow: 0 1px 3px rgba(37, 99, 235, 0.12);
     }
 
-    s-link::part(link) {
-      color: #202223 !important;
-      text-decoration: none;
+    .bc-navigation-progress {
+      position: fixed;
+      inset: 0 auto auto 0;
+      z-index: 10000;
+      width: 100%;
+      height: 3px;
+      overflow: hidden;
+      pointer-events: none;
+      background: rgba(37, 99, 235, 0.12);
+    }
+
+    .bc-navigation-progress span {
+      display: block;
+      width: 34%;
+      height: 100%;
+      border-radius: 999px;
+      background: #2563eb;
+      animation: bc-navigation-progress 850ms ease-in-out infinite alternate;
+      transform-origin: left center;
+    }
+
+    @keyframes bc-navigation-progress {
+      from { transform: translateX(-10%) scaleX(0.7); }
+      to { transform: translateX(210%) scaleX(1.1); }
     }
 
     s-heading,
@@ -204,17 +220,20 @@ const styles = (
     }
 
     @media (max-width: 760px) {
-      s-app-nav {
+      .bc-app-nav {
         width: calc(100% - 20px);
         margin: 10px auto 16px;
         padding: 6px;
+        justify-content: flex-start;
+        gap: 4px;
         border-radius: 11px;
       }
 
-      s-link {
+      .bc-app-nav-link {
+        flex: 0 1 auto;
         min-height: 38px;
-        padding: 0 11px;
-        font-size: 12.5px;
+        padding: 0 9px;
+        font-size: 12px;
       }
 
       s-page {
@@ -222,9 +241,22 @@ const styles = (
       }
     }
 
+    @media (max-width: 420px) {
+      .bc-app-nav-link {
+        flex: 1 1 calc(50% - 4px);
+        min-width: 0;
+        white-space: normal;
+        text-align: center;
+      }
+    }
+
     @media (prefers-reduced-motion: reduce) {
-      s-link {
+      .bc-app-nav-link {
         transition: none;
+      }
+      .bc-navigation-progress span {
+        animation: none;
+        width: 100%;
       }
     }
   `}} />
