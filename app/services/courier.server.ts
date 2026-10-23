@@ -494,6 +494,7 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
   private async bookPacket(input: ShipmentInput, credentials: any, direction: "RETURN" | "FORWARD" | "EXCHANGE"): Promise<LabelResult> {
     const apiKey = credentialValue(credentials, "apiKey");
     const apiPassword = credentialValue(credentials, "apiPassword");
+    const apiRoot = leopardsApiRoot(credentials);
     if (!apiKey || !apiPassword) return unconfirmedBooking(this.providerName, "Leopards requires both API key and API password for this store.");
 
     const warehouseCity = credentialValue(credentials, "warehouseCity");
