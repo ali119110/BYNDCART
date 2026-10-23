@@ -652,9 +652,9 @@ export default function BookingsPage() {
             {/* Courier List Dropdown — only shows configured couriers */}
             <div style={{ display: "inline-flex", alignItems: "center", gap: "10px" }}>
               {configuredCouriers.length === 0 ? (
-                <a href="/app/couriers" style={{ color: "#dc2626", fontWeight: 700, fontSize: "13px" }}>
+                <Link to="/app/couriers" style={{ color: "#dc2626", fontWeight: 700, fontSize: "13px", textDecoration: "none" }}>
                   ⚠ No courier configured — Click to set up courier API
-                </a>
+                </Link>
               ) : (
                 <select
                   value={selectedCourierKey}
@@ -679,12 +679,12 @@ export default function BookingsPage() {
                   ))}
                 </select>
               )}
-              <a
-                href="/app/couriers"
-                style={{ fontSize: "12px", color: "#2563eb", fontWeight: 600, textDecoration: "none" }}
+              <Link
+                to="/app/couriers"
+                style={{ fontSize: "13px", color: "#2563eb", fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}
               >
                 ⚙ Courier Settings
-              </a>
+              </Link>
             </div>
           </div>
 
