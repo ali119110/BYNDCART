@@ -986,26 +986,37 @@ export default function BookingsPage() {
               min-width: 0;
               overflow: hidden;
             }
+            .bc-booking-table thead tr {
+              height: 38px;
+            }
             .bc-booking-table tbody tr {
-              height: 88px;
+              height: 64px;
             }
             .bc-booking-table tbody td {
               vertical-align: middle;
             }
+            .bc-booking-table th {
+              padding-top: 7px !important;
+              padding-bottom: 7px !important;
+              font-size: 12px !important;
+              white-space: normal;
+              overflow-wrap: anywhere;
+              line-height: 1.2;
+            }
+            .bc-booking-table td {
+              line-height: 1.2;
+            }
             .bc-booking-table .bc-customer-email,
             .bc-booking-table .bc-shopify-address-city {
               display: block;
-              height: 14px;
-              line-height: 14px;
-              margin-top: 4px;
+              box-sizing: border-box;
+              height: 12px;
+              line-height: 12px;
+              margin-top: 3px;
               overflow: hidden;
               text-overflow: ellipsis;
               white-space: nowrap;
-            }
-            .bc-booking-table th {
-              white-space: normal;
-              overflow-wrap: anywhere;
-              line-height: 1.25;
+              font-size: 10px !important;
             }
             .bc-booking-table td input,
             .bc-booking-table td select {
@@ -1042,7 +1053,7 @@ export default function BookingsPage() {
           >
             <table
               className="bc-booking-table"
-              style={{ width: "100%", minWidth: 0, tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, textAlign: "left", fontSize: "13px" }}
+              style={{ width: "100%", minWidth: 0, tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, textAlign: "left", fontSize: "12px" }}
             >
               <colgroup>
                 <col style={{ width: "2.5%" }} />
@@ -1131,7 +1142,7 @@ export default function BookingsPage() {
                         }}
                       >
                         {/* Checkbox */}
-                        <td style={{ verticalAlign: "middle", textAlign: "center", padding: "8px 10px" }}>
+                        <td style={{ verticalAlign: "middle", textAlign: "center", padding: "4px 6px" }}>
                           {!order.alreadyBooked ? (
                             <input
                               type="checkbox"
@@ -1145,18 +1156,18 @@ export default function BookingsPage() {
                         </td>
 
                         {/* # Row Index */}
-                        <td style={{ verticalAlign: "middle", textAlign: "center", padding: "8px 6px", fontSize: "12px", color: "#64748b", fontWeight: 600 }}>
+                        <td style={{ verticalAlign: "middle", textAlign: "center", padding: "4px 5px", fontSize: "12px", color: "#64748b", fontWeight: 600 }}>
                           {rowNumber}
                         </td>
 
                         {/* Order Number Link */}
-                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
+                        <td style={{ verticalAlign: "middle", padding: "4px 6px" }}>
                           <span
                             className="bc-order-link bc-order-number"
                             style={{
                               color: "#0d9488",
                               fontWeight: 700,
-                              fontSize: "13px",
+                              fontSize: "12px",
                               cursor: "pointer",
                             }}
                             onClick={() => setViewingOrder(order)}
@@ -1171,7 +1182,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Customer name and email */}
-                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
+                        <td style={{ verticalAlign: "middle", padding: "4px 6px" }}>
                           <input
                             type="text"
                             value={currentName}
@@ -1182,11 +1193,11 @@ export default function BookingsPage() {
                               boxSizing: "border-box",
                               width: "100%",
                               minWidth: 0,
-                              height: "36px",
-                              padding: "5px 9px",
+                              height: "30px",
+                              padding: "3px 7px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "6px",
-                              fontSize: "13px",
+                              borderRadius: "5px",
+                              fontSize: "12px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
@@ -1199,7 +1210,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Phone */}
-                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
+                        <td style={{ verticalAlign: "middle", padding: "4px 6px" }}>
                           <input
                             type="text"
                             value={currentPhone}
@@ -1211,11 +1222,11 @@ export default function BookingsPage() {
                               boxSizing: "border-box",
                               width: "100%",
                               minWidth: 0,
-                              height: "36px",
-                              padding: "5px 9px",
+                              height: "30px",
+                              padding: "3px 7px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "6px",
-                              fontSize: "13px",
+                              borderRadius: "5px",
+                              fontSize: "12px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
@@ -1223,7 +1234,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Delivery address and carrier-supported city in a single, aligned column */}
-                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
+                        <td style={{ verticalAlign: "middle", padding: "4px 6px" }}>
                           <input
                             type="text"
                             value={currentAddress}
@@ -1235,11 +1246,11 @@ export default function BookingsPage() {
                               boxSizing: "border-box",
                               width: "100%",
                               minWidth: 0,
-                              height: "36px",
-                              padding: "5px 9px",
+                              height: "30px",
+                              padding: "3px 7px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "6px",
-                              fontSize: "13px",
+                              borderRadius: "5px",
+                              fontSize: "12px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
@@ -1250,7 +1261,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Searchable, courier-specific city picker */}
-                        <td style={{ verticalAlign: "middle", padding: "8px 6px" }}>
+                        <td style={{ verticalAlign: "middle", padding: "4px 5px" }}>
                           <button
                             type="button"
                             aria-label={`Choose ${selectedCourierKey} city for ${order.name}`}
@@ -1273,17 +1284,17 @@ export default function BookingsPage() {
                               boxSizing: "border-box",
                               width: "100%",
                               minWidth: 0,
-                              minHeight: "36px",
+                              minHeight: "30px",
                               display: "flex",
                               alignItems: "center",
                               justifyContent: "space-between",
                               gap: "6px",
-                              padding: "6px 8px",
+                              padding: "3px 6px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "6px",
+                              borderRadius: "5px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: currentCity ? "#0f172a" : "#64748b",
-                              fontSize: "13px",
+                              fontSize: "12px",
                               textAlign: "left",
                               cursor: order.alreadyBooked || courierOptionsLoading || currentCityOptions.length === 0 ? "not-allowed" : "pointer",
                               opacity: order.alreadyBooked ? 0.7 : 1,
@@ -1298,7 +1309,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* COD Amount */}
-                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
+                        <td style={{ verticalAlign: "middle", padding: "4px 6px" }}>
                           <input
                             type="number"
                             min="0"
@@ -1310,11 +1321,11 @@ export default function BookingsPage() {
                               boxSizing: "border-box",
                               width: "100%",
                               minWidth: 0,
-                              height: "36px",
-                              padding: "5px 8px",
+                              height: "30px",
+                              padding: "3px 6px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "6px",
-                              fontSize: "13px",
+                              borderRadius: "5px",
+                              fontSize: "12px",
                               textAlign: "right",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
@@ -1323,7 +1334,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* KG Weight */}
-                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
+                        <td style={{ verticalAlign: "middle", padding: "4px 6px" }}>
                           <input
                             type="number"
                             step="0.1"
@@ -1336,11 +1347,11 @@ export default function BookingsPage() {
                               boxSizing: "border-box",
                               width: "100%",
                               minWidth: 0,
-                              height: "36px",
-                              padding: "5px 6px",
+                              height: "30px",
+                              padding: "3px 5px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "6px",
-                              fontSize: "13px",
+                              borderRadius: "5px",
+                              fontSize: "12px",
                               textAlign: "center",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
@@ -1349,7 +1360,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Service Type */}
-                        <td style={{ verticalAlign: "middle", padding: "8px 8px" }}>
+                        <td style={{ verticalAlign: "middle", padding: "4px 6px" }}>
                           <select
                             value={currentType}
                             disabled={order.alreadyBooked || selectedCourierKey === "RIDER" || courierOptionsLoading || availableServiceTypes.length === 0}
@@ -1358,11 +1369,11 @@ export default function BookingsPage() {
                               boxSizing: "border-box",
                               width: "100%",
                               minWidth: 0,
-                              height: "36px",
+                              height: "30px",
                               padding: "2px 7px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "6px",
-                              fontSize: "13px",
+                              borderRadius: "5px",
+                              fontSize: "12px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
@@ -1373,7 +1384,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* View Items Icon (📑) */}
-                        <td style={{ verticalAlign: "middle", textAlign: "center", padding: "8px 4px" }}>
+                        <td style={{ verticalAlign: "middle", textAlign: "center", padding: "4px 3px" }}>
                           <button
                             type="button"
                             title="View order line items"
@@ -1388,7 +1399,7 @@ export default function BookingsPage() {
                               display: "inline-flex",
                               alignItems: "center",
                               justifyContent: "center",
-                              fontSize: "13px",
+                              fontSize: "12px",
                             }}
                           >
                             📑
@@ -1396,7 +1407,7 @@ export default function BookingsPage() {
                         </td>
 
                         {/* Validation Status Icon (✔ or ✖) */}
-                        <td style={{ verticalAlign: "middle", textAlign: "center", padding: "8px 4px" }}>
+                        <td style={{ verticalAlign: "middle", textAlign: "center", padding: "4px 3px" }}>
                           {isValid ? (
                             <span
                               title="Ready to book"
