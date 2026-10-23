@@ -49,7 +49,7 @@ export interface SingleBookingInput {
   orderId: string;
   orderNumber: string;
   courier: string; // POSTEX, LEOPARDS, TCS, RIDER
-  serviceType?: "Normal" | "Reverse" | "Replacement" | "Overland";
+  serviceType?: string;
   customerName: string;
   customerPhone: string;
   customerAddress: string;
