@@ -1177,22 +1177,23 @@ export default function BookingsPage() {
                         <td style={{ padding: "8px 8px" }}>
                           <select
                             value={currentType}
-                            disabled={order.alreadyBooked || selectedCourierKey === "RIDER"}
+                            disabled={order.alreadyBooked || selectedCourierKey === "RIDER" || courierOptionsLoading || availableServiceTypes.length === 0}
                             onChange={(e) => handleEditOrder(order.id, "type", e.target.value)}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "2px 6px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "2px 7px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
                             }}
                           >
-                            <option value="Normal">Normal</option>
-                            <option value="Reverse">Reverse</option>
-                            <option value="Replacement">Replacement</option>
+                            {availableServiceTypes.length === 0 && <option value="">{courierOptionsLoading ? "Loading types…" : "No types available"}</option>}
+                            {availableServiceTypes.map((type) => <option key={type} value={type}>{type}</option>)}
                           </select>
                         </td>
 
