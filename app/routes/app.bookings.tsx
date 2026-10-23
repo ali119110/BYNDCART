@@ -108,7 +108,7 @@ export async function action({ request }: ActionFunctionArgs) {
       const customerName = String(form.get("customerName") || "");
       const customerPhone = String(form.get("customerPhone") || "");
       const customerAddress = String(form.get("customerAddress") || "");
-      const cityName = String(form.get("cityName") || "Karachi");
+      const cityName = String(form.get("cityName") || "");
       const codAmountPKR = Number(form.get("codAmountPKR") || 0);
       const weightKg = Number(form.get("weightKg") || 0.5);
       const remarks = String(form.get("remarks") || "");
@@ -662,7 +662,7 @@ export default function BookingsPage() {
                 <input
                   aria-label="Shipper Profile"
                   readOnly
-                  value={activeCourier ? `FEAR | ${activeCourier.label} account` : ""}
+                  value={activeCourier ? `FEAR | ${[activeCourier.pickupAddress, activeCourier.pickupCity].filter(Boolean).join(", ")}` : ""}
                   placeholder="Configure a courier account"
                   style={{ height: "36px", width: "100%", boxSizing: "border-box", padding: "0 10px", border: "1px solid #cbd5e1", borderRadius: "5px", background: "#fff", color: "#0f172a", fontSize: "13px" }}
                 />
