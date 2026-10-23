@@ -1863,6 +1863,8 @@ type FetchedMerchantCourierBookingOptions = MerchantCourierBookingOptions & {
 };
 
 type PersistedMerchantCourierBookingOptions = FetchedMerchantCourierBookingOptions & {
+  /** Increment to invalidate city catalogs created by a previous provider-lookup contract. */
+  cacheVersion: 2;
   credentialFingerprint: string;
   cachedAt: string;
 };
@@ -1928,26 +1930,40 @@ async function fetchMerchantCourierBookingOptionsUncached(
     const token = credentialValue(credentials, "apiToken");
     if (!token) throw new Error("PostEx merchant API token is missing. Reconfigure PostEx in Courier Settings.");
 
-    const fetchCityList = async (direction: "Pickup" | "Delivery"): Promise<string[]> => {
-      const response = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city?operationalCityType=${direction}`, {
-        method: "GET",
-        headers: { token, Accept: "application/json" },
-      });
-      const payload = await readJson(response);
-      if (!response.ok || Number(payload?.statusCode) !== 200 || !Array.isArray(payload?.dist)) {
-        throw new Error(apiPayloadMessage(payload, `PostEx could not load its ${direction.toLowerCase()} city list (HTTP ${response.status}).`));
-      }
-      const flag = direction === "Pickup" ? "isPickupCity" : "isDeliveryCity";
-      return uniqueOptionStrings(payload.dist
-        .filter((row: any) => row && (row[flag] === undefined || row[flag] === true || String(row[flag]).toLowerCase() === "true" || String(row[flag]) === "1"))
-        .map((row: any) => row.operationalCityName || row.cityName || row.name));
-    };
+    // Fetch one complete PostEx city catalog and split it locally by the pickup/delivery flags.
+    // The carrier returns HTTP 400 for capitalized operationalCityType values on some accounts,
+    // while the no-filter endpoint is also what PostEx's connection check uses.
+    const citiesResponse = await fetch(`${POSTEX_API_ROOT}/order/v2/get-operational-city`, {
+      method: "GET",
+      headers: { token, Accept: "application/json" },
+    });
+    const citiesPayload = await readJson(citiesResponse);
+    if (!citiesResponse.ok || Number(citiesPayload?.statusCode) !== 200 || !Array.isArray(citiesPayload?.dist)) {
+      throw new Error(apiPayloadMessage(
+        citiesPayload,
+        `PostEx city lookup failed (HTTP ${citiesResponse.status}). Verify the merchant token and API access.`,
+      ));
+    }
 
-    const cityResults = await Promise.allSettled([fetchCityList("Pickup"), fetchCityList("Delivery")]);
-    const pickupResult = cityResults[0];
-    const deliveryResult = cityResults[1];
-    if (pickupResult.status === "rejected" && deliveryResult.status === "rejected") {
-      throw new Error(`PostEx city lookup failed: ${pickupResult.reason instanceof Error ? pickupResult.reason.message : "API request failed"}`);
+    const cityRows = citiesPayload.dist.filter((row: any) => row && typeof row === "object");
+    const supportsCityFlag = (value: unknown) =>
+      value === undefined
+      || value === null
+      || value === true
+      || value === 1
+      || String(value).trim().toLowerCase() === "true"
+      || String(value).trim() === "1";
+    const cityNameFromRow = (row: any) => row.operationalCityName || row.cityName || row.name;
+
+    const pickupCities = uniqueOptionStrings(cityRows
+      .filter((row: any) => supportsCityFlag(row.isPickupCity))
+      .map(cityNameFromRow));
+    const deliveryCities = uniqueOptionStrings(cityRows
+      .filter((row: any) => supportsCityFlag(row.isDeliveryCity))
+      .map(cityNameFromRow));
+
+    if (pickupCities.length === 0 && deliveryCities.length === 0) {
+      throw new Error("PostEx returned its city endpoint successfully, but no city names or pickup/delivery flags could be read.");
     }
 
     const typesResponse = await fetch(`${POSTEX_API_ROOT}/order/v1/get-order-types`, {
@@ -1958,7 +1974,7 @@ async function fetchMerchantCourierBookingOptionsUncached(
     if (!typesResponse.ok || Number(typesPayload?.statusCode) !== 200 || !Array.isArray(typesPayload?.dist)) {
       throw new Error(apiPayloadMessage(typesPayload, `PostEx could not load its supported order types (HTTP ${typesResponse.status}).`));
     }
-    // Preserve the exact order from the carrier API while displaying friendly "Reverse" for "Reversed".
+    // Keep every value supplied by PostEx and preserve the carrier's order.
     const serviceTypes = uniqueOptionStringsInOrder(typesPayload.dist
       .map((item: any) => normalizePostExOrderType(typeof item === "string" ? item : item?.orderType || item?.type || item?.name))
       .filter(Boolean));
@@ -1966,8 +1982,8 @@ async function fetchMerchantCourierBookingOptionsUncached(
 
     return {
       providerName: provider,
-      pickupCities: pickupResult.status === "fulfilled" ? pickupResult.value : [],
-      deliveryCities: deliveryResult.status === "fulfilled" ? deliveryResult.value : [],
+      pickupCities,
+      deliveryCities,
       serviceTypes,
       citySource: "carrier_api",
       serviceTypeSource: "carrier_api",
@@ -2043,6 +2059,7 @@ function isValidPersistedBookingOptions(
 ): value is PersistedMerchantCourierBookingOptions {
   return Boolean(
     value
+    && value.cacheVersion === 2
     && value.providerName === provider
     && value.credentialFingerprint === fingerprint
     && typeof value.cachedAt === "string"
@@ -2104,6 +2121,7 @@ export async function getMerchantCourierBookingOptions(
   const fetched = await fetchMerchantCourierBookingOptionsUncached(shopifyStoreId, provider);
   const persisted: PersistedMerchantCourierBookingOptions = {
     ...fetched,
+    cacheVersion: 2,
     credentialFingerprint,
     cachedAt: new Date().toISOString(),
   };
