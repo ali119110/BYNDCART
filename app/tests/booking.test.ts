@@ -104,6 +104,7 @@ test("Loadsheet Service - Loadsheet creation and parcel assignment", async () =>
       shopifyOrderId: "gid://shopify/Order/1001",
       orderNumber: "#1001",
       courier: "POSTEX",
+      type: "FORWARD",
       trackingNumber: "POSTEX-1001",
       destinationCity: "Lahore",
       codAmount: 2500,
@@ -117,11 +118,54 @@ test("Loadsheet Service - Loadsheet creation and parcel assignment", async () =>
       shopifyOrderId: "gid://shopify/Order/1002",
       orderNumber: "#1002",
       courier: "POSTEX",
+      type: "FORWARD",
       trackingNumber: "POSTEX-1002",
       destinationCity: "Karachi",
       codAmount: 3400,
       loadsheetId: null,
       status: "LABEL_CREATED",
+      createdAt: new Date(),
+    },
+    {
+      id: "ship-exchange",
+      shopifyStoreId: "store-test",
+      shopifyOrderId: "gid://shopify/Order/1003",
+      orderNumber: "#1003",
+      courier: "POSTEX",
+      type: "EXCHANGE",
+      trackingNumber: "POSTEX-EXCHANGE-1003",
+      destinationCity: "Karachi",
+      codAmount: 0,
+      loadsheetId: null,
+      status: "LABEL_CREATED",
+      createdAt: new Date(),
+    },
+    {
+      id: "ship-return",
+      shopifyStoreId: "store-test",
+      shopifyOrderId: "gid://shopify/Order/1004",
+      orderNumber: "#1004",
+      courier: "POSTEX",
+      type: "RETURN",
+      trackingNumber: "POSTEX-RETURN-1004",
+      destinationCity: "Lahore",
+      codAmount: 0,
+      loadsheetId: null,
+      status: "LABEL_CREATED",
+      createdAt: new Date(),
+    },
+    {
+      id: "ship-delivered",
+      shopifyStoreId: "store-test",
+      shopifyOrderId: "gid://shopify/Order/1005",
+      orderNumber: "#1005",
+      courier: "POSTEX",
+      type: "FORWARD",
+      trackingNumber: "POSTEX-DELIVERED-1005",
+      destinationCity: "Islamabad",
+      codAmount: 0,
+      loadsheetId: null,
+      status: "DELIVERED",
       createdAt: new Date(),
     },
   ];
@@ -145,7 +189,15 @@ test("Loadsheet Service - Loadsheet creation and parcel assignment", async () =>
   };
 
   // Mock prisma.shipmentTrack
-  (prisma as any).shipmentTrack.findMany = async () => mockShipments;
+  (prisma as any).shipmentTrack.findMany = async ({ where = {} }: any = {}) => mockShipments.filter((shipment: any) => {
+    if (where.shopifyStoreId && shipment.shopifyStoreId !== where.shopifyStoreId) return false;
+    if (where.id?.in && !where.id.in.includes(shipment.id)) return false;
+    if (where.courier && shipment.courier !== where.courier) return false;
+    if (where.type && shipment.type !== where.type) return false;
+    if (where.loadsheetId === null && shipment.loadsheetId !== null) return false;
+    if (where.status?.notIn?.includes(shipment.status)) return false;
+    return true;
+  });
   (prisma as any).shipmentTrack.updateMany = async ({ where, data }: any) => {
     updatedShipmentIds = where.id.in;
     return { count: where.id.in.length };
@@ -175,4 +227,33 @@ test("Loadsheet Service - Loadsheet creation and parcel assignment", async () =>
   assert.strictEqual(result.riderPhone, "03001234567");
   assert.ok(result.loadsheetNumber.startsWith("LS-POSTEX-"));
   assert.deepStrictEqual(updatedShipmentIds, ["ship-101", "ship-102"]);
+
+  // Returns, exchanges, and delivered parcels must never appear in handover loadsheets.
+  await assert.rejects(
+    createLoadsheet("store-test", "user-test", {
+      courier: "POSTEX",
+      shipmentIds: ["ship-exchange"],
+      riderName: "Ahmed Khan",
+      riderPhone: "03001234567",
+    }),
+    /No eligible forward shipments found/,
+  );
+  await assert.rejects(
+    createLoadsheet("store-test", "user-test", {
+      courier: "POSTEX",
+      shipmentIds: ["ship-return"],
+      riderName: "Ahmed Khan",
+      riderPhone: "03001234567",
+    }),
+    /No eligible forward shipments found/,
+  );
+  await assert.rejects(
+    createLoadsheet("store-test", "user-test", {
+      courier: "POSTEX",
+      shipmentIds: ["ship-delivered"],
+      riderName: "Ahmed Khan",
+      riderPhone: "03001234567",
+    }),
+    /No eligible forward shipments found/,
+  );
 });
