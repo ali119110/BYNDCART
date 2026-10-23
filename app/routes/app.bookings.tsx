@@ -990,7 +990,7 @@ export default function BookingsPage() {
               height: 38px;
             }
             .bc-booking-table tbody tr {
-              height: 64px;
+              height: 50px;
             }
             .bc-booking-table tbody td {
               vertical-align: middle;
@@ -1005,18 +1005,6 @@ export default function BookingsPage() {
             }
             .bc-booking-table td {
               line-height: 1.2;
-            }
-            .bc-booking-table .bc-customer-email,
-            .bc-booking-table .bc-shopify-address-city {
-              display: block;
-              box-sizing: border-box;
-              height: 12px;
-              line-height: 12px;
-              margin-top: 3px;
-              overflow: hidden;
-              text-overflow: ellipsis;
-              white-space: nowrap;
-              font-size: 10px !important;
             }
             .bc-booking-table td input,
             .bc-booking-table td select {
@@ -1035,8 +1023,6 @@ export default function BookingsPage() {
               .bc-booking-table th { font-size: 10px !important; letter-spacing: 0 !important; }
               .bc-booking-table td input,
               .bc-booking-table td select { font-size: 11px !important; padding-left: 5px !important; padding-right: 5px !important; }
-              .bc-booking-table .bc-customer-email,
-              .bc-booking-table .bc-shopify-address-city { display: none; }
             }
           `}</style>
           <div
@@ -1202,11 +1188,6 @@ export default function BookingsPage() {
                               color: "#0f172a",
                             }}
                           />
-                          {order.customerEmail && (
-                            <div className="bc-customer-email" title={order.customerEmail} style={{ marginTop: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "#64748b", fontSize: "11px" }}>
-                              {order.customerEmail}
-                            </div>
-                          )}
                         </td>
 
                         {/* Phone */}
@@ -1255,9 +1236,6 @@ export default function BookingsPage() {
                               color: "#0f172a",
                             }}
                           />
-                          <div className="bc-shopify-address-city" title={order.city || ""} style={{ margin: "5px 0 4px", color: "#64748b", fontSize: "11px" }}>
-                            Shopify city: {order.city || "Not supplied"}
-                          </div>
                         </td>
 
                         {/* Searchable, courier-specific city picker */}
