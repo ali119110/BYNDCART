@@ -1181,12 +1181,14 @@ export default function BookingsPage() {
                             disabled={order.alreadyBooked}
                             onChange={(e) => handleEditOrder(order.id, "cod", Number(e.target.value))}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "4px 6px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "5px 8px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               textAlign: "right",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
@@ -1205,12 +1207,14 @@ export default function BookingsPage() {
                             disabled={order.alreadyBooked}
                             onChange={(e) => handleEditOrder(order.id, "weight", Number(e.target.value))}
                             style={{
+                              boxSizing: "border-box",
                               width: "100%",
-                              height: "32px",
-                              padding: "4px 6px",
+                              minWidth: 0,
+                              height: "36px",
+                              padding: "5px 6px",
                               border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              fontSize: "12px",
+                              borderRadius: "6px",
+                              fontSize: "13px",
                               textAlign: "center",
                               background: order.alreadyBooked ? "#f1f5f9" : "#ffffff",
                               color: "#0f172a",
