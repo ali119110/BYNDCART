@@ -395,24 +395,6 @@ export function CodPaymentCheck({
       <div className="bc-actions">
         <button
           type="button"
-          className="bc-btn primary"
-          disabled={busy}
-          onClick={() => verify(false)}
-        >
-          Verify first 20
-        </button>
-
-        <button
-          type="button"
-          className="bc-btn"
-          disabled={busy || !hasNext}
-          onClick={() => verify(true)}
-        >
-          Verify next 20
-        </button>
-
-        <button
-          type="button"
           className="bc-btn"
           disabled={busy}
           onClick={() => autoVerify(false)}
@@ -426,7 +408,7 @@ export function CodPaymentCheck({
           disabled={busy}
           onClick={() => autoVerify(true)}
         >
-          {autoRunning ? "Checking all orders…" : reconciling ? "Reconciling all orders…" : "Verify & reconcile all"}
+          {reconciling ? "Reconciling all orders…" : autoRunning ? "Checking all orders…" : "Verify & reconcile all"}
         </button>
 
         <button
@@ -628,7 +610,7 @@ export function CodPaymentCheck({
             {visible.length === 0 && (
               <tr>
                 <td colSpan={9}>
-                  {rows.length === 0 ? "No orders verified yet. Click 'Verify first 20' or 'Verify all' above." : "No orders match the current filter."}
+                  {rows.length === 0 ? "No orders verified yet. Click "Verify all" or "Verify & reconcile all" above." : "No orders match the current filter."}
                 </td>
               </tr>
             )}
