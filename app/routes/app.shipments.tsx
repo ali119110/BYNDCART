@@ -256,9 +256,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "GENERATE_POSTEX_LOAD_SHEET") {
     const shipment = await prisma.shipmentTrack.findFirst({
       where: { id: shipmentId, shopifyStoreId, courier: "POSTEX" },
-      select: { trackingNumber: true, orderNumber: true },
+      select: {
+        trackingNumber: true,
+        orderNumber: true,
+        status: true,
+        warehouseIntakes: { select: { id: true }, take: 1 },
+      },
     });
     if (!shipment) return new Response("PostEx shipment not found for this store.", { status: 404 });
+    if (shipment.warehouseIntakes.length || !ACTIVE_SHIPMENT_STATUSES.includes(shipment.status as typeof ACTIVE_SHIPMENT_STATUSES[number])) {
+      return new Response("Load sheets are only available for active shipments that have not been received at the warehouse.", { status: 409 });
+    }
     const credentials = await getDecryptedCourierCredentials(shopifyStoreId, "POSTEX");
     const token = String(credentials?.apiToken || credentials?.credentials?.apiToken || "").trim();
     if (!token || credentials?.isLive !== true) return new Response("PostEx credentials are missing, disabled, or unverified.", { status: 409 });
