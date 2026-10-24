@@ -79,7 +79,7 @@ export default function Billing() {
     : Math.min(100, Math.round(((storePlan.usageCount ?? 0) / Math.max(1, storePlan.returnsLimit ?? 50)) * 100));
 
   return (
-    <div className="bc-page">
+    <div className="bc-page bc-billing-page">
       <header className="bc-header">
         <div className="bc-header-copy">
           <p className="bc-eyebrow">ACCOUNT</p>
