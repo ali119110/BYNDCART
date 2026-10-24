@@ -153,7 +153,7 @@ test("PostEx resolves a missing pickup address code from the registered-address 
     const url = String(input);
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     calls.push({ url, body });
-    if (url.includes("get-pickup-address")) {
+    if (url.endsWith("/order/v1/get-merchant-address")) {
       return jsonResponse({
         statusCode: "200",
         statusMessage: "SUCCESSFULLY OPERATED",
@@ -195,7 +195,8 @@ test("PostEx resolves a missing pickup address code from the registered-address 
     assert.strictEqual(result.trackingNumber, "PE1003");
     const booking = calls.find((call) => call.url.includes("create-order"));
     assert.strictEqual(booking?.body.pickupAddressCode, "PICKUP-001");
-    assert.ok(calls.some((call) => call.url.includes("get-pickup-address")), "registered pickup addresses should be queried when no code was saved");
+    assert.ok(calls.some((call) => call.url.endsWith("/order/v1/get-merchant-address")), "registered pickup addresses should be queried from PostEx merchant-address API when no code was saved");
+    assert.ok(calls.every((call) => !call.url.includes("cityName=")), "omit empty cityName filters when requesting the complete address list");
   } finally {
     delegate.findUnique = originalFindUnique;
     delegate.update = originalUpdate;
