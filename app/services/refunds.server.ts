@@ -42,8 +42,8 @@ export async function createRefundRecord(input: {
   notes?: string;
   confirmed?: boolean;
 }) {
-  if (!Number.isFinite(input.amount) || input.amount < 0) {
-    throw new Error("Refund amount must be zero or greater.");
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    throw new Error("Refund amount must be greater than zero.");
   }
   if (!input.returnRequestId && !input.exchangeRequestId) {
     throw new Error("A refund must be linked to a return or an exchange.");
@@ -59,6 +59,18 @@ export async function createRefundRecord(input: {
       },
     });
     if (existing) throw new Error("An open refund already exists for this return and method.");
+  }
+
+  if (input.exchangeRequestId) {
+    const existing = await prisma.refundRecord.findFirst({
+      where: {
+        shopifyStoreId: input.shopifyStoreId,
+        exchangeRequestId: input.exchangeRequestId,
+        method: input.method,
+        status: { not: "CANCELLED" },
+      },
+    });
+    if (existing) throw new Error("An open refund already exists for this exchange and method.");
   }
 
   const confirmed = Boolean(input.confirmed);
