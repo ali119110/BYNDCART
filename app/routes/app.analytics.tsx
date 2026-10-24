@@ -79,7 +79,6 @@ export default function Analytics() {
   const statusTotal = (items: Array<{ status: string; count: number }>) =>
     items.reduce((sum, item) => sum + Number(item.count || 0), 0);
   const openReturns = statusCount(returnsByStatus, ["PENDING", "APPROVED", "RECEIVED", "INSPECTED"]);
-  const terminalReturns = statusCount(returnsByStatus, ["COMPLETED", "REJECTED", "CANCELLED"]);
   const rejectedReturns = statusCount(returnsByStatus, ["REJECTED", "CANCELLED"]);
   const completedExchanges = statusCount(exchangesByStatus, ["COMPLETED", "FULFILLED"]);
   const rejectedExchanges = statusCount(exchangesByStatus, ["REJECTED", "CANCELLED"]);
