@@ -61,7 +61,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
       return {
         success: true,
-        message: `${adapter.displayName} credentials saved securely. Test the connection to enable this courier for customer bookings.`,
+        message: `${adapter.displayName} production credentials saved securely. Verify them to enable this courier for customer bookings.`,
         intent,
         providerName,
       };
@@ -72,7 +72,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "TEST_CONNECTION") {
     if (!adapter.isLive) {
-      return { success: false, isLive: false, error: `${adapter.displayName} connection testing is not implemented in BYNDCART yet.`, intent, providerName, testedProvider: providerName };
+      return { success: false, isLive: false, error: `${adapter.displayName} production credential verification is not implemented in BYNDCART yet.`, intent, providerName, testedProvider: providerName };
     }
     let posted: Record<string, string> = {};
     try {
@@ -85,7 +85,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const effectiveCredentials = { ...(saved?.credentials || {}), ...(saved || {}), ...posted } as Record<string, any>;
     const missingRequired = adapter.fields.find((field) => field.required && !String(effectiveCredentials[field.key] || "").trim());
     if (missingRequired) {
-      return { success: false, message: `Enter ${missingRequired.label} before testing ${adapter.displayName}.`, isLive: false, intent, providerName, testedProvider: providerName };
+      return { success: false, message: `Enter ${missingRequired.label} before verifying ${adapter.displayName} production credentials.`, isLive: false, intent, providerName, testedProvider: providerName };
     }
     try {
       const testResult = await CourierRegistry.get(providerName).testConnection({
@@ -98,7 +98,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           enabled: true,
           isLive: true,
         });
-        return { success: true, message: `${testResult.message} Courier enabled for API booking.`, isLive: true, intent, providerName, testedProvider: providerName };
+        return { success: true, message: `${testResult.message} Production courier enabled for API booking.`, isLive: true, intent, providerName, testedProvider: providerName };
       }
       return { success: false, message: testResult.message, isLive: false, intent, providerName, testedProvider: providerName };
     } catch (error) {
@@ -119,7 +119,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const configured = (await getStoreCourierConfigs(shopifyStoreId)).find((item) => item.providerName === providerName && item.enabled);
     const configuredKeys = new Set(configured?.configuredFieldKeys || []);
     const missingRequired = adapter.fields.find((field) => field.required && !configuredKeys.has(field.key));
-    if (!configured || !configured.isLive || missingRequired) return { success: false, error: `Test and verify the required ${adapter.displayName} settings before selecting it as default${missingRequired ? ` (missing ${missingRequired.label})` : ""}.`, intent, providerName };
+    if (!configured || !configured.isLive || missingRequired) return { success: false, error: `Verify the required ${adapter.displayName} production credentials before selecting it as default${missingRequired ? ` (missing ${missingRequired.label})` : ""}.`, intent, providerName };
     try {
       await saveMerchantCourierConfig(shopifyStoreId, providerName, isReverse ? { isDefaultReverse: true } : { isDefaultForward: true });
       return { success: true, message: `${adapter.displayName} is now the default for ${isReverse ? "return pickups" : "forward/exchange shipments"}.`, intent, providerName };
@@ -182,7 +182,7 @@ export default function Couriers() {
         <div className="bc-header-copy">
           <p className="bc-eyebrow">LOGISTICS</p>
           <h1>Couriers</h1>
-          <p>Configure merchant credentials and choose defaults only for integrations with confirmed API booking support.</p>
+          <p>Configure production API credentials only. Sender/contact details are managed centrally in Settings → Shipper profiles.</p>
         </div>
       </header>
 
@@ -190,7 +190,7 @@ export default function Couriers() {
         <div className="bc-courier-capability-icon" aria-hidden="true">i</div>
         <div>
           <strong>API-only booking status</strong>
-          <p>PostEx, Leopards, DHL Express, FedEx, and TCS have API-backed adapters based on the supplied contracts. Each store must save and test its own credentials before booking. DHL shipment cancellation is not supported by the supplied REST contract; TCS returns require a prior TCS consignment and its supplied tracking endpoint does not expose scan events. TRAX, M&amp;P, Call Courier, and Rider remain disabled. BYNDCART does not provide manual airway-bill entry.</p>
+          <p>PostEx, Leopards, DHL Express, FedEx, and TCS have API-backed integrations. Enter production credentials for your own carrier account and verify them before booking. Sender addresses are maintained in Settings → Shipper profiles. DHL shipment cancellation is not supported by the supplied API contract; TCS tracking has limited scan-event support. TRAX, M&amp;P, Call Courier, and Rider remain disabled pending supported API contracts.</p>
         </div>
       </section>
 
@@ -216,13 +216,13 @@ export default function Couriers() {
             <article key={adapter.providerName} className="bc-card bc-courier-card">
               <div className="bc-courier-card-header">
                 <div className="bc-courier-title-wrap"><h2>{adapter.displayName}</h2><span className="bc-courier-code">{adapter.providerName}</span></div>
-                <span className={`bc-badge ${isVerified ? "ok" : "warn"}`}>{isVerified ? "Connection verified" : isConfigured ? "Test connection required" : "Not configured"}</span>
+                <span className={`bc-badge ${isVerified ? "ok" : "warn"}`}>{isVerified ? "Connection verified" : isConfigured ? "Credential verification required" : "Not configured"}</span>
               </div>
 
               <p className="bc-courier-description">{adapter.description}</p>
               <div className={`bc-courier-capability ${adapter.isLive ? "live" : "pending"}`}>
                 <span className="bc-courier-capability-dot" aria-hidden="true" />
-                {adapter.apiStatus === "live_booking" ? "API integration enabled — verify with carrier UAT" : adapter.apiStatus === "pending_implementation" ? "API implementation pending" : "Disabled pending official API contract"}
+                {adapter.apiStatus === "live_booking" ? "Production API integration — credentials verification required" : adapter.apiStatus === "pending_implementation" ? "API implementation pending" : "Disabled pending official API contract"}
               </div>
               <p className="bc-courier-instructions">{adapter.instructions}</p>
 
@@ -272,10 +272,10 @@ export default function Couriers() {
                   })}
                   <div className="bc-courier-editor-actions">
                     <button type="button" className="bc-btn primary" onClick={() => handleSave(adapter.providerName)} disabled={isSubmitting || !adapter.fields.length}>{isSubmitting && actionData?.intent === "SAVE_CONFIG" ? "Saving…" : "Save credentials"}</button>
-                    {adapter.isLive && <button type="button" className="bc-btn" onClick={() => handleTestConnection(adapter.providerName)} disabled={isSubmitting}>{isSubmitting && actionData?.intent === "TEST_CONNECTION" ? "Testing…" : "Test connection"}</button>}
+                    {adapter.isLive && <button type="button" className="bc-btn" onClick={() => handleTestConnection(adapter.providerName)} disabled={isSubmitting}>{isSubmitting && actionData?.intent === "TEST_CONNECTION" ? "Verifying…" : "Verify production credentials"}</button>}
                     <button type="button" className="bc-btn" onClick={() => setSelectedProvider(null)} disabled={isSubmitting}>Cancel</button>
                   </div>
-                  {!isVerified && <p className="bc-hint">Saving credentials does not enable booking. A successful connection test enables this courier for customer bookings.</p>}
+                  {!isVerified && <p className="bc-hint">Saving credentials does not enable booking. Verify the production credentials to enable this courier for customer bookings.</p>}
                 </div>
               ) : (
                 <div className="bc-courier-card-actions">

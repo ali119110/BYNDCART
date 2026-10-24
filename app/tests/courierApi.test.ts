@@ -249,6 +249,10 @@ test("Leopards return booking uses bookPacket and reverses shipper and consignee
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const body = init?.body ? JSON.parse(String(init.body)) : {};
+    assert.ok(
+      url.startsWith("https://merchantapi.leopardscourier.com/api/"),
+      `Leopards must use production API even when legacy credentials contain an environment selector: ${url}`,
+    );
     if (url.includes("getAllCities")) {
       return jsonResponse({
         status: 1,
@@ -300,6 +304,48 @@ test("Leopards return booking uses bookPacket and reverses shipper and consignee
   assert.strictEqual(booked.booked_packet_weight, 750);
   assert.strictEqual(booked.booked_packet_collect_amount, 0);
   assert.strictEqual(booked.booked_packet_no_piece, 2);
+});
+
+test("DHL and FedEx ignore legacy sandbox/test settings and use production APIs only", async () => {
+  const originalFetch = globalThis.fetch;
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    urls.push(url);
+    if (url.endsWith("/oauth/token")) {
+      return jsonResponse({ access_token: "production-oauth-token", expires_in: 3600 });
+    }
+    return jsonResponse({ status: "ok" });
+  }) as typeof fetch;
+
+  try {
+    const dhlResult = await CourierRegistry.get("DHL").testConnection({
+      shopifyStoreId: "store-production-only",
+      config: {
+        environment: "test",
+        username: "production-user",
+        password: "production-password",
+        accountNumber: "production-account",
+      },
+    });
+    const fedexResult = await CourierRegistry.get("FEDEX").testConnection({
+      shopifyStoreId: "store-production-only",
+      config: {
+        environment: "sandbox",
+        clientId: `production-client-${Date.now()}`,
+        clientSecret: "production-secret",
+        accountNumber: "production-account",
+      },
+    });
+
+    assert.strictEqual(dhlResult.success, true);
+    assert.strictEqual(fedexResult.success, true);
+    assert.ok(urls.includes("https://express.api.dhl.com/mydhlapi/reference-data?datasetName=country"));
+    assert.ok(urls.includes("https://apis.fedex.com/oauth/token"));
+    assert.ok(urls.every((url) => !/sandbox|\/test(?:\/|\?)|staging/i.test(url)), "No test, sandbox, or staging API endpoint should be requested.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("Leopards cancellation succeeds only when status is 1", async () => {

@@ -186,6 +186,28 @@ test("Courier registry offers PostEx, Leopards, DHL, FedEx, and TCS", async () =
   }
 });
 
+test("Courier configuration exposes only essential production credentials", () => {
+  const configs: Record<string, string[]> = Object.fromEntries(
+    CourierRegistry.getRegisteredAdapters().map((adapter) => [
+      adapter.providerName,
+      adapter.fields.map((field) => field.key),
+    ]),
+  );
+
+  assert.deepStrictEqual(configs.POSTEX, ["apiToken"]);
+  assert.deepStrictEqual(configs.LEOPARDS, ["apiKey", "apiPassword"]);
+  assert.deepStrictEqual(configs.DHL, ["username", "password", "accountNumber"]);
+  assert.deepStrictEqual(configs.FEDEX, ["clientId", "clientSecret", "accountNumber"]);
+  assert.deepStrictEqual(configs.TCS, ["clientId", "userName", "password", "costCenterCode"]);
+
+  for (const [provider, fields] of Object.entries(configs)) {
+    assert.ok(!fields.includes("environment"), `${provider} should not expose a test/production selector`);
+    assert.ok(!fields.includes("warehouseAddress"), `${provider} should use the shared shipper profile`);
+    assert.ok(!fields.includes("warehouseCity"), `${provider} should use the shared shipper profile`);
+    assert.ok(!fields.includes("grantType"), `${provider} should not expose OAuth implementation choices`);
+  }
+});
+
 test("Multi-Courier Framework — Status Normalization", async () => {
   assert.strictEqual(normalizeCourierStatus("BOOKED"), "LABEL_CREATED");
   assert.strictEqual(normalizeCourierStatus("In Transit Hub"), "IN_TRANSIT");
