@@ -464,6 +464,16 @@ export async function syncShipmentTrackingStatus(trackingNumber: string, shopify
   if (!shipment) {
     throw new Error(`Shipment with tracking number ${trackingNumber} not found.`);
   }
+  if (["DELIVERED", "CANCELLED", "FAILED"].includes(String(shipment.status).toUpperCase())) {
+    return {
+      success: true,
+      trackingNumber,
+      status: shipment.status as StandardShipmentStatus,
+      location: shipment.location,
+      skipped: true,
+      reason: "Shipment is already in a terminal status.",
+    };
+  }
 
   const warehouseIntake = await prisma.warehouseIntake.findFirst({
     where: { shopifyStoreId: shipment.shopifyStoreId, shipmentTrackId: shipment.id },
@@ -643,8 +653,15 @@ export async function cancelShipmentTrack(shopifyStoreId: string, shipmentId: st
     select: { id: true, shopifyStoreId: true, trackingNumber: true, courier: true, status: true, orderNumber: true },
   });
   if (!shipment) throw new Error("Shipment not found for this store.");
-  if (["DELIVERED", "CANCELLED"].includes(String(shipment.status))) {
+  if (["DELIVERED", "CANCELLED", "FAILED"].includes(String(shipment.status).toUpperCase())) {
     throw new Error(`A shipment with status ${shipment.status} cannot be cancelled from BYNDCART.`);
+  }
+  const warehouseIntake = await prisma.warehouseIntake.findFirst({
+    where: { shopifyStoreId, shipmentTrackId: shipment.id },
+    select: { id: true },
+  });
+  if (warehouseIntake) {
+    throw new Error("This shipment has already been received at the warehouse and cannot be cancelled.");
   }
   if (!CourierRegistry.has(shipment.courier)) {
     throw new Error(`${shipment.courier} is disabled in BYNDCART. Cancellation is unavailable for this carrier.`);
