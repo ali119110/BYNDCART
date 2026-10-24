@@ -272,8 +272,9 @@ export async function triggerLifecycleNotification(input: TriggerNotificationInp
       },
     });
 
-    // Run in-band execution immediately for immediate delivery
-    await processNotificationJob({
+    // Run in-band execution immediately and surface the actual delivery result.
+    // The queued job remains as a retry path; it will skip if the in-band send succeeded.
+    const processed = await processNotificationJob({
       notificationLogId: log.id,
       shopifyStoreId: input.shopifyStoreId,
       eventType: input.eventType,
@@ -282,7 +283,12 @@ export async function triggerLifecycleNotification(input: TriggerNotificationInp
       variables: input.variables,
     });
 
-    return { status: "QUEUED", jobId: job.id, logId: log.id };
+    return {
+      status: processed?.status || (processed?.success ? "QUEUED" : "FAILED"),
+      jobId: job.id,
+      logId: log.id,
+      error: processed?.success ? undefined : processed?.error,
+    };
   } catch (err: any) {
     console.error(`[Notifications] Error triggering notification for ${input.eventType}:`, err);
     return { status: "FAILED_TRIGGER", error: err.message };
