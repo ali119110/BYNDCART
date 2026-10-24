@@ -1,3 +1,4 @@
+import { redirect } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData, useSearchParams } from "react-router";
 import { useState } from "react";
@@ -5,12 +6,8 @@ import { requireTenantContext } from "../services/tenant.server";
 import { getStoreCustomers, CustomerMetrics } from "../services/customers.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { shopifyStoreId } = await requireTenantContext(request);
-  const url = new URL(request.url);
-  const search = url.searchParams.get("search") || "";
-
-  const customers = await getStoreCustomers(shopifyStoreId, search);
-  return { customers, search };
+  await requireTenantContext(request);
+  return redirect("/app");
 };
 
 export default function Customers() {
