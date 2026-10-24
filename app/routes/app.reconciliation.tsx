@@ -208,7 +208,7 @@ export default function ReconciliationPage() {
   const currentSearch = searchParams.get("q") || "";
 
   return (
-    <div className="bc-page">
+    <div className="bc-page bc-reconciliation-page">
       <header className="bc-header">
         <div className="bc-header-copy">
           <p className="bc-eyebrow">PAYMENTS & RECONCILIATION</p>
