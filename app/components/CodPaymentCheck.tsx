@@ -610,7 +610,7 @@ export function CodPaymentCheck({
             {visible.length === 0 && (
               <tr>
                 <td colSpan={9}>
-                  {rows.length === 0 ? "No orders verified yet. Click "Verify all" or "Verify & reconcile all" above." : "No orders match the current filter."}
+                  {rows.length === 0 ? "No orders verified yet. Use Verify all or Verify & reconcile all above." : "No orders match the current filter."}
                 </td>
               </tr>
             )}
