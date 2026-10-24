@@ -1,7 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { normalizeShopDomain, resolvePortalStore } from "../services/portalAccess.server";
-import { renderTrackPageHtml } from "../services/trackPage.server";
+import { renderCustomerPortalPage } from "../services/customerPortalPage.server";
 
 /** Shopify app proxy entry point: https://{store}/apps/track. */
 export async function loader({ request }: LoaderFunctionArgs) {
@@ -44,11 +44,11 @@ async function handleTrackingRequest(request: Request) {
 
   try {
     const resolved = await resolvePortalStore(shop);
-    return renderTrackPageHtml(
-      request,
-      resolved.shopifyStoreId,
-      resolved.brandName || resolved.shop.replace(/\.myshopify\.com$/i, "").toUpperCase(),
-    );
+    return renderCustomerPortalPage(request, {
+      shopifyStoreId: resolved.shopifyStoreId,
+      brandName: resolved.brandName || resolved.shop.replace(/\.myshopify\.com$/i, "").toUpperCase(),
+      actionPath: "/apps/track",
+    });
   } catch (error) {
     console.error("[TrackOrder] Failed to resolve store for track page:", error);
     return new Response("Store tracking page is not available.", {
