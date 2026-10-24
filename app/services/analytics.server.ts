@@ -15,6 +15,17 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
           },
         }
       : {};
+  // Cash-flow totals are filtered by the time the refund was confirmed, not when
+  // the return request was opened. This keeps the KPI tied to the actual event.
+  const confirmedRefundDateFilter =
+    filters.startDate || filters.endDate
+      ? {
+          confirmedAt: {
+            ...(filters.startDate ? { gte: filters.startDate } : {}),
+            ...(filters.endDate ? { lte: filters.endDate } : {}),
+          },
+        }
+      : {};
 
   const [
     totalReturns,
@@ -22,8 +33,9 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
     returnsByStatus,
     exchangesByStatus,
     returnsByReason,
+    reasonedReturnsCount,
     exchangePriceAgg,
-    refundAgg,
+    confirmedRefundsByCurrencyRaw,
     monthlyTrendRaw,
     topReturnedProductsRaw,
   ] = await Promise.all([
@@ -46,15 +58,19 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
       orderBy: { _count: { reason: "desc" } },
       take: 5,
     }),
+    db.returnRequest.count({
+      where: { shopifyStoreId, ...dateFilter, reason: { not: null } },
+    }),
     db.exchangeItem.aggregate({
       where: {
         exchangeRequest: { shopifyStoreId, status: "COMPLETED", ...dateFilter },
       },
       _sum: { priceDifference: true },
     }),
-    db.returnRequest.aggregate({
-      where: { shopifyStoreId, status: "COMPLETED", ...dateFilter },
-      _sum: { refundAmount: true },
+    db.refundRecord.groupBy({
+      by: ["currency"],
+      where: { shopifyStoreId, status: "CONFIRMED", ...confirmedRefundDateFilter },
+      _sum: { amount: true },
     }),
     // Monthly trend: last 6 months, returns vs exchanges, via raw SQL
     // (Prisma groupBy can't truncate dates to month natively)
@@ -91,11 +107,12 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
       SELECT
         COALESCE(NULLIF(TRIM(li->>'title'), ''), 'Unknown Product') AS title,
         MAX(li->>'lineItemId') AS line_item_id,
-        COUNT(*)::int AS return_count
+        SUM(GREATEST(ri.quantity, 0))::int AS return_count
       FROM "ReturnItem" ri
       JOIN "ReturnRequest" rr
         ON rr.id = ri."returnRequestId"
         AND rr."shopifyStoreId" = ${shopifyStoreId}
+        AND rr.status NOT IN ('CANCELLED', 'REJECTED')
         AND (${filters.startDate ? filters.startDate : new Date(0)} <= rr."createdAt")
         AND (${filters.endDate ? filters.endDate : new Date("2100-01-01")} >= rr."createdAt")
       JOIN "Order" o
@@ -110,11 +127,17 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
   ]);
 
   const totalRequests = totalReturns + totalExchanges;
-  const returnRate = totalRequests === 0 ? 0 : (totalReturns / totalRequests) * 100;
-  const exchangeRate = totalRequests === 0 ? 0 : (totalExchanges / totalRequests) * 100;
+  // These are request-mix shares, not Shopify unit return rates. A true unit
+  // return rate needs a matched sales cohort and verified returned quantities.
+  const returnRequestShare = totalRequests === 0 ? 0 : (totalReturns / totalRequests) * 100;
+  const exchangeRequestShare = totalRequests === 0 ? 0 : (totalExchanges / totalRequests) * 100;
 
-  const totalReasonCount = returnsByReason.reduce((sum, r) => sum + r._count._all, 0);
-  const totalRefunded = Number(refundAgg._sum.refundAmount ?? 0);
+  const totalReasonCount = reasonedReturnsCount;
+  const confirmedRefundsByCurrency = confirmedRefundsByCurrencyRaw.map((row) => ({
+    currency: row.currency || "UNKNOWN",
+    amount: Number(row._sum.amount ?? 0),
+  }));
+  const totalRefunded = confirmedRefundsByCurrency.find((row) => row.currency === "PKR")?.amount ?? 0;
   const revenueFromExchanges = Number(exchangePriceAgg._sum.priceDifference ?? 0);
   // "Revenue retained" = money kept via exchanges instead of paid out as refunds
   const revenueRetained = revenueFromExchanges >= 0 ? revenueFromExchanges : 0;
@@ -124,9 +147,10 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
       totalReturns,
       totalExchanges,
       totalRequests,
-      returnRate: Number(returnRate.toFixed(1)),
-      exchangeRate: Number(exchangeRate.toFixed(1)),
+      returnRequestShare: Number(returnRequestShare.toFixed(1)),
+      exchangeRequestShare: Number(exchangeRequestShare.toFixed(1)),
       totalRefunded,
+      confirmedRefundsByCurrency,
       revenueFromExchanges,
       revenueRetained,
     },
@@ -154,7 +178,7 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
     topReturnedProducts: topReturnedProductsRaw.map((p) => ({
       lineItemId: p.line_item_id,
       title: p.title ?? "Unknown Product",
-      returnCount: Number(p.return_count),
+      requestedUnits: Number(p.return_count),
     })),
   };
 }
