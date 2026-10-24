@@ -73,6 +73,8 @@ export interface BookingResult {
   labelUrl?: string;
   error?: string;
   fulfillmentId?: string;
+  /** Carrier booking succeeded but Shopify rejected or could not confirm fulfillment. */
+  fulfillmentSyncError?: string;
 }
 
 const UNFULFILLED_ORDERS_QUERY = `#graphql
@@ -158,12 +160,32 @@ const BOOKING_ORDER_STATUS_QUERY = `#graphql
 const FULFILLMENT_ORDERS_QUERY = `#graphql
   query GetOrderFulfillmentOrders($orderId: ID!) {
     order(id: $orderId) {
-      fulfillmentOrders(first: 5) {
+      id
+      displayFulfillmentStatus
+      fulfillments(first: 100) {
+        nodes {
+          id
+          trackingInfo {
+            number
+          }
+          fulfillmentOrders(first: 50) {
+            nodes {
+              id
+            }
+          }
+        }
+      }
+      fulfillmentOrders(first: 100) {
         nodes {
           id
           status
           supportedActions {
             action
+          }
+          assignedLocation {
+            location {
+              id
+            }
           }
         }
       }
@@ -172,8 +194,8 @@ const FULFILLMENT_ORDERS_QUERY = `#graphql
 `;
 
 const FULFILLMENT_CREATE_MUTATION = `#graphql
-  mutation CreateFulfillment($fulfillment: FulfillmentV2Input!) {
-    fulfillmentCreateV2(fulfillment: $fulfillment) {
+  mutation CreateFulfillment($fulfillment: FulfillmentInput!) {
+    fulfillmentCreate(fulfillment: $fulfillment) {
       fulfillment {
         id
         status
@@ -465,56 +487,153 @@ export async function fetchUnfulfilledOrders(
 /**
  * Creates fulfillment in Shopify with courier tracking info
  */
-async function fulfillOrderInShopify(
+export async function fulfillOrderInShopify(
   admin: any,
   orderId: string,
   courier: string,
   trackingNumber: string,
 ): Promise<{ success: boolean; fulfillmentId?: string; error?: string }> {
+  if (!admin) {
+    return { success: false, error: "Shopify admin client is unavailable. Reopen the app and retry Shopify fulfillment sync." };
+  }
+  if (!orderId || !trackingNumber) {
+    return { success: false, error: "A Shopify order ID and confirmed courier tracking number are required." };
+  }
+
   try {
     const foRes = await admin.graphql(FULFILLMENT_ORDERS_QUERY, { variables: { orderId } });
     const foPayload = await foRes.json();
-    const fulfillmentOrders = foPayload?.data?.order?.fulfillmentOrders?.nodes || [];
-
-    const openFo = fulfillmentOrders.find((fo: any) => fo.status === "OPEN" || fo.status === "IN_PROGRESS");
-    if (!openFo) {
-      return { success: false, error: "No open fulfillment order found in Shopify." };
+    const queryErrors = Array.isArray(foPayload?.errors) ? foPayload.errors : [];
+    if (queryErrors.length) {
+      return {
+        success: false,
+        error: queryErrors.map((entry: any) => String(entry?.message || "Shopify GraphQL query failed.")).join("; "),
+      };
     }
 
-    const companyName = courier.toUpperCase().includes("POSTEX")
-      ? "PostEx"
-      : courier.toUpperCase().includes("LEOPARD")
-        ? "Leopards Courier"
-        : courier.toUpperCase().includes("TCS")
-          ? "TCS"
-          : "Other";
+    const order = foPayload?.data?.order;
+    if (!order || order.id !== orderId) {
+      return { success: false, error: "Shopify order was not found or is not accessible to this app." };
+    }
 
-    const url = courierTrackingUrl(courier, trackingNumber);
+    const fulfillments = Array.isArray(order.fulfillments?.nodes) ? order.fulfillments.nodes : [];
+    const matchingFulfillments = fulfillments.filter((fulfillment: any) =>
+      Array.isArray(fulfillment.trackingInfo)
+      && fulfillment.trackingInfo.some((tracking: any) =>
+        String(tracking?.number || "").trim() === String(trackingNumber).trim()
+      )
+    );
+    const alreadySyncedFulfillmentIds = new Set<string>();
+    for (const fulfillment of matchingFulfillments) {
+      for (const fulfillmentOrder of fulfillment.fulfillmentOrders?.nodes || []) {
+        if (fulfillmentOrder?.id) alreadySyncedFulfillmentIds.add(String(fulfillmentOrder.id));
+      }
+    }
 
-    const fCreateRes = await admin.graphql(FULFILLMENT_CREATE_MUTATION, {
-      variables: {
-        fulfillment: {
-          lineItemsByFulfillmentOrder: [{ fulfillmentOrderId: openFo.id }],
-          trackingInfo: {
-            company: companyName,
-            number: trackingNumber,
-            url,
-          },
-          notifyCustomer: true,
-        },
-      },
+    if (String(order.displayFulfillmentStatus || "").toUpperCase() === "FULFILLED" && !matchingFulfillments.length) {
+      return {
+        success: false,
+        error: "Shopify already marks this order fulfilled with different or missing tracking information. No duplicate fulfillment was created; verify the order in Shopify before retrying.",
+      };
+    }
+
+    const allFulfillmentOrders = Array.isArray(order.fulfillmentOrders?.nodes) ? order.fulfillmentOrders.nodes : [];
+    const eligibleFulfillmentOrders = allFulfillmentOrders.filter((fulfillmentOrder: any) => {
+      const status = String(fulfillmentOrder?.status || "").toUpperCase();
+      const supportedActions = Array.isArray(fulfillmentOrder?.supportedActions)
+        ? fulfillmentOrder.supportedActions.map((action: any) => String(action?.action || "").toUpperCase())
+        : [];
+      return ["OPEN", "IN_PROGRESS"].includes(status)
+        && supportedActions.includes("CREATE_FULFILLMENT")
+        && !alreadySyncedFulfillmentIds.has(String(fulfillmentOrder.id));
     });
 
-    const fPayload = await fCreateRes.json();
-    const userErrors = fPayload?.data?.fulfillmentCreateV2?.userErrors || [];
-    if (userErrors.length > 0) {
-      const msg = userErrors.map((e: any) => e.message).join(", ");
-      return { success: false, error: msg };
+    // One Shopify fulfillment can include multiple fulfillment orders only when they
+    // belong to the same order and the same location. Preserve that rule for multi-location orders.
+    const groups = new Map<string, any[]>();
+    for (const fulfillmentOrder of eligibleFulfillmentOrders) {
+      const locationId = fulfillmentOrder.assignedLocation?.location?.id;
+      const groupKey = locationId ? String(locationId) : `fulfillment-order:${fulfillmentOrder.id}`;
+      groups.set(groupKey, [...(groups.get(groupKey) || []), fulfillmentOrder]);
+    }
+
+    if (!groups.size) {
+      if (matchingFulfillments.length) {
+        return { success: true, fulfillmentId: matchingFulfillments[0]?.id };
+      }
+      const statusSummary = allFulfillmentOrders
+        .map((fulfillmentOrder: any) => `${fulfillmentOrder.status || "UNKNOWN"} (${(fulfillmentOrder.supportedActions || []).map((action: any) => action.action).join(", ") || "no supported actions"})`)
+        .join("; ");
+      return {
+        success: false,
+        error: statusSummary
+          ? `Shopify has no fulfillment order available for this app to fulfill. Current fulfillment orders: ${statusSummary}. Check the fulfillment location and app permissions.`
+          : "No open fulfillment order found in Shopify. The order may be assigned to a fulfillment service or already fulfilled.",
+      };
+    }
+
+    const normalizedCourier = courier.toUpperCase();
+    const companyName = normalizedCourier.includes("POSTEX")
+      ? "PostEx"
+      : normalizedCourier.includes("LEOPARD")
+        ? "Leopards Courier"
+        : normalizedCourier.includes("TCS")
+          ? "TCS"
+          : "Other";
+    const url = courierTrackingUrl(courier, trackingNumber);
+    const createdFulfillmentIds: string[] = matchingFulfillments
+      .map((fulfillment: any) => String(fulfillment?.id || ""))
+      .filter(Boolean);
+
+    for (const fulfillmentOrders of groups.values()) {
+      const fCreateRes = await admin.graphql(FULFILLMENT_CREATE_MUTATION, {
+        variables: {
+          fulfillment: {
+            lineItemsByFulfillmentOrder: fulfillmentOrders.map((fulfillmentOrder: any) => ({
+              fulfillmentOrderId: fulfillmentOrder.id,
+            })),
+            trackingInfo: {
+              company: companyName,
+              number: trackingNumber,
+              url,
+            },
+            notifyCustomer: true,
+          },
+        },
+      });
+
+      const fPayload = await fCreateRes.json();
+      const mutationErrors = Array.isArray(fPayload?.errors) ? fPayload.errors : [];
+      if (mutationErrors.length) {
+        return {
+          success: false,
+          fulfillmentId: createdFulfillmentIds[0],
+          error: mutationErrors.map((entry: any) => String(entry?.message || "Shopify fulfillment mutation failed.")).join("; "),
+        };
+      }
+
+      const result = fPayload?.data?.fulfillmentCreate;
+      const userErrors = Array.isArray(result?.userErrors) ? result.userErrors : [];
+      if (userErrors.length) {
+        return {
+          success: false,
+          fulfillmentId: createdFulfillmentIds[0],
+          error: userErrors.map((entry: any) => String(entry?.message || "Shopify rejected the fulfillment.")).join("; "),
+        };
+      }
+      if (!result?.fulfillment?.id) {
+        return {
+          success: false,
+          fulfillmentId: createdFulfillmentIds[0],
+          error: "Shopify returned no fulfillment ID. The courier booking may exist, but Shopify fulfillment was not confirmed.",
+        };
+      }
+      createdFulfillmentIds.push(String(result.fulfillment.id));
     }
 
     return {
       success: true,
-      fulfillmentId: fPayload?.data?.fulfillmentCreateV2?.fulfillment?.id,
+      fulfillmentId: createdFulfillmentIds[0],
     };
   } catch (error) {
     return {
@@ -865,6 +984,7 @@ export async function bookCourierShipment(
         courier: "RIDER",
         trackingNumber,
         fulfillmentId: fulfillment.fulfillmentId,
+        fulfillmentSyncError: fulfillment.success ? undefined : fulfillment.error || "Shopify fulfillment could not be confirmed.",
       };
     } catch (err) {
       return {
@@ -1003,6 +1123,7 @@ export async function bookCourierShipment(
         cityName: input.cityName,
         codAmount: input.codAmountPKR,
         fulfillmentSuccess: fulfillment.success,
+        fulfillmentSyncError: fulfillment.success ? undefined : fulfillment.error,
       },
     });
 
@@ -1034,6 +1155,7 @@ export async function bookCourierShipment(
       trackingNumber,
       labelUrl: labelResult.labelUrl,
       fulfillmentId: fulfillment.fulfillmentId,
+      fulfillmentSyncError: fulfillment.success ? undefined : fulfillment.error || "Shopify fulfillment could not be confirmed.",
     };
   } catch (err) {
     return {
