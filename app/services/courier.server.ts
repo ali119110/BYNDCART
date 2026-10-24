@@ -1734,9 +1734,11 @@ const COURIER_SETUP: Record<string, { instructions: string; apiStatus: CourierAp
   },
   POSTEX: {
     apiStatus: "live_booking",
-    instructions: "Enter the PostEx merchant API token. BYNDCART automatically attempts to retrieve registered pickup/store address codes from PostEx, so separate warehouse fields are not required here.",
+    instructions: "Enter the PostEx merchant API token. BYNDCART attempts to auto-resolve your registered pickup/store IDs. The two optional ID fields are only fallbacks if your account's address lookup cannot return them; do not enter warehouse contact or address details here.",
     fields: [
       { key: "apiToken", label: "Merchant API token", placeholder: "Paste the PostEx token", required: true, secret: true },
+      { key: "pickupAddressCode", label: "Pickup address ID (optional fallback)", placeholder: "Only if auto-lookup cannot resolve it", required: false },
+      { key: "storeAddressCode", label: "Store address ID (optional fallback)", placeholder: "Only if auto-lookup cannot resolve it", required: false },
     ],
   },
   LEOPARDS: {
