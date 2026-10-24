@@ -168,7 +168,11 @@ export async function action({ request }: ActionFunctionArgs) {
     if (intent === "ATTACH_EVIDENCE") {
       const file = form.get("file");
       const sourceUrl = String(form.get("sourceUrl") || "").trim();
-      const returnRequestId = String(form.get("returnRequestId") || "").trim();
+      const returnRequestId = String(form.get("returnRequestId") || "").trim() || undefined;
+      const exchangeRequestId = String(form.get("exchangeRequestId") || "").trim() || undefined;
+      if (Boolean(returnRequestId) === Boolean(exchangeRequestId)) {
+        return { ok: false, message: "Select exactly one return or exchange request for the receipt." };
+      }
       if (!(file instanceof File) && !sourceUrl) {
         return { ok: false, message: "Choose a file or paste an HTTPS URL." };
       }
@@ -186,6 +190,7 @@ export async function action({ request }: ActionFunctionArgs) {
       await saveEvidence({
         shopifyStoreId,
         returnRequestId,
+        exchangeRequestId,
         fileName,
         mimeType,
         sizeBytes,
