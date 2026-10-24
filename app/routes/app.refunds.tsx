@@ -192,7 +192,7 @@ export default function RefundsPage() {
   const actionData = useActionData<typeof action>();
 
   return (
-    <div className="bc-page">
+    <div className="bc-page bc-refunds-page">
       <header className="bc-header">
         <div className="bc-header-copy">
           <p className="bc-eyebrow">PAYMENTS</p>
@@ -214,6 +214,7 @@ export default function RefundsPage() {
               {returnRequests.length === 0 && <tr><td colSpan={6}>No return requests to review.</td></tr>}
               {returnRequests.map((request) => {
                 const requestEvidence = evidence.filter((item) => item.returnRequestId === request.id);
+                const receiptEvidence = requestEvidence.filter((item) => item.uploadedBy === "MERCHANT");
                 const existingRefund = refunds.find((item) => item.returnRequestId === request.id && item.status !== "CANCELLED");
                 return (
                   <tr key={request.id}>
@@ -228,7 +229,7 @@ export default function RefundsPage() {
                         <div className="bc-refund-review-body">
                           <p><strong>Customer-submitted details</strong></p>
                           <p className="bc-muted">Reason: {request.reason || "—"}<br />Note: {request.customerNote || "—"}<br />Admin note: {request.adminNote || "—"}<br />Policy override: {request.policyOverrideReason || "—"}</p>
-                          <p className="bc-muted">{requestEvidence.length} receipt/evidence file(s) saved.</p>
+                          <p className="bc-muted">{requestEvidence.length} customer/return evidence file(s) saved; {receiptEvidence.length} merchant payout receipt(s) attached.</p>
                           {!existingRefund && (
                             <Form method="post" className="bc-refund-inline-form">
                               <input type="hidden" name="intent" value="CREATE_REFUND" />
@@ -251,7 +252,7 @@ export default function RefundsPage() {
                           )}
                           {existingRefund?.status === "CONFIRMED" && (
                             <div className="bc-refund-next-steps">
-                              {requestEvidence.length === 0 && (
+                              {receiptEvidence.length === 0 && (
                                 <Form method="post" encType="multipart/form-data" className="bc-refund-inline-form">
                                   <input type="hidden" name="intent" value="ATTACH_EVIDENCE" />
                                   <input type="hidden" name="returnRequestId" value={request.id} />
@@ -261,7 +262,7 @@ export default function RefundsPage() {
                                   <button type="submit" className="bc-btn">Attach receipt</button>
                                 </Form>
                               )}
-                              {requestEvidence.length > 0 && (
+                              {receiptEvidence.length > 0 && (
                                 <Form method="post">
                                   <input type="hidden" name="intent" value="SEND_REFUND_NOTIFICATION" />
                                   <input type="hidden" name="refundId" value={existingRefund.id} />
