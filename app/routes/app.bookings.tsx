@@ -1527,12 +1527,12 @@ export default function BookingsPage() {
                               )}
                             </fulfillmentSyncFetcher.Form>
                           ) : order.alreadyBooked ? (
-                            <a
-                              href={`/app/shipments?search=${encodeURIComponent(order.name)}&type=All&status=ALL&page=1`}
+                            <Link
+                              to={`/app/shipments?search=${encodeURIComponent(order.name)}&type=All&status=ALL&page=1`}
                               style={{ color: "#92400e", fontSize: "10px", fontWeight: 700, textDecoration: "underline" }}
                             >
                               Review
-                            </a>
+                            </Link>
                           ) : (
                             <span style={{ color: "#94a3b8" }}>—</span>
                           )}
