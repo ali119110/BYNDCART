@@ -266,7 +266,10 @@ type MetaTemplateStatus = { name: string; status: string; created: boolean; erro
 const metaTemplateStatusCache = new Map<string, { status: string; expiresAt: number }>();
 
 export function buildMetaTemplatePayload(eventType: string, variables: Record<string, any>) {
-  const definition = DEFAULT_WHATSAPP_AUTOMATIONS.find((template) => template.eventType === eventType);
+  const definition = DEFAULT_WHATSAPP_AUTOMATIONS.find((template) => template.eventType === eventType)
+    || (eventType === "TEST_MESSAGE"
+      ? { eventType: "TEST_MESSAGE", subject: "WhatsApp integration test", body: "Hello {{customer_name}}, this is a test message from BYNDCART. Your WhatsApp connection is working." }
+      : null);
   if (!definition) return null;
   const names: string[] = [];
   const body = definition.body.replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_match, name: string) => {
@@ -302,7 +305,11 @@ export function buildMetaTemplatePayload(eventType: string, variables: Record<st
  * until Meta approves them; local app templates are not a substitute for Meta approval.
  */
 export async function provisionMetaWhatsAppTemplates(wabaId: string, accessToken: string) {
-  const templateNames = DEFAULT_WHATSAPP_AUTOMATIONS.map((template) => `byndcart_${template.eventType.toLowerCase()}`);
+  const templateDefinitions = [
+    ...DEFAULT_WHATSAPP_AUTOMATIONS,
+    { eventType: "TEST_MESSAGE", subject: "WhatsApp integration test", body: "Hello {{customer_name}}, this is a test message from BYNDCART. Your WhatsApp connection is working." },
+  ];
+  const templateNames = templateDefinitions.map((template) => `byndcart_${template.eventType.toLowerCase()}`);
   const root = `https://graph.facebook.com/v23.0/${encodeURIComponent(wabaId)}/message_templates`;
   const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" };
   const statuses: MetaTemplateStatus[] = [];
@@ -324,7 +331,7 @@ export async function provisionMetaWhatsAppTemplates(wabaId: string, accessToken
     }
 
     const existing = Array.isArray(existingPayload?.data) ? existingPayload.data : [];
-    for (const definition of DEFAULT_WHATSAPP_AUTOMATIONS) {
+    for (const definition of templateDefinitions) {
       const prepared = buildMetaTemplatePayload(definition.eventType, {});
       if (!prepared) continue;
       const found = existing.find((item: any) =>
@@ -650,6 +657,12 @@ export async function dispatchWhatsAppNotification(input: SendWhatsAppInput): Pr
   if (input.shopifyStoreId) {
     const config = await getWhatsAppConfig(input.shopifyStoreId);
     if (config?.enabled && config.phoneNumberId && config.rawAccessToken) {
+      if (!input.templateName) {
+        return {
+          success: false,
+          error: "No Meta-approved utility template is configured for this notification. Business-initiated WhatsApp messages must use an approved template.",
+        };
+      }
       if (input.templateName) {
         if (!config.wabaId) {
           return { success: false, error: "The connected WhatsApp account is missing its WABA ID. Reconnect WhatsApp in BYNDCART." };
