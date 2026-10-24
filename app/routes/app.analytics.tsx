@@ -100,7 +100,7 @@ export default function Analytics() {
           <div className="bc-header-copy">
             <p className="bc-eyebrow">INSIGHTS</p>
             <h1>Analytics</h1>
-            <p>Return rate, refunds, and the products shoppers send back most often.</p>
+            <p>Request mix, confirmed refund payouts, and products with the most return units requested.</p>
           </div>
           <div className="bc-dashboard-controls">
             <div className="bc-range-filter" role="group" aria-label="Filter analytics date range">
@@ -145,12 +145,12 @@ export default function Analytics() {
         <article className="bc-kpi-card bc-kpi-returns">
           <span className="bc-kpi-label">Return request share</span>
           <p className="bc-kpi-value">{dataAvailable ? summary.returnRequestShare + "%" : "—"}</p>
-          <p className="bc-muted">{summary.totalReturns} of {summary.totalRequests} requests · request mix, not unit return rate</p>
+          <p className="bc-muted">{dataAvailable ? summary.totalReturns + " of " + summary.totalRequests + " requests · request mix, not unit return rate" : "Unavailable"}</p>
         </article>
         <article className="bc-kpi-card bc-kpi-exchanges">
           <span className="bc-kpi-label">Exchange request share</span>
           <p className="bc-kpi-value">{dataAvailable ? summary.exchangeRequestShare + "%" : "—"}</p>
-          <p className="bc-muted">{summary.totalExchanges} of {summary.totalRequests} requests · request mix</p>
+          <p className="bc-muted">{dataAvailable ? summary.totalExchanges + " of " + summary.totalRequests + " requests · request mix" : "Unavailable"}</p>
         </article>
         <article className="bc-kpi-card">
           <span className="bc-kpi-label">Confirmed refunds (PKR)</span>
@@ -226,7 +226,7 @@ export default function Analytics() {
         </div>
       </section>
 
-      {/* Top 5 Return Reasons Breakdown + Top 5 Most-Returned Products */}
+      {/* Top 5 Return Reasons Breakdown + Top 5 Products by Return Units Requested */}
       <div className="bc-split">
         <section className="bc-card">
           <h2 className="bc-title">Top 5 Return Reasons</h2>
