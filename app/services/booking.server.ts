@@ -894,7 +894,7 @@ export async function bookCourierShipment(
 
     const adapter = CourierRegistry.get(normCourier);
     const sharedCourierSettings = await getCourierOperationsSettings(shopifyStoreId).catch((settingsError) => {
-      console.warn("[Booking] Could not read shared shipper profile; using courier-specific address settings.", settingsError);
+      console.warn("[Booking] Could not read shared shipper profile; using empty profile defaults.", settingsError);
       return null;
     });
     const effectiveShipperProfileIndex = shipperProfileIndex ?? sharedCourierSettings?.defaultShipperProfileIndex ?? 0;
