@@ -495,7 +495,7 @@ export async function exchangeMetaEmbeddedSignupCode(
   // grants it; if this exchange is unavailable for this app's Embedded Signup token,
   // keep the valid code-exchange token and let API verification expose expiry/permission errors.
   let userAccessToken = String(tokenData.access_token);
-  const longLivedUrl = new URL("https://graph.facebook.com/${META_GRAPH_API_VERSION}/oauth/access_token");
+  const longLivedUrl = new URL(`https://graph.facebook.com/${META_GRAPH_API_VERSION}/oauth/access_token`);
   longLivedUrl.searchParams.set("grant_type", "fb_exchange_token");
   longLivedUrl.searchParams.set("client_id", appId);
   longLivedUrl.searchParams.set("client_secret", appSecret);
