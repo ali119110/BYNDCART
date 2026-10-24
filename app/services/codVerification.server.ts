@@ -1,6 +1,6 @@
 import { getDecryptedCourierCredentials } from "./courier.server";
 
-const ORDER_BATCH_SIZE = 20;
+const ORDER_BATCH_SIZE = 100;
 const POSTEX_API_ROOT = "https://api.postex.pk/services/integration/api";
 const LEOPARDS_PRODUCTION_API_ROOT = "https://merchantapi.leopardscourier.com/api";
 const LEOPARDS_STAGING_API_ROOT = "https://merchantapistaging.leopardscourier.com/api";
