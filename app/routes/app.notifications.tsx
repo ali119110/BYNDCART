@@ -145,8 +145,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     try {
-      await exchangeMetaEmbeddedSignupCode(store.id, code);
-      return { success: true, message: "WhatsApp Business account connected and its phone number verified. BYNDCART's local notification templates are available; outbound template messages still require approved Meta templates and the platform's production partner permissions." };
+      const sessionInfo = {
+        wabaId: String(formData.get("wabaId") || "").trim() || undefined,
+        phoneNumberId: String(formData.get("phoneNumberId") || "").trim() || undefined,
+        businessId: String(formData.get("businessId") || "").trim() || undefined,
+      };
+      const connection = await exchangeMetaEmbeddedSignupCode(store.id, code, undefined, undefined, sessionInfo);
+      return {
+        success: true,
+        message: "WhatsApp Business account and registered phone verified. BYNDCART templates are available locally; business-initiated template messages require Meta approval and the platform's Tech Provider/partner setup.",
+        metaTemplateStatus: (connection as any)?.metaTemplateStatus,
+      };
     } catch (err: any) {
       return { success: false, error: err.message || "Failed to link Meta WhatsApp account." };
     }
@@ -320,6 +329,33 @@ export default function Notifications() {
   const [testPhone, setTestPhone] = useState("");
   const [showTestModal, setShowTestModal] = useState(false);
   const [metaSdkReady, setMetaSdkReady] = useState(false);
+  const metaSignupSessionInfoRef = React.useRef<{ wabaId?: string; phoneNumberId?: string; businessId?: string } | null>(null);
+
+  // Embedded Signup may return the asset IDs through a postMessage event, or on the
+  // FB.login response extras. Accept these IDs only from known Meta domains.
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onMetaMessage = (event: MessageEvent) => {
+      try {
+        const origin = new URL(event.origin);
+        if (!["facebook.com", "www.facebook.com", "business.facebook.com", "web.facebook.com"].includes(origin.hostname)) return;
+        let data: any = event.data;
+        if (typeof data === "string") data = JSON.parse(data);
+        if (data?.type !== "WA_EMBEDDED_SIGNUP") return;
+        const session = data?.data || data;
+        const wabaId = String(session?.waba_id || session?.wabaId || "").trim();
+        const phoneNumberId = String(session?.phone_number_id || session?.phoneNumberId || "").trim();
+        const businessId = String(session?.business_id || session?.businessId || "").trim();
+        if (wabaId || phoneNumberId || businessId) {
+          metaSignupSessionInfoRef.current = { wabaId: wabaId || undefined, phoneNumberId: phoneNumberId || undefined, businessId: businessId || undefined };
+        }
+      } catch {
+        // Ignore unrelated or malformed window messages.
+      }
+    };
+    window.addEventListener("message", onMetaMessage);
+    return () => window.removeEventListener("message", onMetaMessage);
+  }, []);
 
   // Meta Embedded Signup requires the Facebook JavaScript SDK; without loading and
   // initializing it, the Connect button always falls back to manual credentials.
@@ -333,7 +369,7 @@ export default function Notifications() {
           appId: metaAppId,
           cookie: true,
           xfbml: false,
-          version: "v21.0",
+          version: "v23.0",
         });
         setMetaSdkReady(true);
         return true;
@@ -398,9 +434,17 @@ export default function Notifications() {
       fb.login(
         (response: any) => {
           if (response.authResponse?.code) {
+            const authExtras = response.authResponse?.extras || response.authResponse || {};
+            const messageInfo = metaSignupSessionInfoRef.current || {};
+            const wabaId = String(authExtras.waba_id || authExtras.wabaId || messageInfo.wabaId || "").trim();
+            const phoneNumberId = String(authExtras.phone_number_id || authExtras.phoneNumberId || messageInfo.phoneNumberId || "").trim();
+            const businessId = String(authExtras.business_id || authExtras.businessId || messageInfo.businessId || "").trim();
             const fd = new FormData();
             fd.append("actionType", "connectMetaEmbeddedSignup");
             fd.append("code", response.authResponse.code);
+            if (wabaId) fd.append("wabaId", wabaId);
+            if (phoneNumberId) fd.append("phoneNumberId", phoneNumberId);
+            if (businessId) fd.append("businessId", businessId);
             fetcher.submit(fd, { method: "post" });
           } else {
             console.warn("Meta login cancelled or no code returned", response);
