@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 import prisma from "../db.server";
@@ -102,11 +103,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
     };
   });
 
-  return { labels };
+  return { labels, autoPrint: url.searchParams.get("autoprint") === "1" };
 }
 
 export default function AwbPrintPage() {
-  const { labels } = useLoaderData<typeof loader>();
+  const { labels, autoPrint } = useLoaderData<typeof loader>();
+
+  useEffect(() => {
+    if (!autoPrint || labels.length === 0) return;
+    // Let the label SVGs and print styles paint before opening the browser print dialog.
+    const timer = window.setTimeout(() => window.print(), 500);
+    return () => window.clearTimeout(timer);
+  }, [autoPrint, labels.length]);
 
   return (
     <div style={{ background: "#f3f4f6", minHeight: "100vh", padding: "20px" }}>
