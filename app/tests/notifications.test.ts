@@ -16,7 +16,7 @@ import {
   upsertNotificationTemplate,
   getStoreNotificationTemplates,
 } from "../services/notifications.server";
-import { WhatsAppRegistry, MockWhatsAppAdapter, formatPhoneForMeta, seedDefaultWhatsAppTemplates, MetaWhatsAppCloudAdapter } from "../services/whatsapp.server";
+import { WhatsAppRegistry, MockWhatsAppAdapter, formatPhoneForMeta, seedDefaultWhatsAppTemplates, MetaWhatsAppCloudAdapter, getMetaUtilityTemplateName } from "../services/whatsapp.server";
 import { transitionReturnStatus } from "../services/stateMachine.server";
 
 // In-Memory Mock Database Storage
@@ -358,6 +358,53 @@ test("WhatsApp Engine — Phone Number Formatting for Meta Cloud API", () => {
 
   // 10-digit format starting with 3
   assert.equal(formatPhoneForMeta("3001234567"), "923001234567");
+});
+
+test("WhatsApp Engine — Production dispatch uses a dedicated Meta template, never arbitrary text", async () => {
+  const originalFetch = globalThis.fetch;
+  let payload: any = null;
+  const urls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    urls.push(url);
+    payload = init?.body ? JSON.parse(String(init.body)) : null;
+    return new Response(JSON.stringify({ messages: [{ id: "wamid.test-123" }] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    const adapter = new MetaWhatsAppCloudAdapter("phone-number-123", "merchant-access-token");
+    const sent = await adapter.sendWhatsAppMessage({
+      to: "03001234567",
+      message: "This free-form body should not be sent outside the WhatsApp service window.",
+      eventType: "RETURN_SUBMITTED",
+      templateVariables: { customer_name: "Ali Khan", order_number: "#1001" },
+      shopifyStoreId: "store-1",
+    });
+
+    assert.strictEqual(sent.success, true);
+    assert.strictEqual(sent.messageId, "wamid.test-123");
+    assert.strictEqual(payload.type, "template");
+    assert.strictEqual(payload.template.name, "byndcart_return_submitted");
+    assert.strictEqual(payload.template.language.code, "en_US");
+    assert.deepStrictEqual(payload.template.components[0].parameters.map((item: any) => item.text), ["Ali Khan", "#1001"]);
+    assert.ok(urls[0].endsWith("/phone-number-123/messages"));
+    assert.strictEqual(getMetaUtilityTemplateName("UNKNOWN_EVENT"), undefined);
+
+    const before = urls.length;
+    const unsupported = await adapter.sendWhatsAppMessage({
+      to: "03001234567",
+      message: "No approved template name",
+      shopifyStoreId: "store-1",
+    });
+    assert.strictEqual(unsupported.success, false);
+    assert.match(unsupported.error || "", /template/i);
+    assert.strictEqual(urls.length, before, "Unsupported events must not reach Meta as free-form production messages.");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("WhatsApp Engine — Auto-seed default templates and query WhatsApp channel", async () => {
