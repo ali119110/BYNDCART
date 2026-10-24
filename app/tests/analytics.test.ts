@@ -46,6 +46,10 @@ prisma.exchangeRequest.groupBy = (async () => [
 ]) as any;
 prisma.exchangeItem.aggregate = (async () => ({ _sum: { priceDifference: 1500 } })) as any;
 prisma.returnRequest.aggregate = (async () => ({ _sum: { refundAmount: 12500 } })) as any;
+prisma.refundRecord.groupBy = (async () => [
+  { currency: "PKR", _sum: { amount: 12000 } },
+  { currency: "USD", _sum: { amount: 20 } },
+]) as any;
 
 prisma.$queryRaw = (async (query: any) => {
   // Check if raw query is for monthly trend or top returned products
@@ -57,7 +61,7 @@ prisma.$queryRaw = (async (query: any) => {
     ];
   }
   return [
-    { line_item_id: "gid://shopify/LineItem/1", title: "Embroidered Kurti", return_count: BigInt(4) },
+    { line_item_id: "gid://shopify/LineItem/1", title: "Embroidered Kurti", return_count: BigInt(6) },
   ];
 }) as any;
 
@@ -125,9 +129,13 @@ test("Analytics Service - Get Store Financial Metrics in PKR", async () => {
   const analytics = await getAnalytics("store-1");
   assert.strictEqual(analytics.summary.totalReturns, 5);
   assert.strictEqual(analytics.summary.totalExchanges, 2);
-  assert.strictEqual(analytics.summary.totalRefunded, 12500);
+  assert.strictEqual(analytics.summary.totalRefunded, 12000, "only confirmed PKR refund records contribute to the PKR payout KPI");
+  assert.strictEqual(analytics.summary.returnRequestShare, 71.4);
+  assert.strictEqual(analytics.summary.exchangeRequestShare, 28.6);
+  assert.strictEqual(analytics.summary.confirmedRefundsByCurrency.find((row: any) => row.currency === "USD").amount, 20);
   assert.strictEqual(analytics.summary.revenueFromExchanges, 1500);
   assert.strictEqual(analytics.topReturnedProducts[0].title, "Embroidered Kurti");
+  assert.strictEqual(analytics.topReturnedProducts[0].requestedUnits, 6, "product trend should sum requested units rather than item rows");
 });
 
 test("Analytics Service - Export Financial Ledger CSV", async () => {
