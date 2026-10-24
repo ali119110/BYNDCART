@@ -1748,7 +1748,7 @@ const COURIER_SETUP: Record<string, { instructions: string; apiStatus: CourierAp
       { key: "apiPassword", label: "Merchant API password", placeholder: "Leopards API password", required: true, secret: true },
     ],
   },
-}
+};
 
 export class CourierRegistry {
   private static adapters = new Map<string, ICourierAdapter>();
