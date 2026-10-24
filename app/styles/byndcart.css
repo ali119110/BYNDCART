@@ -2711,3 +2711,69 @@ a.bc-btn svg {
     min-width: 640px;
   }
 }
+
+
+/* Analytics: compact, data-dense dashboard */
+.bc-analytics-content { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.bc-analytics-kpi-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; align-items: stretch; }
+.bc-analytics-metric { position: relative; display: flex; flex-direction: column; gap: 9px; min-width: 0; min-height: 154px; padding: 18px; border: 1px solid var(--bc-line); border-radius: var(--bc-radius-lg); background: var(--bc-surface); box-shadow: var(--bc-shadow); overflow: hidden; }
+.bc-analytics-metric::before { content: ""; position: absolute; inset: 0 0 auto; height: 3px; background: var(--bc-brand); }
+.bc-analytics-metric strong { display: block; margin: 2px 0; font-size: clamp(24px, 2vw, 31px); line-height: 1.12; letter-spacing: -0.04em; overflow-wrap: anywhere; }
+.bc-analytics-metric-foot { margin-top: auto; color: var(--bc-muted); font-size: 11px; line-height: 1.45; }
+.bc-metric-blue::before { background: #2563eb; }
+.bc-metric-violet::before { background: #7c3aed; }
+.bc-metric-green::before { background: #059669; }
+.bc-metric-amber::before { background: #d97706; }
+.bc-metric-ink::before { background: #334155; }
+.bc-analytics-workflow-grid, .bc-analytics-detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; align-items: stretch; }
+.bc-analytics-panel { min-width: 0; }
+.bc-analytics-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 18px; }
+.bc-analytics-panel-heading > div { min-width: 0; }
+.bc-analytics-panel-heading .bc-muted { max-width: 700px; font-size: 12px; }
+.bc-analytics-total { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; min-width: 38px; min-height: 34px; padding: 0 10px; border: 1px solid var(--bc-line); border-radius: 10px; background: var(--bc-surface-subtle); color: var(--bc-ink); font-size: 14px; font-weight: 750; }
+.bc-analytics-status-list, .bc-analytics-product-list { display: flex; flex-direction: column; gap: 16px; }
+.bc-analytics-status-row { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+.bc-analytics-status-copy { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; color: var(--bc-ink); font-size: 12px; line-height: 1.4; }
+.bc-analytics-status-copy > span { min-width: 0; text-transform: capitalize; overflow-wrap: anywhere; }
+.bc-analytics-status-copy > strong { flex: 0 0 auto; white-space: nowrap; font-size: 12px; }
+.bc-analytics-progress { height: 7px; overflow: hidden; background: #eef2f7; border-radius: 999px; }
+.bc-analytics-progress > span { display: block; min-width: 2px; height: 100%; border-radius: inherit; transition: width 180ms ease; }
+.bc-analytics-progress .is-return, .bc-analytics-legend .is-return, .bc-analytics-bars .is-return { background: #2563eb; }
+.bc-analytics-progress .is-exchange, .bc-analytics-legend .is-exchange, .bc-analytics-bars .is-exchange { background: #059669; }
+.bc-analytics-progress .is-reason { background: #7c3aed; }
+.bc-analytics-chart { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; align-items: end; min-height: 240px; padding: 18px 8px 0; border-bottom: 1px solid var(--bc-line); }
+.bc-analytics-month { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 8px; min-width: 0; height: 210px; }
+.bc-analytics-bars { display: flex; align-items: flex-end; justify-content: center; gap: 5px; width: 100%; height: 168px; padding: 0 8px; }
+.bc-analytics-bars > span { display: block; width: min(26px, 40%); min-height: 2px; border-radius: 5px 5px 0 0; }
+.bc-analytics-month-label { font-size: 11px; color: var(--bc-muted); font-weight: 650; }
+.bc-analytics-month-total { font-size: 10px; color: var(--bc-subtle); }
+.bc-analytics-legend { display: flex; gap: 12px; flex: 0 0 auto; flex-wrap: wrap; padding-top: 4px; }
+.bc-analytics-legend > span { display: inline-flex; align-items: center; gap: 6px; color: var(--bc-muted); font-size: 11px; white-space: nowrap; }
+.bc-analytics-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 3px; }
+.bc-analytics-product-row { padding-bottom: 14px; border-bottom: 1px solid var(--bc-line); }
+.bc-analytics-product-row:last-child { padding-bottom: 0; border-bottom: 0; }
+.bc-analytics-product-title { font-weight: 600; }
+.bc-analytics-product-meta { margin: 6px 0 8px; color: var(--bc-muted); font-size: 11px; line-height: 1.45; }
+.bc-analytics-footnote { margin: 16px 0 0; color: var(--bc-muted); font-size: 11px; line-height: 1.55; }
+.bc-analytics-footer-note { display: flex; align-items: flex-start; gap: 10px; padding: 15px 16px; border: 1px solid var(--bc-line); border-radius: var(--bc-radius); background: var(--bc-surface-subtle); color: var(--bc-muted); }
+.bc-analytics-footer-note strong { display: block; margin-bottom: 5px; color: var(--bc-ink); font-size: 12px; }
+.bc-analytics-footer-note p { margin: 3px 0 0; font-size: 11px; line-height: 1.5; }
+.bc-analytics-footer-icon { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--bc-brand-soft); color: var(--bc-brand); font-size: 12px; font-weight: 800; }
+.bc-inline-spinner { display: inline-block; width: 13px; height: 13px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; vertical-align: -2px; animation: bc-spin 700ms linear infinite; }
+@keyframes bc-spin { to { transform: rotate(360deg); } }
+@media (max-width: 1200px) { .bc-analytics-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 760px) {
+  .bc-analytics-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .bc-analytics-metric { min-height: 136px; padding: 14px; }
+  .bc-analytics-workflow-grid, .bc-analytics-detail-grid { grid-template-columns: minmax(0, 1fr); }
+  .bc-analytics-panel { padding: 16px; }
+  .bc-analytics-panel-heading { gap: 8px; }
+  .bc-analytics-legend { flex-direction: column; gap: 5px; }
+  .bc-analytics-chart { gap: 5px; min-height: 205px; padding-inline: 0; }
+  .bc-analytics-month { height: 184px; }
+  .bc-analytics-bars { height: 140px; gap: 3px; padding: 0 2px; }
+}
+@media (max-width: 420px) {
+  .bc-analytics-kpi-grid { grid-template-columns: minmax(0, 1fr); }
+  .bc-analytics-metric { min-height: 114px; }
+}
