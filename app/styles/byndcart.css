@@ -233,9 +233,10 @@ textarea {
 
 /* Page shell and header */
 .bc-page {
-  width: min(100%, 1080px);
+  width: min(100%, 1600px);
+  max-width: 1600px;
   margin: 0 auto;
-  padding: 26px 24px 44px;
+  padding: 26px clamp(16px, 2vw, 32px) 44px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -2093,7 +2094,8 @@ a.bc-btn svg {
 /* Courier configuration and manual airway-bill workflows */
 .bc-couriers-page,
 .bc-shipments-page {
-  max-width: 1180px;
+  width: min(100%, 1600px);
+  max-width: 1600px;
 }
 
 .bc-courier-capability-note {
@@ -2652,4 +2654,25 @@ a.bc-btn svg {
   .bc-courier-snapshot-table {
     min-width: 640px;
   }
+}
+
+
+/* Consistent wide application canvas for operational dashboards and request queues. */
+.bc-page,
+.bc-page.bc-shipments-page,
+.bc-page.bc-couriers-page {
+  box-sizing: border-box;
+}
+.bc-page > .bc-card,
+.bc-page > .bc-table-wrap,
+.bc-page > .bc-toolbar,
+.bc-page > section {
+  min-width: 0;
+  width: 100%;
+}
+.bc-shipments-table-wrap {
+  overflow-x: auto;
+}
+.bc-shipments-table-wrap .bc-table {
+  min-width: 980px;
 }
