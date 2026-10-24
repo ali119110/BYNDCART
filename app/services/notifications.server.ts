@@ -11,7 +11,8 @@ export interface SendEmailInput {
 }
 
 const RESEND_API_URL = "https://api.resend.com/emails";
-const FROM_ADDRESS = process.env.NOTIFICATIONS_FROM_EMAIL || "BYNDCART <notifications@byndcart.app>";
+const FROM_ADDRESS = process.env.NOTIFICATIONS_FROM_EMAIL
+  || (process.env.NODE_ENV === "test" ? "BYNDCART <notifications@byndcart.app>" : "");
 
 /**
  * Low-level email dispatch via Resend. Never throws.
@@ -22,6 +23,10 @@ export async function sendEmail(input: SendEmailInput) {
   if (!apiKey) {
     console.warn("[Notifications] RESEND_API_KEY not set — skipping email send.");
     return { success: false, error: "RESEND_API_KEY not configured" };
+  }
+  if (!FROM_ADDRESS) {
+    console.warn("[Notifications] NOTIFICATIONS_FROM_EMAIL not set — skipping email send.");
+    return { success: false, error: "NOTIFICATIONS_FROM_EMAIL is not configured. Set it to an email address on a domain verified with Resend." };
   }
 
   try {
