@@ -54,6 +54,7 @@ export interface SingleBookingInput {
   serviceType?: string;
   customerName: string;
   customerPhone: string;
+  customerEmail?: string;
   customerAddress: string;
   cityName: string;
   codAmountPKR: number;
@@ -899,11 +900,23 @@ export async function bookCourierShipment(
     const effectiveShipperProfileIndex = shipperProfileIndex ?? sharedCourierSettings?.defaultShipperProfileIndex ?? 0;
     const selectedShipperProfile = sharedCourierSettings?.shipperProfiles[effectiveShipperProfileIndex]
       || sharedCourierSettings?.shipperProfiles[0]
-      || { name: "", phone: "", city: "", address: "" };
-    const courierWarehouseAddress =
-      (credentials.credentials as any)?.warehouseAddress || (credentials as any).warehouseAddress || "";
-    const courierWarehouseCity =
-      (credentials.credentials as any)?.warehouseCity || (credentials as any).warehouseCity || "";
+      || { name: "", phone: "", email: "", city: "", address: "" };
+    const shipperAddress = {
+      address1: selectedShipperProfile.address || "",
+      city: selectedShipperProfile.city || "",
+      name: selectedShipperProfile.name || "",
+      phone: selectedShipperProfile.phone || "",
+      email: selectedShipperProfile.email || "",
+      countryCode: "PK",
+    };
+    const customerAddress = {
+      address1: input.customerAddress,
+      city: input.cityName,
+      name: input.customerName,
+      phone: input.customerPhone,
+      email: input.customerEmail || "",
+      countryCode: "PK",
+    };
 
     const bookingPayload = {
       shopifyStoreId,
@@ -911,27 +924,12 @@ export async function bookCourierShipment(
       orderNumber: input.orderNumber,
       customerName: input.customerName,
       customerPhone: input.customerPhone,
+      customerEmail: input.customerEmail || "",
       cityName: input.cityName,
       shipmentType: shipmentType as "RETURN" | "FORWARD" | "EXCHANGE",
       courierServiceType: serviceType,
-      destinationAddress: shipmentType === "RETURN"
-        ? {
-            address1: courierWarehouseAddress || selectedShipperProfile.address || "",
-            city: courierWarehouseCity || selectedShipperProfile.city || "Karachi",
-          }
-        : {
-            address1: input.customerAddress,
-            city: input.cityName,
-          },
-      originAddress: shipmentType === "RETURN"
-        ? {
-            address1: input.customerAddress,
-            city: input.cityName,
-          }
-        : {
-            address1: courierWarehouseAddress || selectedShipperProfile.address || "",
-            city: courierWarehouseCity || selectedShipperProfile.city || "Karachi",
-          },
+      destinationAddress: shipmentType === "RETURN" ? shipperAddress : customerAddress,
+      originAddress: shipmentType === "RETURN" ? customerAddress : shipperAddress,
       weightKg: Number(input.weightKg) || 0.5,
       codAmountPKR: shipmentType === "RETURN" ? 0 : Number(input.codAmountPKR) || 0,
       remarks: input.remarks,
