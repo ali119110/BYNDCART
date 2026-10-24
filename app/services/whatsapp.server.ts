@@ -2,6 +2,8 @@ import prisma from "../db.server";
 import { encryptCredential, decryptCredential, maskCredential } from "../utils/encryption.server";
 import { normalizePakistaniMobile } from "./pakistanLogistics";
 
+const META_GRAPH_API_VERSION = process.env.META_GRAPH_API_VERSION || "v25.0";
+
 export interface SendWhatsAppInput {
   to: string;
   message: string;
@@ -72,7 +74,7 @@ export class MetaWhatsAppCloudAdapter implements IWhatsAppAdapter {
       };
     }
 
-    const url = `https://graph.facebook.com/v21.0/${phoneId}/messages`;
+    const url = `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${phoneId}/messages`;
 
     let payload: any;
 
@@ -393,7 +395,9 @@ export async function exchangeMetaEmbeddedSignupCode(
   shopifyStoreId: string,
   code: string,
   metaAppId?: string,
-  metaAppSecret?: string
+  metaAppSecret?: string,
+  signupWabaId?: string,
+  signupPhoneNumberId?: string,
 ) {
   const appId = metaAppId || process.env.META_APP_ID || process.env.WHATSAPP_APP_ID;
   const appSecret = metaAppSecret || process.env.META_APP_SECRET || process.env.WHATSAPP_APP_SECRET;
@@ -403,7 +407,8 @@ export async function exchangeMetaEmbeddedSignupCode(
   }
 
   // 1. Exchange code for access token
-  const tokenUrl = `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&code=${encodeURIComponent(code)}`;
+  const tokenParams = new URLSearchParams({ client_id: appId, client_secret: appSecret, code });
+  const tokenUrl = `https://graph.facebook.com/${META_GRAPH_API_VERSION}/oauth/access_token?${tokenParams.toString()}`;
   const tokenRes = await fetch(tokenUrl);
   const tokenData = await tokenRes.json();
 
@@ -414,13 +419,23 @@ export async function exchangeMetaEmbeddedSignupCode(
   const userAccessToken = tokenData.access_token;
 
   // 2. Discover merchant's shared WhatsApp Business Accounts
-  const debugUrl = `https://graph.facebook.com/v21.0/debug_token?input_token=${userAccessToken}&access_token=${appId}|${appSecret}`;
+  const debugParams = new URLSearchParams({ input_token: userAccessToken, access_token: `${appId}|${appSecret}` });
+  const debugUrl = `https://graph.facebook.com/${META_GRAPH_API_VERSION}/debug_token?${debugParams.toString()}`;
   const debugRes = await fetch(debugUrl);
   const debugData = await debugRes.json();
 
+  if (debugData?.data?.is_valid !== true) {
+    throw new Error("Meta returned an invalid or expired Embedded Signup token. Reconnect WhatsApp and approve the requested permissions.");
+  }
+
   const granularScopes = debugData?.data?.granular_scopes || [];
-  const wabaScope = granularScopes.find((s: any) => s.scope === "whatsapp_business_management");
-  const targetWabaId = wabaScope?.target_ids?.[0];
+  const wabaScope = granularScopes.find((scope: any) => scope.scope === "whatsapp_business_management");
+  const grantedWabaIds = Array.isArray(wabaScope?.target_ids) ? wabaScope.target_ids.map((id: any) => String(id)) : [];
+  const selectedWabaId = String(signupWabaId || "").trim();
+  if (selectedWabaId && grantedWabaIds.length && !grantedWabaIds.includes(selectedWabaId)) {
+    throw new Error("The WABA selected during Embedded Signup is not covered by this token's WhatsApp Business Management permission.");
+  }
+  const targetWabaId = selectedWabaId || grantedWabaIds[0] || "";
 
   let phoneNumberId = "";
   let displayPhoneNumber = "";
@@ -428,18 +443,32 @@ export async function exchangeMetaEmbeddedSignupCode(
   let qualityRating = "GREEN";
 
   if (targetWabaId) {
-    // 3. Query phone numbers under this WABA
-    const phoneUrl = `https://graph.facebook.com/v21.0/${targetWabaId}/phone_numbers?access_token=${userAccessToken}`;
+    // Verify that the selected phone belongs to the selected WABA and this token can access it.
+    const phoneParams = new URLSearchParams({ fields: "id,display_phone_number,verified_name,quality_rating" });
+    const phoneUrl = `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${encodeURIComponent(targetWabaId)}/phone_numbers?${phoneParams.toString()}&access_token=${encodeURIComponent(userAccessToken)}`;
     const phoneRes = await fetch(phoneUrl);
     const phoneData = await phoneRes.json();
-
-    if (phoneData?.data?.length > 0) {
-      const primaryPhone = phoneData.data[0];
-      phoneNumberId = primaryPhone.id;
-      displayPhoneNumber = primaryPhone.display_phone_number || "";
-      verifiedName = primaryPhone.verified_name || "";
-      qualityRating = primaryPhone.quality_rating || "GREEN";
+    if (!phoneRes.ok || phoneData?.error) {
+      throw new Error(phoneData?.error?.message || "Meta could not list phone numbers for the selected WhatsApp Business Account.");
     }
+    const availablePhones = Array.isArray(phoneData?.data) ? phoneData.data : [];
+    const requestedPhoneId = String(signupPhoneNumberId || "").trim();
+    const primaryPhone = requestedPhoneId
+      ? availablePhones.find((phone: any) => String(phone?.id) === requestedPhoneId)
+      : availablePhones[0];
+    if (requestedPhoneId && !primaryPhone) {
+      throw new Error("The phone number selected during Embedded Signup does not belong to the selected WABA or is not accessible to this token.");
+    }
+    if (primaryPhone) {
+      phoneNumberId = String(primaryPhone.id || "");
+      displayPhoneNumber = String(primaryPhone.display_phone_number || "");
+      verifiedName = String(primaryPhone.verified_name || "");
+      qualityRating = String(primaryPhone.quality_rating || "GREEN");
+    }
+  }
+
+  if (!targetWabaId || !phoneNumberId) {
+    throw new Error("Meta authorization succeeded, but no accessible WhatsApp Business Account phone number was returned. Re-run Embedded Signup and finish connecting a phone number.");
   }
 
   // 4. Save credentials and seed default templates
