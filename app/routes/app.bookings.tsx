@@ -131,6 +131,10 @@ export async function action({ request }: ActionFunctionArgs) {
       const cityName = String(form.get("cityName") || "");
       const codAmountPKR = Number(form.get("codAmountPKR") || 0);
       const weightKg = Number(form.get("weightKg") || 0.5);
+      const rawShipperProfileIndex = Number(form.get("shipperProfileIndex"));
+      const shipperProfileIndex = Number.isInteger(rawShipperProfileIndex) && rawShipperProfileIndex >= 0 && rawShipperProfileIndex < 3
+        ? rawShipperProfileIndex
+        : undefined;
       const remarks = String(form.get("remarks") || "");
       const serviceType = String(form.get("serviceType") || "Normal");
       let items: Array<{ title: string; quantity: number; price?: number; sku?: string }> = [];
@@ -153,6 +157,7 @@ export async function action({ request }: ActionFunctionArgs) {
         cityName,
         codAmountPKR,
         weightKg,
+        shipperProfileIndex,
         remarks,
         items,
       });
@@ -464,6 +469,7 @@ export default function BookingsPage() {
         cityName,
         codAmountPKR: edit.cod !== undefined ? edit.cod : order.suggestedCod,
         weightKg: edit.weight !== undefined ? edit.weight : order.suggestedWeight,
+        shipperProfileIndex: selectedShipperProfileIndex,
         remarks: edit.remarks || "Allow customer to check flyer before payment",
         items: order.items.map((item) => ({
           title: item.title,
@@ -473,7 +479,7 @@ export default function BookingsPage() {
         })),
       }];
     });
-  }, [selectedOrderIds, unfulfilledOrders, orderEdits, selectedCourierKey, activeCourierOptions, availableServiceTypes]);
+  }, [selectedOrderIds, unfulfilledOrders, orderEdits, selectedCourierKey, activeCourierOptions, availableServiceTypes, selectedShipperProfileIndex]);
 
   const selectedBookingIssues = bulkBookingPayload.filter((booking) => {
     return !booking.orderId
@@ -506,6 +512,7 @@ export default function BookingsPage() {
       cityName: String(booking.cityName || ""),
       codAmountPKR: String(booking.codAmountPKR),
       weightKg: String(booking.weightKg),
+      shipperProfileIndex: String(booking.shipperProfileIndex ?? 0),
       remarks: String(booking.remarks || ""),
       items: JSON.stringify(booking.items || []),
     }, { method: "post" });
