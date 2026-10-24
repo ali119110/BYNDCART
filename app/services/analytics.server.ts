@@ -35,6 +35,7 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
     returnsByReason,
     exchangePriceAgg,
     confirmedRefundsByCurrencyRaw,
+    unitReturnMetricsRaw,
     monthlyTrendRaw,
     topReturnedProductsRaw,
   ] = await Promise.all([
@@ -68,6 +69,46 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
       where: { shopifyStoreId, status: "CONFIRMED", ...confirmedRefundDateFilter },
       _sum: { amount: true },
     }),
+    // Match warehouse-confirmed returned units to the same order cohort as sold units.
+    // Return requests can be created after the order period, so the numerator is
+    // based on the order's date cohort, not the return request's createdAt.
+    db.$queryRaw<{ sold_units: number; received_return_units: number }[]> `
+      WITH cohort_orders AS (
+        SELECT o."shopifyOrderId", o."lineItems"
+        FROM "Order" o
+        WHERE o."shopifyStoreId" = ${shopifyStoreId}
+          AND (${filters.startDate ? filters.startDate : new Date(0)} <= o."shopifyCreatedAt")
+          AND (${filters.endDate ? filters.endDate : new Date("2100-01-01")} >= o."shopifyCreatedAt")
+      ),
+      sold_units AS (
+        SELECT COALESCE(SUM(GREATEST(
+          CASE
+            WHEN (li->>'quantity') ~ '^[0-9]+$' THEN (li->>'quantity')::int
+            ELSE 0
+          END,
+          0
+        )), 0)::int AS sold_units
+        FROM cohort_orders co
+        CROSS JOIN LATERAL jsonb_array_elements(
+          CASE
+            WHEN jsonb_typeof(co."lineItems") = 'array' THEN co."lineItems"
+            ELSE '[]'::jsonb
+          END
+        ) AS li
+      ),
+      received_return_units AS (
+        SELECT COALESCE(SUM(GREATEST(ri.quantity, 0)), 0)::int AS received_return_units
+        FROM "ReturnItem" ri
+        JOIN "ReturnRequest" rr
+          ON rr.id = ri."returnRequestId"
+          AND rr."shopifyStoreId" = ${shopifyStoreId}
+          AND rr.status NOT IN ('CANCELLED', 'REJECTED')
+        JOIN cohort_orders co ON co."shopifyOrderId" = rr."shopifyOrderId"
+        WHERE ri.status IN ('RECEIVED', 'INSPECTED')
+      )
+      SELECT sold_units.sold_units, received_return_units.received_return_units
+      FROM sold_units CROSS JOIN received_return_units;
+    `,
     // Monthly trend: last 6 months, returns vs exchanges, via raw SQL
     // (Prisma groupBy can't truncate dates to month natively)
     db.$queryRaw<{ month: string; returns_count: bigint; exchanges_count: bigint }[]>`
@@ -123,8 +164,10 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
   ]);
 
   const totalRequests = totalReturns + totalExchanges;
-  // These are request-mix shares, not Shopify unit return rates. A true unit
-  // return rate needs a matched sales cohort and verified returned quantities.
+  const soldUnits = Number(unitReturnMetricsRaw[0]?.sold_units ?? 0);
+  const receivedReturnUnits = Number(unitReturnMetricsRaw[0]?.received_return_units ?? 0);
+  // This is a warehouse-confirmed unit rate for the selected order cohort. A
+  // complete Order sync and accurate ReturnItem statuses are required.
   const returnRequestShare = totalRequests === 0 ? 0 : (totalReturns / totalRequests) * 100;
   const exchangeRequestShare = totalRequests === 0 ? 0 : (totalExchanges / totalRequests) * 100;
 
@@ -147,6 +190,9 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
       totalRequests,
       returnRequestShare: Number(returnRequestShare.toFixed(1)),
       exchangeRequestShare: Number(exchangeRequestShare.toFixed(1)),
+      soldUnits,
+      receivedReturnUnits,
+      unitReturnRate: soldUnits > 0 ? Number(((receivedReturnUnits / soldUnits) * 100).toFixed(1)) : null,
       totalRefunded,
       confirmedRefundsByCurrency,
       revenueFromExchanges,
