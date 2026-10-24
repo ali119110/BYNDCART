@@ -35,6 +35,8 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
     returnsByReason,
     exchangePriceAgg,
     confirmedRefundsByCurrencyRaw,
+    pendingRefundsByCurrencyRaw,
+    shipmentStatusRaw,
     unitReturnMetricsRaw,
     monthlyTrendRaw,
     topReturnedProductsRaw,
@@ -68,6 +70,17 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
       by: ["currency"],
       where: { shopifyStoreId, status: "CONFIRMED", ...confirmedRefundDateFilter },
       _sum: { amount: true },
+    }),
+    db.refundRecord.groupBy({
+      by: ["currency"],
+      where: { shopifyStoreId, status: "PENDING", ...dateFilter },
+      _sum: { amount: true },
+      _count: { _all: true },
+    }),
+    db.shipmentTrack.groupBy({
+      by: ["courier", "status"],
+      where: { shopifyStoreId, ...dateFilter },
+      _count: { _all: true },
     }),
     // Match warehouse-confirmed returned units to the same order cohort as sold units.
     // Return requests can be created after the order period, so the numerator is
@@ -235,6 +248,30 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
     amount: Number(row._sum.amount ?? 0),
   }));
   const totalRefunded = confirmedRefundsByCurrency.find((row) => row.currency === "PKR")?.amount ?? 0;
+  const pendingRefundsByCurrency = pendingRefundsByCurrencyRaw.map((row) => ({
+    currency: row.currency || "UNKNOWN",
+    amount: Number(row._sum.amount ?? 0),
+    count: row._count._all,
+  }));
+  const countStatuses = (rows: Array<{ status: string; _count: { _all: number } }>, statuses: string[]) =>
+    rows.filter((row) => statuses.includes(String(row.status).toUpperCase())).reduce((sum, row) => sum + row._count._all, 0);
+  const openReturnRequests = countStatuses(returnsByStatus as any, ["PENDING", "APPROVED", "RECEIVED", "INSPECTED", "REFUND_PENDING"]);
+  const completedReturnRequests = countStatuses(returnsByStatus as any, ["COMPLETED"]);
+  const rejectedOrCancelledReturns = countStatuses(returnsByStatus as any, ["REJECTED", "CANCELLED"]);
+  const openExchangeRequests = countStatuses(exchangesByStatus as any, ["PENDING", "APPROVED", "RECEIVED", "INSPECTED", "FULFILLED"]);
+  const completedExchangeRequests = countStatuses(exchangesByStatus as any, ["COMPLETED"]);
+  const rejectedOrCancelledExchanges = countStatuses(exchangesByStatus as any, ["REJECTED", "CANCELLED"]);
+  const shipmentStatuses = shipmentStatusRaw.map((row) => ({
+    courier: row.courier,
+    status: row.status,
+    count: row._count._all,
+  }));
+  const activeShipments = shipmentStatuses
+    .filter((row) => !["DELIVERED", "FAILED", "CANCELLED"].includes(String(row.status).toUpperCase()))
+    .reduce((sum, row) => sum + row.count, 0);
+  const deliveryExceptions = shipmentStatuses
+    .filter((row) => ["FAILED", "CANCELLED"].includes(String(row.status).toUpperCase()))
+    .reduce((sum, row) => sum + row.count, 0);
   const revenueFromExchanges = Number(exchangePriceAgg._sum.priceDifference ?? 0);
   // "Revenue retained" = money kept via exchanges instead of paid out as refunds
   const revenueRetained = revenueFromExchanges >= 0 ? revenueFromExchanges : 0;
@@ -251,6 +288,15 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
       unitReturnRate: orderedUnits > 0 ? Number(((receivedReturnUnits / orderedUnits) * 100).toFixed(1)) : null,
       totalRefunded,
       confirmedRefundsByCurrency,
+      pendingRefundsByCurrency,
+      openReturnRequests,
+      completedReturnRequests,
+      rejectedOrCancelledReturns,
+      openExchangeRequests,
+      completedExchangeRequests,
+      rejectedOrCancelledExchanges,
+      activeShipments,
+      deliveryExceptions,
       revenueFromExchanges,
       revenueRetained,
     },
@@ -262,6 +308,7 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
       status: e.status,
       count: e._count._all,
     })),
+    shipmentsByStatus: shipmentStatuses,
     returnReasons: returnsByReason.map((r) => ({
       reason: r.reason ?? "Unspecified",
       count: r._count._all,
