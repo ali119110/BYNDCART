@@ -24,12 +24,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     pageSize: 10,
   });
 
-  const shipments = storedShipments.map((shipment: any) => ({
-    ...shipment,
-    supportsCancellation: CourierRegistry.has(shipment.courier)
-      ? CourierRegistry.get(shipment.courier).supportsCancellation !== false
-      : false,
-  }));
+  const exchangeIds = Array.from(new Set(storedShipments.map((shipment: any) => shipment.exchangeRequestId).filter(Boolean)));
+  const exchanges = exchangeIds.length
+    ? await prisma.exchangeRequest.findMany({
+        where: { shopifyStoreId, id: { in: exchangeIds as string[] } },
+        select: { id: true, orderNumber: true, newOrderNumber: true },
+      })
+    : [];
+  const exchangeMap = new Map(exchanges.map((exchange: any) => [exchange.id, exchange]));
+  const shipments = storedShipments.map((shipment: any) => {
+    const exchange = shipment.exchangeRequestId ? exchangeMap.get(shipment.exchangeRequestId) : null;
+    const isInboundExchange = shipment.type === "EXCHANGE"
+      && Boolean(exchange)
+      && shipment.orderNumber === (exchange as any).orderNumber;
+    const flowLabel = shipment.type === "RETURN"
+      ? "Inbound return"
+      : shipment.type === "EXCHANGE"
+        ? (isInboundExchange ? "Inbound exchange" : "Outbound replacement")
+        : "Outbound delivery";
+    return {
+      ...shipment,
+      flowLabel,
+      supportsCancellation: CourierRegistry.has(shipment.courier)
+        ? CourierRegistry.get(shipment.courier).supportsCancellation !== false
+        : false,
+    };
+  });
 
   const pagination = (storedShipments as any).pagination || {
     page,
@@ -298,7 +318,7 @@ export default function Shipments() {
                 <tr>
                   <th>Shipment</th>
                   <th>Order</th>
-                  <th>Type</th>
+                  <th>Flow / direction</th>
                   <th>Courier</th>
                   <th>Tracking</th>
                   <th>Status</th>
@@ -311,7 +331,7 @@ export default function Shipments() {
                   <tr key={shipment.id}>
                     <td><code>{shipment.id.slice(0, 8)}</code></td>
                     <td>{shipment.orderNumber}</td>
-                    <td><span className="bc-badge">{shipment.type}</span></td>
+                    <td><span className="bc-badge">{shipment.flowLabel}</span></td>
                     <td>{shipment.courier}</td>
                     <td><code>{shipment.trackingNumber}</code></td>
                     <td>
@@ -321,7 +341,6 @@ export default function Shipments() {
                     </td>
                     <td>
                       <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                        <a className="bc-text-link" href={`/app/awb?ids=${shipment.id}`} target="_blank" rel="noopener noreferrer">Print AWB</a>
                         {shipment.labelUrl ? (
                           <a className="bc-text-link" href={shipment.labelUrl} target="_blank" rel="noopener noreferrer">Carrier label</a>
                         ) : shipment.courier === "POSTEX" ? (
