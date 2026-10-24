@@ -188,6 +188,15 @@ export async function action({ request }: Route.ActionArgs) {
       ...(freshPolicies ? { policies: freshPolicies } : {}),
     });
 
+    if (courierOperationsSettings.autoCourierTracking) {
+      try {
+        const { ensureCourierTrackingScheduled } = await import("../worker.server");
+        await ensureCourierTrackingScheduled(shopifyStoreId);
+      } catch (scheduleError) {
+        console.warn("[Settings] Saved tracking preference, but could not queue the first tracking refresh:", scheduleError);
+      }
+    }
+
     const updatedPolicyRule = await saveReturnPolicyRule(shopifyStoreId, {
       returnWindowDays,
       exchangeWindowDays,
