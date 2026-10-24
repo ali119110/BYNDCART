@@ -1,5 +1,6 @@
 import prisma from "../db.server";
 import { syncShipmentTrackingStatus } from "./shipments.server";
+import { getCourierOperationsSettings } from "./settings.server";
 
 export interface TrackLookupQuery {
   tracking?: string;
@@ -47,9 +48,16 @@ export async function lookupShipmentTracking(shopifyStoreId: string, query: Trac
   }
 
   if (shipment && shipment.trackingNumber) {
-    // Optionally refresh tracking if last updated more than 15 mins ago
+    // This merchant-level preference applies to all configured courier providers.
+    let autoCourierTracking = true;
+    try {
+      autoCourierTracking = (await getCourierOperationsSettings(shopifyStoreId)).autoCourierTracking;
+    } catch (error) {
+      console.warn("[TrackPage] Could not read courier tracking preference; preserving existing refresh behavior.", error);
+    }
+    // Refresh live tracking only when enabled and the saved status is stale.
     const ageMinutes = (Date.now() - new Date(shipment.updatedAt).getTime()) / (1000 * 60);
-    if (ageMinutes > 15 && shipment.status !== "DELIVERED" && shipment.status !== "CANCELLED") {
+    if (autoCourierTracking && ageMinutes > 15 && shipment.status !== "DELIVERED" && shipment.status !== "CANCELLED") {
       try {
         await syncShipmentTrackingStatus(shipment.trackingNumber, shopifyStoreId);
         // Reload after sync
