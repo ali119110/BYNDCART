@@ -736,6 +736,8 @@ export async function getStoreShipments(shopifyStoreId: string, options: GetShip
     status: s.status,
     location: s.location,
     labelUrl: s.labelUrl,
+    returnRequestId: s.returnRequestId || null,
+    exchangeRequestId: s.exchangeRequestId || null,
     date: s.createdAt.toISOString().split("T")[0],
     eventsCount: s.events?.length || 0,
   }));
