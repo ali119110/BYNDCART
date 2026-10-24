@@ -17,7 +17,7 @@ const REFUND_METHODS = ["SHOPIFY", "STORE_CREDIT", "BANK_TRANSFER", "EASYPAISA",
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { shopifyStoreId } = await requireTenantContext(request);
-  const [refunds, evidence, returnRequests] = await Promise.all([
+  const [refunds, evidence, baseReturnRequests] = await Promise.all([
     listRefundRecords(shopifyStoreId),
     listEvidence(shopifyStoreId),
     prisma.returnRequest.findMany({
@@ -27,6 +27,33 @@ export async function loader({ request }: LoaderFunctionArgs) {
       take: 100,
     }),
   ]);
+
+  const requestOrderIds = Array.from(new Set(baseReturnRequests.map((request) => request.shopifyOrderId)));
+  const orderSnapshots = requestOrderIds.length
+    ? await prisma.order.findMany({
+        where: { shopifyStoreId, shopifyOrderId: { in: requestOrderIds } },
+        select: { shopifyOrderId: true, lineItems: true },
+      })
+    : [];
+  const orderLinesById = new Map<string, any[]>(
+    orderSnapshots.map((order) => [
+      order.shopifyOrderId,
+      Array.isArray(order.lineItems) ? order.lineItems as any[] : [],
+    ]),
+  );
+  const returnRequests = baseReturnRequests.map((request) => {
+    const orderLines = orderLinesById.get(request.shopifyOrderId) || [];
+    return {
+      ...request,
+      items: request.items.map((item) => {
+        const line = orderLines.find((candidate) =>
+          String(candidate.lineItemId || candidate.id || "") === String(item.shopifyLineItemId)
+        );
+        return { ...item, productTitle: line?.title || line?.name || "", sku: line?.sku || "" };
+      }),
+    };
+  });
+
   return { refunds, evidence, returnRequests };
 }
 
@@ -228,7 +255,7 @@ export default function RefundsPage() {
                     <td><strong>{request.orderNumber}</strong><div className="bc-hint">{new Date(request.createdAt).toLocaleDateString("en-PK")}</div></td>
                     <td>{request.customerName || "Customer"}<div className="bc-hint">{request.customerEmail}</div></td>
                     <td>{request.reason || "Reason not specified"}<div className="bc-hint">{request.customerNote || "No additional customer note"}</div></td>
-                    <td>{(request.items || []).map((item: any) => <div key={item.id} className="bc-hint">{item.quantity} × {item.reason}{item.reasonNote ? `: ${item.reasonNote}` : ""}</div>)}</td>
+                    <td>{(request.items || []).map((item: any) => <div key={item.id} className="bc-hint">{item.quantity} × {item.productTitle || item.shopifyLineItemId}{item.sku ? ` · SKU ${item.sku}` : ""}<br />{item.reason.replaceAll("_", " ")}{item.reasonNote ? `: ${item.reasonNote}` : ""}</div>)}</td>
                     <td><span className={badgeClass(request.status)}>{request.status}</span>{existingRefund && <div className="bc-hint">Refund: {existingRefund.currency} {String(existingRefund.amount)} · {existingRefund.status}</div>}</td>
                     <td>
                       <details className="bc-refund-review">
