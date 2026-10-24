@@ -1,9 +1,8 @@
 import React from "react";
-import { useLoaderData, useSearchParams, Link } from "react-router";
+import { useLoaderData, useSearchParams, Link, useRevalidator } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { requireTenantContext } from "../utils/tenant.server";
 import prisma from "../db.server";
-import { executeInitialShopifySync } from "../services/shopifySync.server";
 
 function isValidTimeZone(value: string): boolean {
   try {
@@ -85,7 +84,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
         startDate = candidateStart;
         endExclusiveDate = candidateEnd;
       } else {
-        // Never silently use an invalid custom range. Disclose the 30-day fallback.
         startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
         endExclusiveDate = now;
         dateRangeError = "Choose a valid start and end date. The dashboard is temporarily showing the last 30 days.";
@@ -94,68 +92,107 @@ export async function loader({ request }: LoaderFunctionArgs) {
       const days = Number(range.slice(0, -1));
       startDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
       endExclusiveDate = now;
-    } // "all" intentionally leaves both bounds undefined.
+    }
 
-    const dateFilter = startDate || endExclusiveDate
+    const requestDateFilter = startDate || endExclusiveDate
       ? { createdAt: { ...(startDate ? { gte: startDate } : {}), ...(endExclusiveDate ? { lt: endExclusiveDate } : {}) } }
       : {};
+    const receivedDateFilter = startDate || endExclusiveDate
+      ? { receivedAt: { ...(startDate ? { gte: startDate } : {}), ...(endExclusiveDate ? { lt: endExclusiveDate } : {}) } }
+      : {};
+    const staleBefore = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+    const unsettledCodStatuses = ["EXPECTED", "IMPORTED", "DISPUTED"];
 
-    let store = await prisma.shopifyStore.findUnique({
+    const store = await prisma.shopifyStore.findUnique({
       where: { id: shopifyStoreId },
       select: {
         shop: true,
         syncStatus: true,
         lastSyncAt: true,
+        lastSyncError: true,
+        webhookStatus: true,
+        lastReconciledAt: true,
       },
     });
 
-    // Auto-trigger sync if syncStatus is PENDING or lastSyncAt is missing
-    if (store && (store.syncStatus === "PENDING" || !store.lastSyncAt) && admin) {
-      try {
-        await executeInitialShopifySync({ shopifyStoreId, admin });
-        store = await prisma.shopifyStore.findUnique({
-          where: { id: shopifyStoreId },
-          select: {
-            shop: true,
-            syncStatus: true,
-            lastSyncAt: true,
-          },
-        });
-      } catch (syncErr) {
-        console.error("[Dashboard Loader] Auto-sync attempt failed:", syncErr);
-      }
-    }
+    // Resolve a friendly Shopify shop name without blocking database queries.
+    // If Shopify is temporarily unavailable, safely fall back to the tenant's store domain.
+    const identityPromise: Promise<{ name: string; domain: string }> = admin
+      ? admin.graphql("query DashboardShopIdentity { shop { name primaryDomain { url } } }")
+          .then(async (response: any) => {
+            const payload = await response.json();
+            const shop = payload?.data?.shop;
+            return {
+              name: typeof shop?.name === "string" && shop.name.trim() ? shop.name.trim() : (store?.shop ?? "Connected Store"),
+              domain: typeof shop?.primaryDomain?.url === "string" && shop.primaryDomain.url.trim() ? shop.primaryDomain.url.trim() : (store?.shop ?? ""),
+            };
+          })
+          .catch(() => ({ name: store?.shop ?? "Connected Store", domain: store?.shop ?? "" }))
+      : Promise.resolve({ name: store?.shop ?? "Connected Store", domain: store?.shop ?? "" });
 
-    let historicalOrdersAccess = { checked: false, hasReadAllOrders: false };
-    if (admin) {
-      try {
-        const scopeResponse = await admin.graphql(`
-          query DashboardAccessScopes {
-            currentAppInstallation { accessScopes { handle } }
-          }
-        `);
-        const scopePayload = await scopeResponse.json();
-        if (scopePayload?.errors?.length) {
-          throw new Error(scopePayload.errors.map((entry: any) => entry.message).join("; "));
-        }
-        const scopes = scopePayload?.data?.currentAppInstallation?.accessScopes;
-        if (Array.isArray(scopes)) {
-          historicalOrdersAccess = {
-            checked: true,
-            hasReadAllOrders: scopes.some((scope: any) => scope.handle === "read_all_orders"),
-          };
-        }
-      } catch (scopeError) {
-        console.warn("[Dashboard Loader] Could not determine historical-order access:", scopeError);
-      }
-    }
+    const queryPromise = Promise.all([
+      prisma.returnRequest.count({ where: { shopifyStoreId, ...requestDateFilter } }),
+      prisma.exchangeRequest.count({ where: { shopifyStoreId, ...requestDateFilter } }),
+      prisma.exchangeRequest.count({
+        where: { shopifyStoreId, status: { in: ["APPROVED", "RECEIVED"] }, ...requestDateFilter },
+      }),
+      prisma.exchangeRequest.count({
+        where: { shopifyStoreId, newOrderId: { not: null }, ...requestDateFilter },
+      }),
+      prisma.warehouseIntake.count({
+        where: {
+          shopifyStoreId,
+          returnRequestId: { not: null },
+          status: { in: ["RECEIVED", "INSPECTED"] },
+          ...receivedDateFilter,
+        },
+      }),
+      prisma.returnRequest.findMany({
+        where: { shopifyStoreId, ...requestDateFilter },
+        take: 5,
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.exchangeRequest.findMany({
+        where: { shopifyStoreId, ...requestDateFilter },
+        take: 5,
+        orderBy: { createdAt: "desc" },
+        include: { items: true },
+      }),
+      // Live queues deliberately ignore the historical date filter.
+      prisma.returnRequest.count({ where: { shopifyStoreId, status: "PENDING" } }),
+      prisma.exchangeRequest.count({ where: { shopifyStoreId, status: "PENDING" } }),
+      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: { in: ["IN_TRANSIT", "OUT_FOR_DELIVERY"] } } }),
+      prisma.warehouseIntake.count({ where: { shopifyStoreId, status: "RECEIVED" } }),
+      prisma.refundRecord.count({ where: { shopifyStoreId, status: "PENDING" } }),
+      prisma.refundRecord.aggregate({
+        where: { shopifyStoreId, status: "PENDING", currency: "PKR" },
+        _sum: { amount: true },
+      }),
+      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "FAILED" } }),
+      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "LABEL_CREATED" } }),
+      prisma.shipmentTrack.count({
+        where: {
+          shopifyStoreId,
+          status: { in: ["IN_TRANSIT", "OUT_FOR_DELIVERY"] },
+          updatedAt: { lt: staleBefore },
+        },
+      }),
+      prisma.codSettlement.count({ where: { shopifyStoreId, status: { in: unsettledCodStatuses } } }),
+      prisma.codSettlement.aggregate({
+        where: { shopifyStoreId, status: { in: unsettledCodStatuses } },
+        _sum: { expectedAmount: true },
+      }),
+      prisma.codSettlement.count({ where: { shopifyStoreId, status: "DISPUTED" } }),
+      prisma.backgroundJob.count({ where: { shopifyStoreId, status: "FAILED" } }),
+      prisma.webhookEvent.count({ where: { shopifyStoreId, processed: false } }),
+    ]);
 
-    // Query real counts from Database with date filter where relevant
+    const [rows, identity] = await Promise.all([queryPromise, identityPromise]);
     const [
       returnsCount,
       exchangesCount,
       incomingExchanges,
-      outgoingExchanges,
+      replacementOrderRequests,
       returnIntake,
       recentReturnsDb,
       recentExchangesDb,
@@ -164,67 +201,40 @@ export async function loader({ request }: LoaderFunctionArgs) {
       inTransit,
       awaitingInspection,
       pendingRefunds,
+      pendingRefundAmountPkrAgg,
       failedShipments,
       bookedParcels,
-    ] = await Promise.all([
-      // Total return requests in range
-      prisma.returnRequest.count({ where: { shopifyStoreId, ...dateFilter } }),
-      // Total exchange requests in range
-      prisma.exchangeRequest.count({ where: { shopifyStoreId, ...dateFilter } }),
-      // Incoming Exchanges: customer parcels returning to warehouse (APPROVED or RECEIVED)
-      prisma.exchangeRequest.count({
-        where: { shopifyStoreId, status: { in: ["APPROVED", "RECEIVED"] }, ...dateFilter },
-      }),
-      // Outgoing Exchanges: replacement parcels sent to customers (FULFILLED or COMPLETED)
-      prisma.exchangeRequest.count({
-        where: { shopifyStoreId, status: { in: ["FULFILLED", "COMPLETED"] }, ...dateFilter },
-      }),
-      // Count historical inbound return intakes, including ones already inspected.
-      prisma.warehouseIntake.count({
-        where: {
-          shopifyStoreId,
-          returnRequestId: { not: null },
-          status: { in: ["RECEIVED", "INSPECTED"] },
-          ...dateFilter,
-        },
-      }),
-      // Recent returns
-      prisma.returnRequest.findMany({
-        where: { shopifyStoreId, ...dateFilter },
-        take: 5,
-        orderBy: { createdAt: "desc" },
-      }),
-      // Recent exchanges
-      prisma.exchangeRequest.findMany({
-        where: { shopifyStoreId, ...dateFilter },
-        take: 5,
-        orderBy: { createdAt: "desc" },
-        include: { items: true },
-      }),
-      // Operational queues
-      prisma.returnRequest.count({ where: { shopifyStoreId, status: "PENDING" } }),
-      prisma.exchangeRequest.count({ where: { shopifyStoreId, status: "PENDING" } }),
-      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: { in: ["IN_TRANSIT", "OUT_FOR_DELIVERY"] } } }),
-      prisma.warehouseIntake.count({ where: { shopifyStoreId, status: "RECEIVED" } }),
-      prisma.refundRecord.count({ where: { shopifyStoreId, status: "PENDING" } }),
-      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "FAILED" } }),
-      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "LABEL_CREATED" } }),
-    ]);
+      staleShipments,
+      unreconciledCodCount,
+      unreconciledCodAgg,
+      disputedCod,
+      failedJobs,
+      unprocessedWebhooks,
+    ] = rows;
 
     return {
-      shop: store?.shop ?? "Connected Store",
+      shop: identity.name,
+      shopDomain: identity.domain,
       range,
       customFrom,
       customTo,
       timeZone,
       dateRangeError,
       dataAvailable: true,
-      historicalOrdersAccess,
+      health: {
+        syncStatus: store?.syncStatus ?? "UNKNOWN",
+        lastSyncAt: store?.lastSyncAt?.toISOString() ?? null,
+        hasSyncError: Boolean(store?.lastSyncError),
+        webhookStatus: store?.webhookStatus ?? "UNKNOWN",
+        lastReconciledAt: store?.lastReconciledAt?.toISOString() ?? null,
+        failedJobs,
+        unprocessedWebhooks,
+      },
       metrics: {
         returnsCount,
         exchangesCount,
         incomingExchanges,
-        outgoingExchanges,
+        replacementOrderRequests,
         returnIntake,
       },
       operations: {
@@ -233,8 +243,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
         inTransit,
         awaitingInspection,
         pendingRefunds,
+        pendingRefundAmountPkr: Number(pendingRefundAmountPkrAgg._sum.amount ?? 0),
         failedShipments,
         bookedParcels,
+        staleShipments,
+        unreconciledCodCount,
+        unreconciledCodAmount: Number(unreconciledCodAgg._sum.expectedAmount ?? 0),
+        disputedCod,
       },
       recentReturns: recentReturnsDb.map((r) => ({
         id: r.id,
@@ -247,7 +262,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         id: e.id,
         orderNumber: e.orderNumber,
         customerName: e.customerName || e.customerEmail,
-        replacementTitle: e.items?.[0]?.replacementTitle || "Replacement Item",
+        replacementTitle: e.items?.[0]?.replacementTitle || (e.items?.length > 1 ? e.items.length + " replacement items" : "Replacement item not specified"),
         status: e.status,
         date: e.createdAt.toISOString(),
       })),
@@ -256,18 +271,27 @@ export async function loader({ request }: LoaderFunctionArgs) {
     console.error("[Dashboard Loader] Error:", error);
     return {
       shop: "Connected Store",
+      shopDomain: "",
       range: "30d",
       customFrom: "",
       customTo: "",
       timeZone: "UTC",
       dateRangeError: null,
       dataAvailable: false,
-      historicalOrdersAccess: { checked: false, hasReadAllOrders: false },
+      health: {
+        syncStatus: "UNKNOWN",
+        lastSyncAt: null,
+        hasSyncError: false,
+        webhookStatus: "UNKNOWN",
+        lastReconciledAt: null,
+        failedJobs: 0,
+        unprocessedWebhooks: 0,
+      },
       metrics: {
         returnsCount: 0,
         exchangesCount: 0,
         incomingExchanges: 0,
-        outgoingExchanges: 0,
+        replacementOrderRequests: 0,
         returnIntake: 0,
       },
       operations: {
@@ -276,8 +300,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
         inTransit: 0,
         awaitingInspection: 0,
         pendingRefunds: 0,
+        pendingRefundAmountPkr: 0,
         failedShipments: 0,
         bookedParcels: 0,
+        staleShipments: 0,
+        unreconciledCodCount: 0,
+        unreconciledCodAmount: 0,
+        disputedCod: 0,
       },
       recentReturns: [],
       recentExchanges: [],
