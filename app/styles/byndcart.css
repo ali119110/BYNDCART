@@ -233,13 +233,71 @@ textarea {
 
 /* Page shell and header */
 .bc-page {
-  width: min(100%, 1080px);
+  width: 100%;
+  max-width: 1440px;
   margin: 0 auto;
-  padding: 26px 24px 44px;
+  padding: 26px clamp(14px, 1.7vw, 24px) 44px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.bc-shipments-page,
+.bc-refunds-page,
+.bc-returns-page,
+.bc-exchanges-page,
+.bc-analytics-page,
+.bc-reconciliation-page,
+.bc-billing-page,
+.bc-notifications-page {
+  width: 100%;
+  max-width: 1440px;
+  margin-inline: auto;
+}
+
+.bc-analytics-page .bc-kpi-grid {
+  align-items: stretch;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 205px), 1fr));
+}
+
+.bc-analytics-page .bc-kpi-card {
+  min-height: 0;
+  height: 100%;
+  padding: 20px;
+  gap: 10px;
+}
+
+.bc-analytics-page .bc-kpi-value {
+  font-size: clamp(26px, 2.2vw, 34px);
+  line-height: 1.12;
+  margin: 4px 0;
+}
+
+.bc-analytics-page .bc-kpi-card .bc-muted {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.bc-analytics-page .bc-kpi-label {
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 650;
+}
+
+.bc-shipments-page .bc-table-wrap,
+.bc-shipments-page .bc-card,
+.bc-refunds-page .bc-table-wrap,
+.bc-returns-page .bc-table-wrap,
+.bc-exchanges-page .bc-table-wrap {
+  width: 100%;
+  max-width: none;
+}
+
+@media (max-width: 760px) {
+  .bc-page {
+    padding: 18px 12px 32px;
+  }
 }
 
 .bc-header {
