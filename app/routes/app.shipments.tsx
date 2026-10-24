@@ -104,7 +104,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   try {
     if (intent === "SYNC_SHOPIFY_FULFILLMENT") {
-      await assertPermission(shopifyStoreId, session, "settings");
+      await assertPermission(shopifyStoreId, session, "shipments");
       const shipment = await prisma.shipmentTrack.findFirst({
         where: {
           id: shipmentId,
