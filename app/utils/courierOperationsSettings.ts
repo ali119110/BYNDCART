@@ -3,6 +3,9 @@ export type ShipperProfile = {
   phone: string;
   email: string;
   city: string;
+  state: string;
+  postalCode: string;
+  countryCode: string;
   address: string;
 };
 
@@ -39,9 +42,9 @@ export const DEFAULT_COURIER_OPERATIONS_SETTINGS: CourierOperationsSettings = {
   labelSize: "A4_3",
   defaultShipperProfileIndex: 0,
   shipperProfiles: [
-    { name: "", phone: "", email: "", city: "", address: "" },
-    { name: "", phone: "", email: "", city: "", address: "" },
-    { name: "", phone: "", email: "", city: "", address: "" },
+    { name: "", phone: "", email: "", city: "", state: "", postalCode: "", countryCode: "PK", address: "" },
+    { name: "", phone: "", email: "", city: "", state: "", postalCode: "", countryCode: "PK", address: "" },
+    { name: "", phone: "", email: "", city: "", state: "", postalCode: "", countryCode: "PK", address: "" },
   ],
 };
 
@@ -66,6 +69,11 @@ export function normalizeCourierOperationsSettings(value: unknown): CourierOpera
       phone: boundedSettingText(profile.phone, 40),
       email: boundedSettingText(profile.email, 200),
       city: boundedSettingText(profile.city, 100),
+      state: boundedSettingText(profile.state, 100),
+      postalCode: boundedSettingText(profile.postalCode, 24),
+      countryCode: /^[A-Za-z]{2}$/.test(boundedSettingText(profile.countryCode, 2))
+        ? boundedSettingText(profile.countryCode, 2).toUpperCase()
+        : "PK",
       address: boundedSettingText(profile.address, 500),
     };
   });
