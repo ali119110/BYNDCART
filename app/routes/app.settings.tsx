@@ -8,6 +8,7 @@ import {
   updateSettings,
   DEFAULT_COURIER_OPERATIONS_SETTINGS,
   normalizeCourierOperationsSettings,
+  type ShipperProfile,
 } from "../services/settings.server";
 import { getReturnPolicyRule, saveReturnPolicyRule } from "../services/policyEngine.server";
 
@@ -512,7 +513,7 @@ export default function Settings() {
               <div className="bco-field">
                 <label htmlFor="defaultShipperProfileIndex">Default shipper profile</label>
                 <select id="defaultShipperProfileIndex" name="defaultShipperProfileIndex" defaultValue={String(settings.courierOperationsSettings?.defaultShipperProfileIndex ?? 0)}>
-                  {(settings.courierOperationsSettings?.shipperProfiles || DEFAULT_COURIER_OPERATIONS_SETTINGS.shipperProfiles).map((profile, index) => (
+                  {(settings.courierOperationsSettings?.shipperProfiles || DEFAULT_COURIER_OPERATIONS_SETTINGS.shipperProfiles).map((profile: ShipperProfile, index: number) => (
                     <option key={index} value={index}>{profile.name || `Shipper profile #${index + 1}`}{profile.city ? ` — ${profile.city}` : ""}</option>
                   ))}
                 </select>
@@ -529,7 +530,7 @@ export default function Settings() {
           </div>
           <div className="bco-body">
             <div className="bco-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
-              {(settings.courierOperationsSettings?.shipperProfiles || DEFAULT_COURIER_OPERATIONS_SETTINGS.shipperProfiles).map((profile, index) => (
+              {(settings.courierOperationsSettings?.shipperProfiles || DEFAULT_COURIER_OPERATIONS_SETTINGS.shipperProfiles).map((profile: ShipperProfile, index: number) => (
                 <div className="bco-profile" key={index}>
                   <h3>{profile.name || `Profile #${index + 1}`}</h3>
                   <div className="bco-profile-grid">
