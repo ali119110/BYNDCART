@@ -376,37 +376,100 @@ export default function RefundsPage() {
         </div>
       )}
 
+      <section className="bc-card">
+        <div>
+          <h2 className="bc-title">Refund ledger</h2>
+          <p className="bc-muted">Open each record to review the original customer submission, save payment proof, and confirm the payment. Manual refunds require a screenshot before confirmation.</p>
+        </div>
+        <div className="bc-table-wrap" style={{ marginTop: 14 }}>
+          <table className="bc-table">
+            <thead>
+              <tr><th>Order / customer</th><th>Status</th><th>Method</th><th>Amount</th><th>Reference</th><th>Evidence</th><th>Action</th></tr>
+            </thead>
+            <tbody>
+              {refunds.length === 0 && <tr><td colSpan={7}>No refund records yet. Choose “Give refund” above to start one from an eligible customer request.</td></tr>}
+              {refunds.map((refund: any) => {
+                const request = refund.requestDetails;
+                const order = refund.orderDetails;
+                const isExpanded = expandedRefundId === refund.id;
+                const requiresProof = !["SHOPIFY", "STORE_CREDIT"].includes(refund.method);
+                return (
+                  <>
+                    <tr key={refund.id}>
+                      <td>
+                        <strong>{request?.orderNumber || "Order details unavailable"}</strong>
+                        <div className="bc-muted">{request?.customerName || order?.customerName || "Customer"}</div>
+                        <div className="bc-muted">{request?.customerEmail || order?.customerEmail || "No email on file"}</div>
+                      </td>
+                      <td><span className={badgeClass(refund.status)}>{refund.status}</span></td>
+                      <td>{refund.method.replaceAll("_", " ")}</td>
+                      <td><strong>{refund.currency} {Number(refund.amount).toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></td>
+                      <td>{refund.reference || "—"}</td>
+                      <td>{(refund.linkedEvidence || []).length}</td>
+                      <td>
+                        <button
+                          type="button"
+                          className="bc-btn"
+                          aria-expanded={isExpanded}
+                          onClick={() => setExpandedRefundId(isExpanded ? null : refund.id)}
+                        >
+                          {isExpanded ? "Hide details" : refund.status === "PENDING" ? "Give refund / details" : "View details"}
+                        </button>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr key={`${refund.id}:details`}>
+                        <td colSpan={7} style={{ background: "#f8fafc", padding: 18 }}>
+                          <div className="bc-grid" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", marginBottom: 16 }}>
+                            <div><span className="bc-kpi-label">Customer</span><p className="bc-subtitle">{request?.customerName || order?.customerName || "Customer"}</p></div>
+                            <div><span className="bc-kpi-label">Email</span><p className="bc-subtitle">{request?.customerEmail || order?.customerEmail || "Not available"}</p></div>
+                            <div><span className="bc-kpi-label">Phone</span><p className="bc-subtitle">{order?.customerPhone || "Not available"}</p></div>
+                            <div><span className="bc-kpi-label">Original request</span><p className="bc-subtitle">{request?.reason || "No reason supplied"}</p></div>
+                          </div>
+                          <div style={{ marginBottom: 16 }}>
+                            <strong>Customer note</strong>
+                            <p className="bc-muted" style={{ whiteSpace: "pre-wrap" }}>{request?.customerNote || "No customer note submitted."}</p>
+                            {(refund.linkedEvidence || []).map((proof: any) => (
+                              <div key={proof.id} style={{ fontSize: 12, marginTop: 6 }}>
+                                {proof.sourceUrl
+                                  ? <a href={proof.sourceUrl} target="_blank" rel="noopener noreferrer">{proof.fileName}</a>
+                                  : <span>{proof.fileName}</span>}
+                                <span className="bc-muted"> · {proof.sizeBytes} bytes</span>
+                              </div>
+                            ))}
+                          </div>
+                          {refund.status === "PENDING" ? (
+                            <Form method="post" encType="multipart/form-data" className="bc-form">
+                              <input type="hidden" name="intent" value="CONFIRM_REFUND" />
+                              <input type="hidden" name="refundId" value={refund.id} />
+                              <h3 className="bc-title">Confirm payment and notify customer</h3>
+                              <p className="bc-muted">Upload a screenshot of the bank/wallet transfer before confirming a manual payment. Email and WhatsApp notifications will be attempted after proof is saved and the refund is confirmed.</p>
+                              <label>Payment proof screenshot {requiresProof ? "(required)" : "(optional for Shopify refund/store credit)"}
+                                <input name="proof" type="file" accept="image/jpeg,image/png,image/webp" required={requiresProof} />
+                              </label>
+                              <label>Payment reference (optional update)
+                                <input name="reference" defaultValue={refund.reference || ""} />
+                              </label>
+                              <button type="submit" className="bc-btn primary">Save proof, confirm payment & notify</button>
+                            </Form>
+                          ) : (
+                            <p className="bc-note ok" role="status">
+                              This record is {refund.status.toLowerCase()}. Notification results are available in the Notification logs.
+                            </p>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
       <div className="bc-table-wrap">
         <table className="bc-table">
-          <thead>
-            <tr><th>Status</th><th>Method</th><th>Amount</th><th>Linked record</th><th>Reference</th><th></th></tr>
-          </thead>
-          <tbody>
-            {refunds.length === 0 && <tr><td colSpan={6}>No refund records yet.</td></tr>}
-            {refunds.map((refund) => (
-              <tr key={refund.id}>
-                <td><span className={badgeClass(refund.status)}>{refund.status}</span></td>
-                <td>{refund.method}</td>
-                <td>{refund.currency} {String(refund.amount)}</td>
-                <td>{refund.returnRequestId || refund.exchangeRequestId}</td>
-                <td>{refund.reference || "—"}</td>
-                <td>
-                  {refund.status === "PENDING" && (
-                    <Form method="post">
-                      <input type="hidden" name="intent" value="CONFIRM_REFUND" />
-                      <input type="hidden" name="refundId" value={refund.id} />
-                      <button type="submit">Mark confirmed</button>
-                    </Form>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="bc-table-wrap">
-        <table className="bc-table">
-          <thead><tr><th>Evidence</th><th>Return</th><th>Type</th><th>Size</th></tr></thead>
+          <thead><tr><th>Evidence</th><th>Linked request</th><th>Type</th><th>Size</th></tr></thead>
           <tbody>
             {evidence.length === 0 && <tr><td colSpan={4}>No evidence saved.</td></tr>}
             {evidence.map((item) => (
