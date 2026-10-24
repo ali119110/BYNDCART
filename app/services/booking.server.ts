@@ -887,6 +887,18 @@ export async function bookCourierShipment(
     }
 
     const adapter = CourierRegistry.get(normCourier);
+    const sharedCourierSettings = await getCourierOperationsSettings(shopifyStoreId).catch((settingsError) => {
+      console.warn("[Booking] Could not read shared shipper profile; using courier-specific address settings.", settingsError);
+      return null;
+    });
+    const effectiveShipperProfileIndex = shipperProfileIndex ?? sharedCourierSettings?.defaultShipperProfileIndex ?? 0;
+    const selectedShipperProfile = sharedCourierSettings?.shipperProfiles[effectiveShipperProfileIndex]
+      || sharedCourierSettings?.shipperProfiles[0]
+      || { name: "", phone: "", city: "", address: "" };
+    const courierWarehouseAddress =
+      (credentials.credentials as any)?.warehouseAddress || (credentials as any).warehouseAddress || "";
+    const courierWarehouseCity =
+      (credentials.credentials as any)?.warehouseCity || (credentials as any).warehouseCity || "";
 
     const bookingPayload = {
       shopifyStoreId,
@@ -899,8 +911,8 @@ export async function bookCourierShipment(
       courierServiceType: serviceType,
       destinationAddress: shipmentType === "RETURN"
         ? {
-            address1: (credentials.credentials as any)?.warehouseAddress || (credentials as any).warehouseAddress || "",
-            city: (credentials.credentials as any)?.warehouseCity || (credentials as any).warehouseCity || "Karachi",
+            address1: courierWarehouseAddress || selectedShipperProfile.address || "",
+            city: courierWarehouseCity || selectedShipperProfile.city || "Karachi",
           }
         : {
             address1: input.customerAddress,
@@ -912,8 +924,8 @@ export async function bookCourierShipment(
             city: input.cityName,
           }
         : {
-            address1: (credentials.credentials as any)?.warehouseAddress || (credentials as any).warehouseAddress || "",
-            city: (credentials as any).warehouseCity || credentials.credentials?.warehouseCity || "Karachi",
+            address1: courierWarehouseAddress || selectedShipperProfile.address || "",
+            city: courierWarehouseCity || selectedShipperProfile.city || "Karachi",
           },
       weightKg: Number(input.weightKg) || 0.5,
       codAmountPKR: shipmentType === "RETURN" ? 0 : Number(input.codAmountPKR) || 0,
