@@ -160,6 +160,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
     return { success: false, error: "Invalid shipment action.", intent };
   } catch (error) {
+    if (error instanceof Response) throw error;
     return { success: false, error: error instanceof Error ? error.message : "Shipment action failed.", intent, shipmentId };
   }
 };
