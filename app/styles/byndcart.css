@@ -2587,3 +2587,69 @@ a.bc-btn svg {
     transition: none;
   }
 }
+
+
+.bc-lifecycle-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.bc-lifecycle-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.bc-lifecycle-heading h3 {
+  margin: 0;
+  color: var(--bc-ink);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.bc-lifecycle-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.bc-lifecycle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--bc-line);
+  color: var(--bc-muted);
+  font-size: 12px;
+}
+
+.bc-lifecycle-row:last-child {
+  border-bottom: 0;
+}
+
+.bc-lifecycle-row strong {
+  color: var(--bc-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.bc-courier-snapshot-table th,
+.bc-courier-snapshot-table td {
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .bc-lifecycle-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bc-courier-snapshot-table {
+    min-width: 640px;
+  }
+}
