@@ -233,6 +233,9 @@ model StoreSettings {
   whatsappNumber        String?
   returnAddress         String?
   policies              Json?
+  // Merchant-level courier automation, label, WhatsApp message and shipper-profile preferences.
+  // Kept independent from any single courier so the same setup can be reused across providers.
+  courierOperationsSettings Json?
   refundExecutionMode   String       @default("MANUAL") // SHOPIFY_API or MANUAL
   exchangeReplacementTiming String   @default("AFTER_INSPECTION") // AFTER_APPROVAL or AFTER_INSPECTION
   fraudFlagReturnCount    Int         @default(5)
