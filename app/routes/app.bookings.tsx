@@ -747,9 +747,20 @@ export default function BookingsPage() {
           type="button"
           className="bc-btn"
           style={{ marginLeft: "auto" }}
-          onClick={() => window.open("/app/awb", "_blank")}
+          disabled={!unfulfilledOrders.some((order) => order.alreadyBooked && order.existingShipmentId)}
+          onClick={() => {
+            const ids = unfulfilledOrders
+              .filter((order) => order.alreadyBooked && order.existingShipmentId)
+              .map((order) => order.existingShipmentId)
+              .filter((id): id is string => Boolean(id));
+            if (!ids.length) {
+              window.alert("No saved shipment labels are available to print yet. Book the order first and reload this page.");
+              return;
+            }
+            window.open(`/app/awb?ids=${encodeURIComponent(ids.join(","))}`, "_blank", "noopener,noreferrer");
+          }}
         >
-          Print Airway Bills
+          Print Airway Bills ({unfulfilledOrders.filter((order) => order.alreadyBooked && order.existingShipmentId).length})
         </button>
       </div>
 
@@ -1522,12 +1533,12 @@ export default function BookingsPage() {
                               )}
                             </fulfillmentSyncFetcher.Form>
                           ) : order.alreadyBooked ? (
-                            <a
-                              href={`/app/shipments?search=${encodeURIComponent(order.name)}`}
+                            <Link
+                              to={`/app/shipments?search=${encodeURIComponent(order.name)}&type=All&status=ALL`}
                               style={{ color: "#92400e", fontSize: "10px", fontWeight: 700, textDecoration: "underline" }}
                             >
-                              Review
-                            </a>
+                              Review shipment
+                            </Link>
                           ) : (
                             <span style={{ color: "#94a3b8" }}>—</span>
                           )}
