@@ -1,5 +1,5 @@
 import React from "react";
-import { useLoaderData, useFetcher } from "react-router";
+import { useLoaderData, useFetcher, useSearchParams } from "react-router";
 import type { Route } from "./+types/app.warehouse";
 import { requireTenantContext } from "../utils/tenant.server";
 import prisma from "../db.server";
@@ -20,12 +20,12 @@ export async function loader({ request }: Route.LoaderArgs) {
   const { shopifyStoreId, admin } = await requireTenantContext(request);
   const [returns, exchanges] = await Promise.all([
     prisma.returnRequest.findMany({
-      where: { shopifyStoreId, status: { in: ["APPROVED", "RECEIVED"] } },
+      where: { shopifyStoreId, status: { in: ["APPROVED", "RECEIVED", "INSPECTED"] } },
       include: { items: true, warehouseIntakes: { include: { inspections: true }, orderBy: { receivedAt: "desc" } } },
       orderBy: { updatedAt: "desc" },
     }),
     prisma.exchangeRequest.findMany({
-      where: { shopifyStoreId, status: { in: ["APPROVED", "RECEIVED", "INSPECTED"] } },
+      where: { shopifyStoreId, status: { in: ["APPROVED", "RECEIVED", "INSPECTED", "FULFILLED", "COMPLETED"] } },
       include: { items: true, warehouseIntakes: { include: { inspections: true }, orderBy: { receivedAt: "desc" } } },
       orderBy: { updatedAt: "desc" },
     }),
@@ -540,8 +540,14 @@ function RetryReplacementForm({ requestId }: { requestId: string }) {
 
 export default function WarehouseReceiving() {
   const { returns, exchanges } = useLoaderData<typeof loader>();
-  const [tab, setTab] = React.useState<"RETURNS" | "EXCHANGES">("EXCHANGES");
-  const [filter, setFilter] = React.useState("ALL");
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const initialTab: "RETURNS" | "EXCHANGES" = requestedTab === "RETURNS" ? "RETURNS" : "EXCHANGES";
+  const requestedFilter = searchParams.get("filter") || "ALL";
+  const allowedFilters = ["ALL", "MISSING", "TRANSIT", "WAREHOUSE", "EXCHANGED"];
+  const initialFilter = allowedFilters.includes(requestedFilter) ? requestedFilter : "ALL";
+  const [tab, setTab] = React.useState<"RETURNS" | "EXCHANGES">(initialTab);
+  const [filter, setFilter] = React.useState(initialFilter);
 
   const [inspectingItem, setInspectingItem] = React.useState<{
     requestType: "RETURN" | "EXCHANGE";
