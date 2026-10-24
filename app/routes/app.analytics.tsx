@@ -34,6 +34,9 @@ export async function loader({ request }: Route.LoaderArgs) {
           totalRequests: 0,
           returnRequestShare: 0,
           exchangeRequestShare: 0,
+          soldUnits: 0,
+          receivedReturnUnits: 0,
+          unitReturnRate: null,
           totalRefunded: 0,
           confirmedRefundsByCurrency: [],
           revenueFromExchanges: 0,
@@ -103,7 +106,7 @@ export default function Analytics() {
           <div className="bc-header-copy">
             <p className="bc-eyebrow">INSIGHTS</p>
             <h1>Analytics</h1>
-            <p>Request mix, confirmed refund payouts, and products with the most return units requested.</p>
+            <p>Warehouse-confirmed item return rate, request mix, confirmed refund payouts, and product return units.</p>
           </div>
           <div className="bc-dashboard-controls">
             <div className="bc-range-filter" role="group" aria-label="Filter analytics date range">
@@ -154,6 +157,18 @@ export default function Analytics() {
           <span className="bc-kpi-label">Exchange request share</span>
           <p className="bc-kpi-value">{dataAvailable ? summary.exchangeRequestShare + "%" : "—"}</p>
           <p className="bc-muted">{dataAvailable ? summary.totalExchanges + " of " + summary.totalRequests + " requests · request mix" : "Unavailable"}</p>
+        </article>
+        <article className="bc-kpi-card bc-kpi-returns">
+          <span className="bc-kpi-label">Warehouse-confirmed unit return rate</span>
+          <p className="bc-kpi-value">{!dataAvailable ? "—" : summary.unitReturnRate === null ? "N/A" : summary.unitReturnRate + "%"}</p>
+          <p className="bc-muted">
+            {!dataAvailable
+              ? "Sales and return data unavailable"
+              : summary.unitReturnRate === null
+                ? "No valid sold-unit denominator in the selected order cohort"
+                : summary.receivedReturnUnits.toLocaleString("en-PK") + " received/inspected units ÷ " + summary.soldUnits.toLocaleString("en-PK") + " sold units"}
+          </p>
+          <p className="bc-muted">Based on orders placed in the selected period; returns may be received later.</p>
         </article>
         <article className="bc-kpi-card">
           <span className="bc-kpi-label">Confirmed refunds (PKR)</span>
