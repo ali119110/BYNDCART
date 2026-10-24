@@ -1237,6 +1237,11 @@ export default function BookingsPage() {
                               Existing booking tag — review before rebooking
                             </div>
                           )}
+                          {!order.alreadyBooked && order.existingShipmentStatus === "CANCELLED" && (
+                            <div style={{ fontSize: "10px", color: "#92400e", marginTop: "2px" }}>
+                              Previous label cancelled — safe to rebook
+                            </div>
+                          )}
                         </td>
 
                         {/* Customer name and email */}
