@@ -28,7 +28,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       take: 200,
     }),
     prisma.exchangeRequest.findMany({
-      where: { shopifyStoreId, status: { in: ["PENDING", "APPROVED"] } },
+      where: { shopifyStoreId, status: { in: ["APPROVED", "COMPLETED"] } },
       include: { items: true },
       orderBy: { updatedAt: "desc" },
       take: 200,
