@@ -33,7 +33,6 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
     returnsByStatus,
     exchangesByStatus,
     returnsByReason,
-    reasonedReturnsCount,
     exchangePriceAgg,
     confirmedRefundsByCurrencyRaw,
     monthlyTrendRaw,
@@ -57,9 +56,6 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
       _count: { _all: true },
       orderBy: { _count: { reason: "desc" } },
       take: 5,
-    }),
-    db.returnRequest.count({
-      where: { shopifyStoreId, ...dateFilter, reason: { not: null } },
     }),
     db.exchangeItem.aggregate({
       where: {
@@ -132,7 +128,9 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
   const returnRequestShare = totalRequests === 0 ? 0 : (totalReturns / totalRequests) * 100;
   const exchangeRequestShare = totalRequests === 0 ? 0 : (totalExchanges / totalRequests) * 100;
 
-  const totalReasonCount = reasonedReturnsCount;
+  // Reason shares use all return requests in the selected period as the denominator,
+  // including requests with an unspecified reason, rather than only the top five groups.
+  const totalReasonCount = totalReturns;
   const confirmedRefundsByCurrency = confirmedRefundsByCurrencyRaw.map((row) => ({
     currency: row.currency || "UNKNOWN",
     amount: Number(row._sum.amount ?? 0),
