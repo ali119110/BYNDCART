@@ -271,8 +271,10 @@ export async function triggerLifecycleNotification(input: TriggerNotificationInp
       },
     });
 
-    // Run in-band execution immediately for immediate delivery
-    await processNotificationJob({
+    // Execute immediately and return the real delivery outcome. The background job
+    // remains as a retry/fallback, but callers must never be told "queued" when a
+    // synchronous provider response already confirmed failure.
+    const delivery = await processNotificationJob({
       notificationLogId: log.id,
       shopifyStoreId: input.shopifyStoreId,
       eventType: input.eventType,
@@ -281,7 +283,9 @@ export async function triggerLifecycleNotification(input: TriggerNotificationInp
       variables: input.variables,
     });
 
-    return { status: "QUEUED", jobId: job.id, logId: log.id };
+    return delivery.success
+      ? { status: "SENT", jobId: job.id, logId: log.id }
+      : { status: "FAILED", error: delivery.error || "Provider did not confirm notification delivery.", jobId: job.id, logId: log.id };
   } catch (err: any) {
     console.error(`[Notifications] Error triggering notification for ${input.eventType}:`, err);
     return { status: "FAILED_TRIGGER", error: err.message };
