@@ -5,23 +5,100 @@ import { requireTenantContext } from "../utils/tenant.server";
 import prisma from "../db.server";
 import { executeInitialShopifySync } from "../services/shopifySync.server";
 
+function isValidTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function dateKeyStartInTimeZone(value: string, timeZone: string): Date | null {
+  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  const targetMidnightUtc = Date.UTC(year, month - 1, day);
+  if (new Date(targetMidnightUtc).toISOString().slice(0, 10) !== value) return null;
+
+  // Convert calendar midnight in the dashboard user's timezone into UTC.
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  let guess = targetMidnightUtc;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const parts = Object.fromEntries(
+      formatter.formatToParts(new Date(guess))
+        .filter((part) => part.type !== "literal")
+        .map((part) => [part.type, part.value]),
+    );
+    const displayedAsUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      Number(parts.hour),
+      Number(parts.minute),
+      Number(parts.second),
+    );
+    const offsetMs = displayedAsUtc - guess;
+    const corrected = targetMidnightUtc - offsetMs;
+    if (corrected === guess) break;
+    guess = corrected;
+  }
+  return new Date(guess);
+}
+
+function nextDateKey(value: string): string | null {
+  const parsed = dateKeyStartInTimeZone(value, "UTC");
+  if (!parsed) return null;
+  parsed.setUTCDate(parsed.getUTCDate() + 1);
+  return parsed.toISOString().slice(0, 10);
+}
+
 export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const { shopifyStoreId, admin } = await requireTenantContext(request);
     const url = new URL(request.url);
-    const range = url.searchParams.get("range") || "30d";
+    const requestedRange = url.searchParams.get("range") || "30d";
+    const range = ["7d", "30d", "90d", "all", "custom"].includes(requestedRange) ? requestedRange : "30d";
+    const customFrom = url.searchParams.get("from") || "";
+    const customTo = url.searchParams.get("to") || "";
+    const requestedTimeZone = url.searchParams.get("tz") || "UTC";
+    const timeZone = isValidTimeZone(requestedTimeZone) ? requestedTimeZone : "UTC";
 
     let startDate: Date | undefined;
-    const now = Date.now();
-    if (range === "7d") {
-      startDate = new Date(now - 7 * 24 * 60 * 60 * 1000);
-    } else if (range === "30d") {
-      startDate = new Date(now - 30 * 24 * 60 * 60 * 1000);
-    } else if (range === "90d") {
-      startDate = new Date(now - 90 * 24 * 60 * 60 * 1000);
-    } // "all" leaves startDate undefined
+    let endExclusiveDate: Date | undefined;
+    let dateRangeError: string | null = null;
+    const now = new Date();
 
-    const dateFilter = startDate ? { createdAt: { gte: startDate } } : {};
+    if (range === "custom") {
+      const candidateStart = dateKeyStartInTimeZone(customFrom, timeZone);
+      const nextDayAfterTo = nextDateKey(customTo);
+      const candidateEnd = nextDayAfterTo ? dateKeyStartInTimeZone(nextDayAfterTo, timeZone) : null;
+      if (candidateStart && candidateEnd && customFrom <= customTo) {
+        startDate = candidateStart;
+        endExclusiveDate = candidateEnd;
+      } else {
+        // Never silently use an invalid custom range. Disclose the 30-day fallback.
+        startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        endExclusiveDate = now;
+        dateRangeError = "Choose a valid start and end date. The dashboard is temporarily showing the last 30 days.";
+      }
+    } else if (range === "7d" || range === "30d" || range === "90d") {
+      const days = Number(range.slice(0, -1));
+      startDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+      endExclusiveDate = now;
+    } // "all" intentionally leaves both bounds undefined.
+
+    const dateFilter = startDate || endExclusiveDate
+      ? { createdAt: { ...(startDate ? { gte: startDate } : {}), ...(endExclusiveDate ? { lt: endExclusiveDate } : {}) } }
+      : {};
 
     let store = await prisma.shopifyStore.findUnique({
       where: { id: shopifyStoreId },
@@ -102,19 +179,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
       prisma.exchangeRequest.count({
         where: { shopifyStoreId, status: { in: ["FULFILLED", "COMPLETED"] }, ...dateFilter },
       }),
-      // Return Intake: return parcels received at warehouse awaiting inspection
-      prisma.returnRequest.count({
-        where: { shopifyStoreId, status: "RECEIVED", ...dateFilter },
+      // Count historical inbound return intakes, including ones already inspected.
+      prisma.warehouseIntake.count({
+        where: {
+          shopifyStoreId,
+          returnRequestId: { not: null },
+          status: { in: ["RECEIVED", "INSPECTED"] },
+          ...dateFilter,
+        },
       }),
       // Recent returns
       prisma.returnRequest.findMany({
-        where: { shopifyStoreId },
+        where: { shopifyStoreId, ...dateFilter },
         take: 5,
         orderBy: { createdAt: "desc" },
       }),
       // Recent exchanges
       prisma.exchangeRequest.findMany({
-        where: { shopifyStoreId },
+        where: { shopifyStoreId, ...dateFilter },
         take: 5,
         orderBy: { createdAt: "desc" },
         include: { items: true },
@@ -132,6 +214,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return {
       shop: store?.shop ?? "Connected Store",
       range,
+      customFrom,
+      customTo,
+      timeZone,
+      dateRangeError,
+      dataAvailable: true,
       historicalOrdersAccess,
       metrics: {
         returnsCount,
@@ -154,7 +241,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         orderNumber: r.orderNumber,
         customerName: r.customerName || r.customerEmail,
         status: r.status,
-        date: new Date(r.createdAt).toLocaleDateString(),
+        date: r.createdAt.toISOString(),
       })),
       recentExchanges: recentExchangesDb.map((e) => ({
         id: e.id,
@@ -162,7 +249,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         customerName: e.customerName || e.customerEmail,
         replacementTitle: e.items?.[0]?.replacementTitle || "Replacement Item",
         status: e.status,
-        date: new Date(e.createdAt).toLocaleDateString(),
+        date: e.createdAt.toISOString(),
       })),
     };
   } catch (error) {
@@ -170,6 +257,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     return {
       shop: "Connected Store",
       range: "30d",
+      customFrom: "",
+      customTo: "",
+      timeZone: "UTC",
+      dateRangeError: null,
+      dataAvailable: false,
       historicalOrdersAccess: { checked: false, hasReadAllOrders: false },
       metrics: {
         returnsCount: 0,
@@ -214,6 +306,16 @@ export default function Dashboard() {
 
   const shop = loaderData?.shop ?? "Connected Store";
   const currentRange = loaderData?.range ?? "30d";
+  const dataAvailable = loaderData?.dataAvailable !== false;
+  const dateRangeError = loaderData?.dateRangeError ?? null;
+  const [customFrom, setCustomFrom] = React.useState(loaderData?.customFrom ?? "");
+  const [customTo, setCustomTo] = React.useState(loaderData?.customTo ?? "");
+  const [dateInputError, setDateInputError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    setCustomFrom(loaderData?.customFrom ?? "");
+    setCustomTo(loaderData?.customTo ?? "");
+    setDateInputError(null);
+  }, [loaderData?.customFrom, loaderData?.customTo]);
   const historicalOrdersAccess = loaderData?.historicalOrdersAccess ?? { checked: false, hasReadAllOrders: false };
   const metrics = loaderData?.metrics ?? {
     returnsCount: 0,
@@ -238,8 +340,37 @@ export default function Dashboard() {
     const next = new URLSearchParams(searchParams);
     if (range === "30d") next.delete("range");
     else next.set("range", range);
+
+    if (range !== "custom") {
+      next.delete("from");
+      next.delete("to");
+      next.delete("tz");
+      setCustomFrom("");
+      setCustomTo("");
+      setDateInputError(null);
+    }
     setSearchParams(next);
   };
+
+  const applyCustomRange = () => {
+    if (!customFrom || !customTo) {
+      setDateInputError("Select both a start date and an end date.");
+      return;
+    }
+    if (customFrom > customTo) {
+      setDateInputError("The start date must be on or before the end date.");
+      return;
+    }
+    const next = new URLSearchParams(searchParams);
+    next.set("range", "custom");
+    next.set("from", customFrom);
+    next.set("to", customTo);
+    next.set("tz", Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+    setDateInputError(null);
+    setSearchParams(next);
+  };
+
+  const formatCount = (value: number) => dataAvailable ? value.toLocaleString("en-PK") : "—";
 
   return (
     <main className="bc-page bc-dashboard">
@@ -250,22 +381,43 @@ export default function Dashboard() {
         </div>
 
         <div className="bc-dashboard-controls">
-          <div className="bc-range-filter" role="group" aria-label="Date range filter">
-            {[
-              { id: "7d", label: "7 days" },
-              { id: "30d", label: "30 days" },
-              { id: "90d", label: "90 days" },
-              { id: "all", label: "All time" },
-            ].map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                className={`bc-range-btn ${currentRange === option.id ? "active" : ""}`}
-                onClick={() => handleRangeChange(option.id)}
-              >
-                {option.label}
-              </button>
-            ))}
+          <div className="bc-dashboard-filter-stack">
+            <div className="bc-range-filter" role="group" aria-label="Date range filter">
+              {[
+                { id: "7d", label: "7 days" },
+                { id: "30d", label: "30 days" },
+                { id: "90d", label: "90 days" },
+                { id: "all", label: "All time" },
+                { id: "custom", label: "Custom" },
+              ].map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  className={`bc-range-btn ${currentRange === option.id ? "active" : ""}`}
+                  onClick={() => handleRangeChange(option.id)}
+                  aria-pressed={currentRange === option.id}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+
+            {currentRange === "custom" && (
+              <div className="bc-custom-date-filter">
+                <label className="bc-custom-date-field">
+                  <span>From</span>
+                  <input type="date" value={customFrom} max={customTo || undefined} onChange={(event) => { setCustomFrom(event.target.value); setDateInputError(null); }} />
+                </label>
+                <label className="bc-custom-date-field">
+                  <span>To</span>
+                  <input type="date" value={customTo} min={customFrom || undefined} onChange={(event) => { setCustomTo(event.target.value); setDateInputError(null); }} />
+                </label>
+                <button type="button" className="bc-custom-date-apply" onClick={applyCustomRange}>Apply</button>
+              </div>
+            )}
+            {(dateInputError || dateRangeError) && currentRange === "custom" && (
+              <p className="bc-dashboard-date-error" role="alert">{dateInputError || dateRangeError}</p>
+            )}
           </div>
 
           <div className="bc-dashboard-store" title={shop}>
@@ -287,12 +439,19 @@ export default function Dashboard() {
         </section>
       )}
 
+      {!dataAvailable && (
+        <section className="bc-dashboard-data-error" role="alert">
+          <strong>Dashboard data could not be loaded.</strong>
+          <p>Metrics are hidden instead of showing misleading zeros. Reload the dashboard; the technical error is available in the server logs.</p>
+        </section>
+      )}
+
       {/* KPI Cards: Linked to relevant operational pages */}
       <section className="bc-dashboard-section" aria-labelledby="bc-overview-title">
         <div className="bc-dashboard-section-heading">
           <div>
             <h2 id="bc-overview-title">Overview</h2>
-            <p>Operational summary for the selected period.</p>
+            <p>Request counts use the selected creation-date range. The operational queue below shows current outstanding work.</p>
           </div>
         </div>
 
@@ -301,7 +460,7 @@ export default function Dashboard() {
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Return requests</span>
             </div>
-            <p className="bc-kpi-value">{metrics.returnsCount.toLocaleString("en-PK")}</p>
+            <p className="bc-kpi-value">{formatCount(metrics.returnsCount)}</p>
             <span className="bc-kpi-sub">View returns</span>
           </Link>
 
@@ -309,7 +468,7 @@ export default function Dashboard() {
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Exchange requests</span>
             </div>
-            <p className="bc-kpi-value">{metrics.exchangesCount.toLocaleString("en-PK")}</p>
+            <p className="bc-kpi-value">{formatCount(metrics.exchangesCount)}</p>
             <span className="bc-kpi-sub">View exchanges</span>
           </Link>
 
@@ -317,15 +476,15 @@ export default function Dashboard() {
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Incoming exchanges</span>
             </div>
-            <p className="bc-kpi-value">{metrics.incomingExchanges.toLocaleString("en-PK")}</p>
-            <span className="bc-kpi-sub">Parcels returning to warehouse</span>
+            <p className="bc-kpi-value">{formatCount(metrics.incomingExchanges)}</p>
+            <span className="bc-kpi-sub">Approved or received exchange requests</span>
           </Link>
 
           <Link to="/app/warehouse?tab=EXCHANGES&filter=EXCHANGED" className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Outgoing exchanges</span>
             </div>
-            <p className="bc-kpi-value">{metrics.outgoingExchanges.toLocaleString("en-PK")}</p>
+            <p className="bc-kpi-value">{formatCount(metrics.outgoingExchanges)}</p>
             <span className="bc-kpi-sub">Replacements fulfilled</span>
           </Link>
 
@@ -333,8 +492,8 @@ export default function Dashboard() {
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Return intake</span>
             </div>
-            <p className="bc-kpi-value">{metrics.returnIntake.toLocaleString("en-PK")}</p>
-            <span className="bc-kpi-sub">Received at warehouse</span>
+            <p className="bc-kpi-value">{formatCount(metrics.returnIntake)}</p>
+            <span className="bc-kpi-sub">Return parcels received during the selected period</span>
           </Link>
         </div>
       </section>
@@ -351,31 +510,31 @@ export default function Dashboard() {
         <div className="bc-ops-grid">
           <Link className="bc-ops-card" to="/app/bookings">
             <span className="bc-ops-label">Bookings ready</span>
-            <span className="bc-ops-value">{operations.bookedParcels.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-value">{formatCount(operations.bookedParcels)}</span>
           </Link>
           <Link className={`bc-ops-card ${operations.pendingReturns > 0 ? "has-attention" : ""}`} to="/app/returns">
             <span className="bc-ops-label">Pending returns</span>
-            <span className="bc-ops-value">{operations.pendingReturns.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-value">{formatCount(operations.pendingReturns)}</span>
           </Link>
           <Link className={`bc-ops-card ${operations.pendingExchanges > 0 ? "has-attention" : ""}`} to="/app/exchanges">
             <span className="bc-ops-label">Pending exchanges</span>
-            <span className="bc-ops-value">{operations.pendingExchanges.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-value">{formatCount(operations.pendingExchanges)}</span>
           </Link>
           <Link className="bc-ops-card" to="/app/shipments?type=All">
             <span className="bc-ops-label">Parcels in transit</span>
-            <span className="bc-ops-value">{operations.inTransit.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-value">{formatCount(operations.inTransit)}</span>
           </Link>
           <Link className="bc-ops-card" to="/app/warehouse">
             <span className="bc-ops-label">Awaiting inspection</span>
-            <span className="bc-ops-value">{operations.awaitingInspection.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-value">{formatCount(operations.awaitingInspection)}</span>
           </Link>
           <Link className={`bc-ops-card ${operations.pendingRefunds > 0 ? "has-attention" : ""}`} to="/app/refunds">
             <span className="bc-ops-label">Refunds pending</span>
-            <span className="bc-ops-value">{operations.pendingRefunds.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-value">{formatCount(operations.pendingRefunds)}</span>
           </Link>
           <Link className={`bc-ops-card ${operations.failedShipments > 0 ? "has-error" : ""}`} to="/app/shipments">
             <span className="bc-ops-label">Failed shipments</span>
-            <span className="bc-ops-value">{operations.failedShipments.toLocaleString("en-PK")}</span>
+            <span className="bc-ops-value">{formatCount(operations.failedShipments)}</span>
           </Link>
         </div>
       </section>
@@ -399,10 +558,12 @@ export default function Dashboard() {
               <Link className="bc-text-link" to="/app/returns">View all</Link>
             </header>
 
-            {recentReturns.length === 0 ? (
+            {!dataAvailable ? (
+              <div className="bc-empty-state"><strong>Activity unavailable</strong><p>Could not load return activity.</p></div>
+            ) : recentReturns.length === 0 ? (
               <div className="bc-empty-state">
-                <strong>No returns yet</strong>
-                <p>New return requests will appear here.</p>
+                <strong>No returns in this period</strong>
+                <p>Return requests created during the selected date range will appear here.</p>
               </div>
             ) : (
               <div className="bc-dashboard-table-wrap">
@@ -421,7 +582,7 @@ export default function Dashboard() {
                         <td><span className="bc-table-primary">{item.orderNumber || "—"}</span></td>
                         <td><span className="bc-table-secondary" title={item.customerName || "—"}>{item.customerName || "—"}</span></td>
                         <td><span className={`bc-status-badge bc-status-${getStatusTone(item.status)}`}>{item.status}</span></td>
-                        <td className="bc-date-cell"><span className="bc-table-date">{item.date}</span></td>
+                        <td className="bc-date-cell"><span className="bc-table-date">{new Date(item.date).toLocaleDateString()}</span></td>
                       </tr>
                     ))}
                   </tbody>
@@ -439,10 +600,12 @@ export default function Dashboard() {
               <Link className="bc-text-link" to="/app/exchanges">View all</Link>
             </header>
 
-            {recentExchanges.length === 0 ? (
+            {!dataAvailable ? (
+              <div className="bc-empty-state"><strong>Activity unavailable</strong><p>Could not load exchange activity.</p></div>
+            ) : recentExchanges.length === 0 ? (
               <div className="bc-empty-state">
-                <strong>No exchanges yet</strong>
-                <p>New exchange requests will appear here.</p>
+                <strong>No exchanges in this period</strong>
+                <p>Exchange requests created during the selected date range will appear here.</p>
               </div>
             ) : (
               <div className="bc-dashboard-table-wrap">
@@ -461,7 +624,7 @@ export default function Dashboard() {
                         <td><span className="bc-table-primary">{item.orderNumber || "—"}</span></td>
                         <td><span className="bc-table-secondary" title={item.replacementTitle || "—"}>{item.replacementTitle || "—"}</span></td>
                         <td><span className={`bc-status-badge bc-status-${getStatusTone(item.status)}`}>{item.status}</span></td>
-                        <td className="bc-date-cell"><span className="bc-table-date">{item.date}</span></td>
+                        <td className="bc-date-cell"><span className="bc-table-date">{new Date(item.date).toLocaleDateString()}</span></td>
                       </tr>
                     ))}
                   </tbody>
