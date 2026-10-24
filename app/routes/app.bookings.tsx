@@ -265,6 +265,7 @@ type CourierBookingOptionsResponse = {
   pickupCities?: string[];
   deliveryCities?: string[];
   serviceTypes?: string[];
+  serviceTypesByCity?: Record<string, string[]>;
   citySource?: "carrier_api" | "local";
   serviceTypeSource?: "carrier_api" | "integration";
   error?: string | null;
@@ -326,6 +327,16 @@ export default function BookingsPage() {
     return serviceType === "Reverse" || serviceType === "Reversed"
       ? activeCourierOptions.pickupCities || []
       : activeCourierOptions.deliveryCities || [];
+  };
+  const availableServiceTypesForCity = (cityName: string) => {
+    if (selectedCourierKey !== "LEOPARDS" || !activeCourierOptions?.serviceTypesByCity) {
+      return availableServiceTypes;
+    }
+    if (!String(cityName || "").trim()) return availableServiceTypes;
+    const normalizedCity = String(cityName).trim().toLocaleLowerCase().replace(/\s+/g, " ");
+    const match = Object.entries(activeCourierOptions.serviceTypesByCity)
+      .find(([name]) => name.trim().toLocaleLowerCase().replace(/\s+/g, " ") === normalizedCity);
+    return match?.[1] || [];
   };
 
   // Selection & Editing state for orders
@@ -458,12 +469,18 @@ export default function BookingsPage() {
       const order = unfulfilledOrders.find((o) => o.id === id);
       if (!order || order.alreadyBooked) return [];
       const edit = orderEdits[id] || {};
-      const serviceType = selectedCourierKey === "RIDER"
+      const requestedType = selectedCourierKey === "RIDER"
         ? "Normal"
         : (availableServiceTypes.includes(edit.type || "Normal") ? (edit.type || "Normal") : (availableServiceTypes[0] || ""));
-      const cityOptions = availableCityOptions(serviceType);
+      const cityOptions = availableCityOptions(requestedType);
       const requestedCity = edit.city !== undefined ? edit.city : (order.matchedCity || "");
       const cityName = matchCarrierOption(requestedCity, cityOptions);
+      const cityServiceTypes = availableServiceTypesForCity(cityName);
+      const serviceType = selectedCourierKey === "RIDER"
+        ? "Normal"
+        : (cityServiceTypes.includes(edit.type || requestedType)
+          ? (edit.type || requestedType)
+          : (cityServiceTypes[0] || ""));
 
       return [{
         orderId: order.id,
@@ -495,7 +512,7 @@ export default function BookingsPage() {
       || !isValidPakistaniMobile(String(booking.customerPhone || ""))
       || String(booking.customerAddress || "").trim().length < 8
       || !String(booking.cityName || "").trim()
-      || !availableServiceTypes.includes(booking.serviceType)
+      || !availableServiceTypesForCity(booking.cityName).includes(booking.serviceType)
       || !Number.isFinite(Number(booking.weightKg))
       || Number(booking.weightKg) <= 0
       || Number(booking.weightKg) > 50
@@ -1028,11 +1045,13 @@ export default function BookingsPage() {
             .bc-booking-table-wrap {
               width: 100%;
               min-width: 0;
-              overflow-x: hidden;
+              overflow-x: auto;
+              overflow-y: hidden;
+              scrollbar-width: thin;
             }
             .bc-booking-table {
               width: 100%;
-              min-width: 0;
+              min-width: 1360px;
               table-layout: fixed;
               border-collapse: separate;
               border-spacing: 0;
@@ -1056,8 +1075,8 @@ export default function BookingsPage() {
               padding-top: 7px !important;
               padding-bottom: 7px !important;
               font-size: 12px !important;
-              white-space: normal;
-              overflow-wrap: anywhere;
+              white-space: nowrap;
+              vertical-align: middle;
               line-height: 1.2;
             }
             .bc-booking-table td {
@@ -1085,7 +1104,8 @@ export default function BookingsPage() {
           <div
             className="bc-booking-table-wrap"
             style={{
-              overflowX: "hidden",
+              overflowX: "auto",
+              overflowY: "hidden",
               width: "100%",
               minWidth: 0,
               background: "#ffffff",
@@ -1096,7 +1116,7 @@ export default function BookingsPage() {
           >
             <table
               className="bc-booking-table"
-              style={{ width: "100%", minWidth: 0, tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, textAlign: "left", fontSize: "12px" }}
+              style={{ width: "100%", minWidth: "1360px", tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, textAlign: "left", fontSize: "12px" }}
             >
               <colgroup>
                 <col style={{ width: "2.5%" }} />
@@ -1156,11 +1176,19 @@ export default function BookingsPage() {
                     const currentAddress = edit.address !== undefined ? edit.address : `${order.address1 || ""} ${order.address2 || ""}`.trim();
                     const currentCod = edit.cod !== undefined ? edit.cod : order.suggestedCod;
                     const currentWeight = edit.weight !== undefined ? edit.weight : order.suggestedWeight;
-                    const currentType = selectedCourierKey === "RIDER"
+                    const requestedType = selectedCourierKey === "RIDER"
                       ? "Normal"
                       : (availableServiceTypes.includes(edit.type || "Normal") ? (edit.type || "Normal") : (availableServiceTypes[0] || ""));
-                    const currentCityOptions = availableCityOptions(currentType);
                     const currentCityCandidate = edit.city !== undefined ? edit.city : order.matchedCity;
+                    const initialCityOptions = availableCityOptions(requestedType);
+                    const initialCity = matchCarrierOption(currentCityCandidate, initialCityOptions);
+                    const rowServiceTypes = availableServiceTypesForCity(initialCity);
+                    const currentType = selectedCourierKey === "RIDER"
+                      ? "Normal"
+                      : (rowServiceTypes.includes(edit.type || requestedType)
+                        ? (edit.type || requestedType)
+                        : (rowServiceTypes[0] || ""));
+                    const currentCityOptions = availableCityOptions(currentType);
                     const currentCity = matchCarrierOption(currentCityCandidate, currentCityOptions);
 
                     const isSelected = selectedOrderIds.includes(order.id);
@@ -1171,7 +1199,7 @@ export default function BookingsPage() {
                       && isValidPakistaniMobile(currentPhone)
                       && currentAddress.trim().length >= 8
                       && currentCity
-                      && availableServiceTypes.includes(currentType)
+                      && rowServiceTypes.includes(currentType)
                       && Number.isFinite(Number(currentWeight))
                       && currentWeight > 0
                       && Number.isFinite(Number(currentCod))
@@ -1411,7 +1439,7 @@ export default function BookingsPage() {
                         <td style={{ verticalAlign: "middle", padding: "4px 6px" }}>
                           <select
                             value={currentType}
-                            disabled={order.alreadyBooked || selectedCourierKey === "RIDER" || courierOptionsLoading || availableServiceTypes.length === 0}
+                            disabled={order.alreadyBooked || selectedCourierKey === "RIDER" || courierOptionsLoading || rowServiceTypes.length === 0}
                             onChange={(e) => handleEditOrder(order.id, "type", e.target.value)}
                             style={{
                               boxSizing: "border-box",
@@ -1426,8 +1454,8 @@ export default function BookingsPage() {
                               color: "#0f172a",
                             }}
                           >
-                            {availableServiceTypes.length === 0 && <option value="">{courierOptionsLoading ? "Loading types…" : "No types available"}</option>}
-                            {availableServiceTypes.map((type) => <option key={type} value={type}>{type}</option>)}
+                            {rowServiceTypes.length === 0 && <option value="">{courierOptionsLoading ? "Loading types…" : "No types for this city"}</option>}
+                            {rowServiceTypes.map((type) => <option key={type} value={type}>{type}</option>)}
                           </select>
                         </td>
 
