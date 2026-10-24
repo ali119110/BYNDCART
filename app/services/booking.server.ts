@@ -907,7 +907,9 @@ export async function bookCourierShipment(
       name: selectedShipperProfile.name || "",
       phone: selectedShipperProfile.phone || "",
       email: selectedShipperProfile.email || "",
-      countryCode: "PK",
+      state: selectedShipperProfile.state || "",
+      postalCode: selectedShipperProfile.postalCode || "",
+      countryCode: selectedShipperProfile.countryCode || "PK",
     };
     const customerAddress = {
       address1: input.customerAddress,
