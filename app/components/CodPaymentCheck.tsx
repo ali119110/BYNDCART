@@ -396,7 +396,7 @@ export function CodPaymentCheck({
         <p className="bc-kicker">AUTOMATED RECONCILIATION</p>
         <h2 className="bc-title">Verify courier settlements and auto-reconcile COD</h2>
         <p className="bc-muted">
-          Queries PostEx and Leopards courier APIs to verify parcel delivery, payment collection, and deductions, then automatically reconciles settled orders in Shopify and your ledger.
+          Verify the full pending fulfilled-order list against PostEx and Leopards remittance data. One reconciliation action processes every safely matched order, with live progress and internal request limits to protect Shopify API reliability.
         </p>
       </div>
 
@@ -408,7 +408,7 @@ export function CodPaymentCheck({
           disabled={busy}
           onClick={autoVerify}
         >
-          {autoRunning ? "Stop verification" : "Verify all orders"}
+          {autoRunning ? "Stop verification" : reconciling ? "Reconciliation running…" : "Verify all orders"}
         </button>
 
         <button
@@ -613,7 +613,7 @@ export function CodPaymentCheck({
             {visible.length === 0 && (
               <tr>
                 <td colSpan={9}>
-                  {rows.length === 0 ? "No orders verified yet. Click 'Verify first 20' or 'Verify all' above." : "No orders match the current filter."}
+                  {rows.length === 0 ? "No orders verified yet. Click 'Verify all orders' to load the full pending fulfilled-order list." : "No orders match the current filter."}
                 </td>
               </tr>
             )}
