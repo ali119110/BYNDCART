@@ -113,7 +113,7 @@ export async function ensureMetaUtilityTemplates(wabaId: string, accessToken: st
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
         name: definition.name,
-        language: "en",
+        language: "en_US",
         category: "UTILITY",
         components: [{
           type: "BODY",
@@ -185,7 +185,7 @@ export class MetaWhatsAppCloudAdapter implements IWhatsAppAdapter {
       type: "template",
       template: {
         name: effectiveTemplateName,
-        language: { code: "en" },
+        language: { code: "en_US" },
         components: parameterValues.length
           ? [{ type: "body", parameters: parameterValues.map((value) => ({ type: "text", text: value })) }]
           : undefined,
@@ -561,7 +561,20 @@ export async function exchangeMetaEmbeddedSignupCode(
     enabled: true,
   });
 
-  const templateSetup = await ensureMetaUtilityTemplates(targetWabaId, userAccessToken);
+  let templateSetup: any;
+  try {
+    templateSetup = await ensureMetaUtilityTemplates(targetWabaId, userAccessToken);
+  } catch (templateError) {
+    // The account can be connected even if template-management permission is missing.
+    // Report that separately so the merchant isn't misled into thinking OAuth failed.
+    templateSetup = {
+      created: 0,
+      pending: 0,
+      approved: 0,
+      failed: Object.keys(META_UTILITY_TEMPLATES).length,
+      errors: [templateError instanceof Error ? templateError.message : "Meta template setup failed."],
+    };
+  }
   return { ...saved, templateSetup };
 }
 
@@ -579,7 +592,15 @@ export async function dispatchWhatsAppNotification(input: SendWhatsAppInput): Pr
     }
   }
 
-  // Fallback to global registry (for unit tests / mock environment)
-  const registryAdapter = WhatsAppRegistry.getAdapter();
-  return await registryAdapter.sendWhatsAppMessage(input);
+  // Never mark production delivery as successful through the mock adapter.
+  // The mock registry remains available only for isolated test runs.
+  if (process.env.NODE_ENV === "test") {
+    return await WhatsAppRegistry.getAdapter().sendWhatsAppMessage(input);
+  }
+  return {
+    success: false,
+    error: input.shopifyStoreId
+      ? "WhatsApp is not connected for this store. Connect the merchant's Meta WhatsApp Business account first."
+      : "A store-scoped Meta WhatsApp configuration is required for production delivery.",
+  };
 }
