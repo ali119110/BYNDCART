@@ -75,11 +75,9 @@ export async function createAppSubscription(
   if (planCode === "FREE") {
     // If cancelling paid sub
     if (existingSub.shopifySubscriptionId && adminContext) {
-      try {
-        await cancelAppSubscription(shopifyStoreId, adminContext);
-      } catch (err) {
-        console.warn(`[Billing Service] Warning during cancel while downgrading:`, err);
-      }
+      // Do not grant a downgrade in the local database if Shopify still has the paid
+      // subscription active; the cancellation must be confirmed first.
+      await cancelAppSubscription(shopifyStoreId, adminContext);
     }
 
     const updated = await prisma.billingSubscription.upsert({
@@ -125,71 +123,66 @@ export async function createAppSubscription(
     };
   }
 
-  // Execute GraphQL appSubscriptionCreate
-  let confirmationUrl = `${returnUrl}?charge_id=mock_charge_${Date.now()}`;
-  let graphqlSubId: string | null = null;
-  let subStatus = "PENDING";
-
-  try {
-    const admin = await getShopifyAdminClient(store.shop, adminContext);
-    const response = await admin.graphql(
-      `#graphql
-      mutation AppSubscriptionCreate($name: String!, $returnUrl: String!, $lineItems: [AppSubscriptionLineItemInput!]!, $test: Boolean) {
-        appSubscriptionCreate(name: $name, returnUrl: $returnUrl, lineItems: $lineItems, test: $test) {
-          userErrors {
-            field
-            message
-          }
-          confirmationUrl
-          appSubscription {
-            id
-            status
-          }
-        }
-      }`,
-      {
-        variables: {
-          name: plan.name,
-          returnUrl,
-          test: process.env.NODE_ENV !== "production",
-          lineItems: [
-            {
-              plan: {
-                appRecurringPricingDetails: {
-                  price: { amount: plan.price, currencyCode: plan.currency },
-                  interval: plan.interval,
-                },
-              },
-            },
-          ],
-        },
-      }
-    );
-
-    const result = await response.json();
-    const data = result?.data?.appSubscriptionCreate;
-
-    if (data?.userErrors && data.userErrors.length > 0) {
-      const errMsg = data.userErrors.map((e: any) => e.message).join(", ");
-      throw new Error(`Shopify Billing Error: ${errMsg}`);
-    }
-
-    if (data?.confirmationUrl) {
-      confirmationUrl = data.confirmationUrl;
-    }
-    if (data?.appSubscription?.id) {
-      graphqlSubId = data.appSubscription.id;
-      subStatus = data.appSubscription.status || "PENDING";
-    }
-  } catch (err: any) {
-    console.warn(`[Billing Service] GraphQL appSubscriptionCreate execution note: ${err.message}`);
-    // If offline/test mode without GraphQL response, fallback to deterministic mock sub ID
-    if (!graphqlSubId) {
-      graphqlSubId = `gid://shopify/AppSubscription/sub_${Date.now()}`;
-    }
+  // Shopify is the source of truth for paid subscriptions. Never invent a subscription ID
+  // or confirmation URL when the Admin API fails; that would show a paid plan without a charge.
+  const admin = await getShopifyAdminClient(store.shop, adminContext);
+  if (!admin || typeof admin.graphql !== "function") {
+    throw new Error("Shopify Billing is unavailable for this installation. Reopen the embedded app and retry.");
   }
 
-  // Persist pending or active billing subscription in database
+  const billingTestMode = process.env.NODE_ENV !== "production";
+  const response = await admin.graphql(
+    `#graphql
+    mutation AppSubscriptionCreate($name: String!, $returnUrl: URL!, $lineItems: [AppSubscriptionLineItemInput!]!, $test: Boolean) {
+      appSubscriptionCreate(name: $name, returnUrl: $returnUrl, lineItems: $lineItems, test: $test) {
+        userErrors { field message }
+        confirmationUrl
+        appSubscription { id status }
+      }
+    }`,
+    {
+      variables: {
+        name: plan.name,
+        returnUrl,
+        test: billingTestMode,
+        lineItems: [{
+          plan: {
+            appRecurringPricingDetails: {
+              price: { amount: plan.price, currencyCode: plan.currency },
+              interval: plan.interval,
+            },
+          },
+        }],
+      },
+    },
+  );
+
+  const result = await response.json();
+  const topLevelErrors = Array.isArray(result?.errors)
+    ? result.errors.map((error: any) => String(error?.message || "Shopify GraphQL request failed."))
+    : [];
+  if (topLevelErrors.length) throw new Error(`Shopify Billing request failed: ${topLevelErrors.join("; ")}`);
+
+  const data = result?.data?.appSubscriptionCreate;
+  const userErrors = Array.isArray(data?.userErrors) ? data.userErrors : [];
+  if (userErrors.length) {
+    throw new Error(`Shopify Billing Error: ${userErrors.map((error: any) => {
+      const field = Array.isArray(error?.field) ? error.field.join(".") : "";
+      return [field, error?.message].filter(Boolean).join(": ");
+    }).join("; ")}`);
+  }
+
+  const graphqlSubId = String(data?.appSubscription?.id || "");
+  const confirmationUrl = String(data?.confirmationUrl || "");
+  const subStatus = String(data?.appSubscription?.status || "PENDING");
+  if (!graphqlSubId.startsWith("gid://shopify/AppSubscription/")) {
+    throw new Error("Shopify did not return a valid app subscription ID. No local paid plan was recorded.");
+  }
+  if (!confirmationUrl && subStatus !== "ACTIVE") {
+    throw new Error("Shopify created no approval URL for this subscription. The plan has not been activated; retry from Billing.");
+  }
+
+  // Keep the subscription PENDING until Shopify's approval callback/webhook confirms it.
   const subscription = await prisma.billingSubscription.upsert({
     where: { shopifyStoreId },
     create: {
@@ -202,7 +195,7 @@ export async function createAppSubscription(
       currency: plan.currency,
       interval: plan.interval,
       monthlyReturnLimit: plan.monthlyReturnLimit,
-      test: true,
+      test: billingTestMode,
     },
     update: {
       shopifySubscriptionId: graphqlSubId,
@@ -213,6 +206,7 @@ export async function createAppSubscription(
       currency: plan.currency,
       interval: plan.interval,
       monthlyReturnLimit: plan.monthlyReturnLimit,
+      test: billingTestMode,
     },
   });
 
@@ -248,27 +242,29 @@ export async function cancelAppSubscription(shopifyStoreId: string, adminContext
       });
       if (store) {
         const admin = await getShopifyAdminClient(store.shop, adminContext);
-        await admin.graphql(
+        const response = await admin.graphql(
           `#graphql
           mutation AppSubscriptionCancel($id: ID!) {
             appSubscriptionCancel(id: $id) {
-              userErrors {
-                field
-                message
-              }
-              appSubscription {
-                id
-                status
-              }
+              userErrors { field message }
+              appSubscription { id status }
             }
           }`,
-          {
-            variables: { id: sub.shopifySubscriptionId },
-          }
+          { variables: { id: sub.shopifySubscriptionId } },
         );
+        const result = await response.json();
+        const topErrors = Array.isArray(result?.errors) ? result.errors.map((error: any) => error?.message).filter(Boolean) : [];
+        const data = result?.data?.appSubscriptionCancel;
+        const userErrors = Array.isArray(data?.userErrors) ? data.userErrors : [];
+        if (topErrors.length || userErrors.length) {
+          throw new Error([...topErrors, ...userErrors.map((error: any) => error?.message)].filter(Boolean).join("; "));
+        }
+        if (data?.appSubscription?.status && !["CANCELLED", "DECLINED", "EXPIRED"].includes(String(data.appSubscription.status).toUpperCase())) {
+          throw new Error(`Shopify returned subscription status ${data.appSubscription.status} after cancellation.`);
+        }
       }
     } catch (err: any) {
-      console.warn(`[Billing Service] Cancel GraphQL execution note: ${err.message}`);
+      throw new Error(`Shopify could not confirm subscription cancellation. Your current plan was not changed: ${err instanceof Error ? err.message : "Unknown Shopify billing error"}`);
     }
   }
 
