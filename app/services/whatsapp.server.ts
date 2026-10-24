@@ -72,7 +72,7 @@ export class MetaWhatsAppCloudAdapter implements IWhatsAppAdapter {
       };
     }
 
-    const url = `https://graph.facebook.com/v21.0/${phoneId}/messages`;
+    const url = `https://graph.facebook.com/v23.0/${phoneId}/messages`;
 
     let payload: any;
 
@@ -262,6 +262,147 @@ export const DEFAULT_WHATSAPP_AUTOMATIONS = [
   },
 ];
 
+type MetaTemplateStatus = { name: string; status: string; created: boolean; error?: string };
+const metaTemplateStatusCache = new Map<string, { status: string; expiresAt: number }>();
+
+export function buildMetaTemplatePayload(eventType: string, variables: Record<string, any>) {
+  const definition = DEFAULT_WHATSAPP_AUTOMATIONS.find((template) => template.eventType === eventType);
+  if (!definition) return null;
+  const names: string[] = [];
+  const body = definition.body.replace(/\{\{([a-zA-Z0-9_]+)\}\}/g, (_match, name: string) => {
+    if (!names.includes(name)) names.push(name);
+    return `{{${names.indexOf(name) + 1}}}`;
+  }).replace(/\*([^*]+)\*/g, "$1").slice(0, 1024);
+  const samples: Record<string, string> = {
+    customer_name: "Customer",
+    order_number: "#1001",
+    courier_name: "PostEx",
+    tracking_number: "1234567890",
+    tracking_url: "https://example.com/track",
+    portal_url: "https://example.com/returns",
+    cod_amount: "3990",
+    reason: "Request update",
+    replacement_order: "#1002",
+    refund_amount: "1000",
+    refund_method: "bank transfer",
+  };
+  const orderedValues = names.map((name) => String(variables[name] ?? samples[name] ?? ""));
+  return {
+    templateName: `byndcart_${eventType.toLowerCase()}`,
+    language: "en_US",
+    templateVariables: Object.fromEntries(names.map((name, index) => [name, orderedValues[index]])),
+    definition,
+    body,
+    orderedValues,
+  };
+}
+
+/**
+ * Submit per-event Utility templates to the merchant's own WABA. These remain pending
+ * until Meta approves them; local app templates are not a substitute for Meta approval.
+ */
+export async function provisionMetaWhatsAppTemplates(wabaId: string, accessToken: string) {
+  const templateNames = DEFAULT_WHATSAPP_AUTOMATIONS.map((template) => `byndcart_${template.eventType.toLowerCase()}`);
+  const root = `https://graph.facebook.com/v23.0/${encodeURIComponent(wabaId)}/message_templates`;
+  const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" };
+  const statuses: MetaTemplateStatus[] = [];
+
+  const existingUrl = new URL(root);
+  existingUrl.searchParams.set("fields", "name,status,language,category");
+  existingUrl.searchParams.set("limit", "100");
+  try {
+    const existingResponse = await fetch(existingUrl, { headers });
+    const existingPayload = await existingResponse.json().catch(() => ({}));
+    if (!existingResponse.ok || existingPayload?.error) {
+      return {
+        total: templateNames.length,
+        approved: 0,
+        pending: 0,
+        errors: [String(existingPayload?.error?.message || "Meta could not list existing message templates; confirm WhatsApp business_management permissions.")],
+        templates: [] as MetaTemplateStatus[],
+      };
+    }
+
+    const existing = Array.isArray(existingPayload?.data) ? existingPayload.data : [];
+    for (const definition of DEFAULT_WHATSAPP_AUTOMATIONS) {
+      const prepared = buildMetaTemplatePayload(definition.eventType, {});
+      if (!prepared) continue;
+      const found = existing.find((item: any) =>
+        item?.name === prepared.templateName
+        && String(item?.language || "en_US").toLowerCase() === "en_us"
+      );
+      if (found) {
+        const status = String(found.status || "PENDING").toUpperCase();
+        statuses.push({ name: prepared.templateName, status, created: false });
+        metaTemplateStatusCache.set(`${wabaId}:${prepared.templateName}`, { status, expiresAt: Date.now() + 10 * 60 * 1000 });
+        continue;
+      }
+
+      const components: any[] = [{ type: "BODY", text: prepared.body }];
+      if (prepared.orderedValues.length) {
+        components[0].example = { body_text: [prepared.orderedValues] };
+      }
+      const response = await fetch(root, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          name: prepared.templateName,
+          language: "en_US",
+          category: "UTILITY",
+          components,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload?.error) {
+        const error = String(payload?.error?.message || `Meta rejected the template submission (HTTP ${response.status}).`);
+        statuses.push({ name: prepared.templateName, status: "ERROR", created: false, error });
+        continue;
+      }
+      const status = String(payload?.status || "PENDING").toUpperCase();
+      statuses.push({ name: prepared.templateName, status, created: true });
+      metaTemplateStatusCache.set(`${wabaId}:${prepared.templateName}`, { status, expiresAt: Date.now() + 10 * 60 * 1000 });
+    }
+  } catch (error) {
+    return {
+      total: templateNames.length,
+      approved: 0,
+      pending: 0,
+      errors: [error instanceof Error ? error.message : "Failed to contact Meta to submit WhatsApp templates."],
+      templates: statuses,
+    };
+  }
+
+  return {
+    total: statuses.length,
+    approved: statuses.filter((template) => template.status === "APPROVED").length,
+    pending: statuses.filter((template) => ["PENDING", "IN_APPEAL", "PENDING_REVIEW"].includes(template.status)).length,
+    errors: statuses.filter((template) => template.error).map((template) => `${template.name}: ${template.error}`),
+    templates: statuses,
+  };
+}
+
+async function getMetaWhatsAppTemplateStatus(wabaId: string, accessToken: string, templateName: string): Promise<string> {
+  const key = `${wabaId}:${templateName}`;
+  const cached = metaTemplateStatusCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.status;
+
+  const url = new URL(`https://graph.facebook.com/v23.0/${encodeURIComponent(wabaId)}/message_templates`);
+  url.searchParams.set("name", templateName);
+  url.searchParams.set("fields", "name,status,language");
+  url.searchParams.set("limit", "100");
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.error) {
+    throw new Error(String(payload?.error?.message || "Meta template status lookup failed."));
+  }
+  const found = (Array.isArray(payload?.data) ? payload.data : []).find((item: any) =>
+    item?.name === templateName && String(item?.language || "en_US").toLowerCase() === "en_us"
+  );
+  const status = String(found?.status || "MISSING").toUpperCase();
+  metaTemplateStatusCache.set(key, { status, expiresAt: Date.now() + 10 * 60 * 1000 });
+  return status;
+}
+
 /**
  * Auto-installs / seeds default WhatsApp templates when a merchant connects their WhatsApp account.
  */
@@ -404,7 +545,7 @@ export async function exchangeMetaEmbeddedSignupCode(
   }
 
   // 1. Exchange code for access token
-  const tokenUrl = `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&code=${encodeURIComponent(code)}`;
+  const tokenUrl = `https://graph.facebook.com/v23.0/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&code=${encodeURIComponent(code)}`;
   const tokenRes = await fetch(tokenUrl);
   const tokenData = await tokenRes.json();
 
@@ -415,7 +556,7 @@ export async function exchangeMetaEmbeddedSignupCode(
   const userAccessToken = String(tokenData.access_token);
 
   // 2. Inspect the token and validate that Embedded Signup granted WhatsApp management access.
-  const debugUrl = new URL("https://graph.facebook.com/v21.0/debug_token");
+  const debugUrl = new URL("https://graph.facebook.com/v23.0/debug_token");
   debugUrl.searchParams.set("input_token", userAccessToken);
   debugUrl.searchParams.set("access_token", `${appId}|${appSecret}`);
   const debugRes = await fetch(debugUrl);
@@ -438,7 +579,7 @@ export async function exchangeMetaEmbeddedSignupCode(
   }
 
   // 3. Discover the exact merchant phone number returned by the Embedded Signup session.
-  const phoneUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(targetWabaId)}/phone_numbers`);
+  const phoneUrl = new URL(`https://graph.facebook.com/v23.0/${encodeURIComponent(targetWabaId)}/phone_numbers`);
   phoneUrl.searchParams.set("access_token", userAccessToken);
   const phoneRes = await fetch(phoneUrl);
   const phoneData = await phoneRes.json();
@@ -461,8 +602,7 @@ export async function exchangeMetaEmbeddedSignupCode(
     throw new Error("Meta connected the WhatsApp Business Account but returned no phone number ID. Finish registering a WhatsApp phone number in Meta Business Manager, then reconnect.");
   }
 
-  // 4. Save only a verified, usable connection. The save helper seeds BYNDCART's
-  // local default templates; Meta-hosted templates still require Meta approval.
+  // 4. Save the verified merchant connection and seed local workflow templates.
   const saved = await saveWhatsAppConfig(shopifyStoreId, {
     phoneNumberId,
     wabaId: String(targetWabaId),
@@ -474,7 +614,31 @@ export async function exchangeMetaEmbeddedSignupCode(
     enabled: true,
   });
 
-  return saved;
+  // Submit dedicated templates to the merchant's WABA. Meta approval is asynchronous;
+  // template submission errors do not erase a verified account connection.
+  const metaTemplateStatus = await provisionMetaWhatsAppTemplates(String(targetWabaId), userAccessToken);
+  try {
+    await prisma.auditLog.create({
+      data: {
+        shopifyStoreId,
+        action: "WHATSAPP_META_TEMPLATES_SUBMITTED",
+        entityType: "WhatsAppConfig",
+        entityId: String(saved.id || shopifyStoreId),
+        metadata: {
+          wabaId: String(targetWabaId),
+          phoneNumberId,
+          total: metaTemplateStatus.total,
+          approved: metaTemplateStatus.approved,
+          pending: metaTemplateStatus.pending,
+          errors: metaTemplateStatus.errors,
+        },
+      },
+    });
+  } catch {
+    // Audit write failure does not disconnect an already verified WhatsApp account.
+  }
+
+  return { ...saved, metaTemplateStatus };
 }
 
 /**
@@ -486,6 +650,25 @@ export async function dispatchWhatsAppNotification(input: SendWhatsAppInput): Pr
   if (input.shopifyStoreId) {
     const config = await getWhatsAppConfig(input.shopifyStoreId);
     if (config?.enabled && config.phoneNumberId && config.rawAccessToken) {
+      if (input.templateName) {
+        if (!config.wabaId) {
+          return { success: false, error: "The connected WhatsApp account is missing its WABA ID. Reconnect WhatsApp in BYNDCART." };
+        }
+        let templateStatus = "";
+        try {
+          templateStatus = await getMetaWhatsAppTemplateStatus(config.wabaId, config.rawAccessToken, input.templateName);
+        } catch (error) {
+          return { success: false, error: error instanceof Error ? error.message : "Could not verify Meta template approval." };
+        }
+        if (templateStatus !== "APPROVED") {
+          return {
+            success: false,
+            error: templateStatus === "MISSING"
+              ? `Meta template "${input.templateName}" has not been created. Reconnect WhatsApp to submit BYNDCART's default templates.`
+              : `Meta template "${input.templateName}" is ${templateStatus.toLowerCase()}, not approved yet. Check template status in Meta Business Manager.`,
+          };
+        }
+      }
       const adapter = new MetaWhatsAppCloudAdapter(config.phoneNumberId, config.rawAccessToken);
       return await adapter.sendWhatsAppMessage(input);
     }
