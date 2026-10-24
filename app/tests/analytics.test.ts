@@ -132,7 +132,7 @@ test("Analytics Service - Get Store Financial Metrics in PKR", async () => {
   assert.strictEqual(analytics.summary.totalRefunded, 12000, "only confirmed PKR refund records contribute to the PKR payout KPI");
   assert.strictEqual(analytics.summary.returnRequestShare, 71.4);
   assert.strictEqual(analytics.summary.exchangeRequestShare, 28.6);
-  assert.strictEqual(analytics.summary.confirmedRefundsByCurrency.find((row: any) => row.currency === "USD").amount, 20);
+  assert.strictEqual(analytics.summary.confirmedRefundsByCurrency.find((row: any) => row.currency === "USD")?.amount, 20);
   assert.strictEqual(analytics.summary.revenueFromExchanges, 1500);
   assert.strictEqual(analytics.topReturnedProducts[0].title, "Embroidered Kurti");
   assert.strictEqual(analytics.topReturnedProducts[0].requestedUnits, 6, "product trend should sum requested units rather than item rows");
