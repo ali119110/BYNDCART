@@ -1091,6 +1091,27 @@ a.bc-btn svg {
 }
 
 
+
+.bc-dashboard-data-error {
+  margin: 0;
+  padding: 13px 15px;
+  border: 1px solid #fecaca;
+  border-radius: 9px;
+  background: #fff7f7;
+  color: #991b1b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.bc-dashboard-data-error strong {
+  display: block;
+  font-size: 13px;
+}
+
+.bc-dashboard-data-error p {
+  margin: 4px 0 0;
+}
+
 /* =========================================================
    BYNDCART DASHBOARD
    Scoped classes keep this layout isolated from other routes.
@@ -1328,9 +1349,77 @@ a.bc-btn svg {
 
 .bc-dashboard-controls {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: flex-end;
   gap: 12px;
   flex-wrap: wrap;
+  margin-left: auto;
+  max-width: 100%;
+}
+
+.bc-dashboard-filter-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bc-custom-date-filter {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bc-custom-date-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 132px;
+  color: var(--bc-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.bc-custom-date-field input {
+  box-sizing: border-box;
+  width: 142px;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 5px 7px;
+  border: 1px solid var(--bc-line);
+  border-radius: 6px;
+  background: var(--bc-surface);
+  color: var(--bc-ink);
+  font: inherit;
+  font-size: 11px;
+}
+
+.bc-custom-date-apply {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--bc-brand);
+  border-radius: 6px;
+  background: var(--bc-brand);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.bc-custom-date-apply:hover {
+  filter: brightness(0.96);
+}
+
+.bc-dashboard-date-error {
+  max-width: 320px;
+  margin: 0;
+  color: var(--bc-bad);
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: right;
 }
 
 .bc-range-filter {
@@ -1680,9 +1769,20 @@ a.bc-btn svg {
     padding-bottom: 18px;
   }
 
+  .bc-dashboard-controls {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .bc-dashboard-filter-stack {
+    align-items: flex-end;
+    max-width: 100%;
+  }
+
   .bc-dashboard-store {
     flex: 0 1 auto;
     max-width: 100%;
+    margin-left: auto;
   }
 
   .bc-activity-grid {
