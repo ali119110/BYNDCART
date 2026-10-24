@@ -298,7 +298,7 @@ export default function Shipments() {
                 <tr>
                   <th>Shipment</th>
                   <th>Order</th>
-                  <th>Type</th>
+                  <th>Direction / Type</th>
                   <th>Courier</th>
                   <th>Tracking</th>
                   <th>Status</th>
@@ -311,7 +311,17 @@ export default function Shipments() {
                   <tr key={shipment.id}>
                     <td><code>{shipment.id.slice(0, 8)}</code></td>
                     <td>{shipment.orderNumber}</td>
-                    <td><span className="bc-badge">{shipment.type}</span></td>
+                    <td>
+                      <span className="bc-badge">
+                        {shipment.type === "EXCHANGE"
+                          ? "OUTBOUND EXCHANGE"
+                          : shipment.type === "RETURN" && shipment.exchangeRequestId
+                            ? "INBOUND EXCHANGE"
+                            : shipment.type === "RETURN"
+                              ? "INBOUND RETURN"
+                              : "OUTBOUND DELIVERY"}
+                      </span>
+                    </td>
                     <td>{shipment.courier}</td>
                     <td><code>{shipment.trackingNumber}</code></td>
                     <td>
@@ -321,7 +331,6 @@ export default function Shipments() {
                     </td>
                     <td>
                       <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                        <a className="bc-text-link" href={`/app/awb?ids=${shipment.id}`} target="_blank" rel="noopener noreferrer">Print AWB</a>
                         {shipment.labelUrl ? (
                           <a className="bc-text-link" href={shipment.labelUrl} target="_blank" rel="noopener noreferrer">Carrier label</a>
                         ) : shipment.courier === "POSTEX" ? (
