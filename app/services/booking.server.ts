@@ -900,7 +900,7 @@ export async function bookCourierShipment(
     const effectiveShipperProfileIndex = shipperProfileIndex ?? sharedCourierSettings?.defaultShipperProfileIndex ?? 0;
     const selectedShipperProfile = sharedCourierSettings?.shipperProfiles[effectiveShipperProfileIndex]
       || sharedCourierSettings?.shipperProfiles[0]
-      || { name: "", phone: "", email: "", city: "", address: "" };
+      || { name: "", phone: "", email: "", city: "", state: "", postalCode: "", countryCode: "PK", address: "" };
     const shipperAddress = {
       address1: selectedShipperProfile.address || "",
       city: selectedShipperProfile.city || "",
