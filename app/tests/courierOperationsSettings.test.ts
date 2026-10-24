@@ -9,7 +9,7 @@ test("shared courier settings provide safe defaults for existing stores", () => 
   const settings = normalizeCourierOperationsSettings(null);
 
   assert.equal(settings.autoCourierTracking, true);
-  assert.equal(settings.sendDeliveryUpdates, true);
+  assert.equal(settings.sendDeliveryUpdates, false);
   assert.equal(settings.deliveryUpdatePage, "COURIER_LOGS");
   assert.equal(settings.duplicateCheckDurationMinutes, 30);
   assert.equal(settings.labelSize, "A4_3");
