@@ -18,6 +18,7 @@ import {
   seedDefaultWhatsAppTemplates,
   exchangeMetaEmbeddedSignupCode,
   dispatchWhatsAppNotification,
+  buildMetaTemplatePayload,
 } from "../services/whatsapp.server";
 import prisma from "../db.server";
 
@@ -151,10 +152,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         businessId: String(formData.get("businessId") || "").trim() || undefined,
       };
       const connection = await exchangeMetaEmbeddedSignupCode(store.id, code, undefined, undefined, sessionInfo);
+      const metaTemplateStatus = (connection as any)?.metaTemplateStatus;
+      const pendingTemplates = Number(metaTemplateStatus?.pending || 0);
+      const approvedTemplates = Number(metaTemplateStatus?.approved || 0);
+      const templateErrors = Array.isArray(metaTemplateStatus?.errors) ? metaTemplateStatus.errors.length : 0;
       return {
         success: true,
-        message: "WhatsApp Business account and registered phone verified. BYNDCART templates are available locally; business-initiated template messages require Meta approval and the platform's Tech Provider/partner setup.",
-        metaTemplateStatus: (connection as any)?.metaTemplateStatus,
+        message: templateErrors
+          ? `WhatsApp Business account connected and phone verified. Meta template setup reported ${templateErrors} issue(s); check server logs and Meta Business Manager. Messages only send once the required Meta templates are approved.`
+          : `WhatsApp Business account connected and phone verified. ${approvedTemplates} Meta template(s) are approved and ${pendingTemplates} are awaiting Meta review. Business-initiated messages are held until their specific template is approved.`,
+        metaTemplateStatus,
       };
     } catch (err: any) {
       return { success: false, error: err.message || "Failed to link Meta WhatsApp account." };
@@ -231,10 +238,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     try {
+      const testTemplate = buildMetaTemplatePayload("TEST_MESSAGE", { customer_name: "BYNDCART merchant" });
+      if (!testTemplate) return { success: false, error: "The test template could not be prepared." };
       const testResult = await dispatchWhatsAppNotification({
         to: testPhone,
-        message: "Hello! This is a test alert from BYNDCART WhatsApp Cloud API. Your store notifications are functioning properly.",
+        message: "This is a test message from BYNDCART. Your WhatsApp connection is working.",
         shopifyStoreId: store.id,
+        templateName: testTemplate.templateName,
+        templateVariables: testTemplate.templateVariables,
       });
 
       if (!testResult.success) {
