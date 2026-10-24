@@ -507,10 +507,10 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
         phone
         customer { id email phone firstName lastName }
         shippingAddress {
-          firstName lastName name company address1 address2 city province zip country countryCodeV2 phone
+          firstName lastName name company address1 address2 city province provinceCode zip country countryCodeV2 phone
         }
         billingAddress {
-          firstName lastName name company address1 address2 city province zip country countryCodeV2 phone
+          firstName lastName name company address1 address2 city province provinceCode zip country countryCodeV2 phone
         }
       }
     }`,
@@ -527,14 +527,28 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
   if (!originalShopifyOrder?.id) throw new Error("Original order details could not be loaded from Shopify.");
   const toDraftAddress = (address: any) => {
     if (!address) return undefined;
-    const keys = ["firstName", "lastName", "name", "company", "address1", "address2", "city", "province", "zip", "phone"];
-    const normalized = Object.fromEntries(keys
-      .map((key) => [key, typeof address[key] === "string" ? address[key].trim() : ""])
-      .filter(([, value]) => Boolean(value)));
+    const fullName = String(address.name || "").trim();
+    const nameParts = fullName.split(/\s+/).filter(Boolean);
+    const firstName = String(address.firstName || nameParts[0] || "").trim();
+    const lastName = String(address.lastName || (nameParts.length > 1 ? nameParts.slice(1).join(" ") : "")).trim();
+    const normalized: Record<string, string> = {};
+    const values: Record<string, string> = {
+      firstName,
+      lastName,
+      company: String(address.company || "").trim(),
+      address1: String(address.address1 || "").trim(),
+      address2: String(address.address2 || "").trim(),
+      city: String(address.city || "").trim(),
+      provinceCode: String(address.provinceCode || "").trim(),
+      zip: String(address.zip || "").trim(),
+      phone: String(address.phone || "").trim(),
+    };
+    for (const [key, value] of Object.entries(values)) {
+      if (value) normalized[key] = value;
+    }
+    // MailingAddressInput accepts countryCode; the display name is not an input field.
     const countryCode = String(address.countryCodeV2 || "").trim().toUpperCase();
-    const country = String(address.country || "").trim();
     if (countryCode) normalized.countryCode = countryCode;
-    else if (country) normalized.country = country;
     return Object.keys(normalized).length ? normalized : undefined;
   };
   const originalLines = Array.isArray(orderSnapshot.lineItems) ? orderSnapshot.lineItems as any[] : [];
