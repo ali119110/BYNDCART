@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useEffect, useRef, useState, useFetcher, useLoaderData, useSearchParams } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Form, useFetcher, useLoaderData, useSearchParams } from "react-router";
 import prisma from "../db.server";
 import { requireTenantContext } from "../services/tenant.server";
 import { assertPermission } from "../services/permissions.server";
@@ -359,7 +360,7 @@ export default function Shipments() {
   const [searchParams, setSearchParams] = useSearchParams();
   const actionFetcher = useFetcher<typeof action>();
   const autoSyncFetcher = useFetcher<typeof action>();
-  const autoSyncAttempted = useRef(false);
+  const lastAutoSyncKey = useRef("");
   const [syncedShipmentIds, setSyncedShipmentIds] = useState<string[]>([]);
   const autoSyncIds = shipments
     .filter((shipment: any) => shipment.canSyncShopifyFulfillment)
@@ -367,8 +368,8 @@ export default function Shipments() {
   const autoSyncKey = autoSyncIds.join(",");
 
   useEffect(() => {
-    if (autoSyncAttempted.current) return;
-    autoSyncAttempted.current = true;
+    if (lastAutoSyncKey.current === autoSyncKey) return;
+    lastAutoSyncKey.current = autoSyncKey;
     if (autoSyncIds.length) {
       autoSyncFetcher.submit(
         { intent: "AUTO_SYNC_SHOPIFY_FULFILLMENTS", shipmentIds: JSON.stringify(autoSyncIds) },
