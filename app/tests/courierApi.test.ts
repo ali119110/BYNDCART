@@ -80,11 +80,65 @@ test("PostEx booking options cache all four API types and city lists in the data
     assert.deepStrictEqual(second.serviceTypes, ["Normal", "Reversed", "Overland", "Replacement"]);
     assert.strictEqual(requests.length, firstRequestCount, "subsequent reads should use the persisted catalog");
     const stored = (config.additionalConfig as any)?.byndcartBookingOptionsCache;
-    assert.strictEqual(stored?.cacheVersion, 2, "a corrected city lookup version should be persisted");
+    assert.strictEqual(stored?.cacheVersion, 3, "the updated courier service-type catalog version should be persisted");
     assert.ok(stored?.credentialFingerprint);
     assert.ok(stored?.cachedAt);
     assert.ok(stored?.pickupCities?.includes("Karachi"));
     assert.ok(stored?.deliveryCities?.includes("Lahore"));
+  } finally {
+    delegate.findUnique = originalFindUnique;
+    delegate.update = originalUpdate;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Leopards booking options extract the merchant's real shipment types from each city", async () => {
+  const delegate = (prisma as any).merchantCourierConfig;
+  const originalFindUnique = delegate.findUnique;
+  const originalUpdate = delegate.update;
+  const originalFetch = globalThis.fetch;
+  const config: any = {
+    id: "courier-config-leopards-types-test",
+    shopifyStoreId: "store-leopards-types-test",
+    providerName: "LEOPARDS",
+    encryptedApiToken: encryptCredential(JSON.stringify({
+      __byndcartCredentialBundle: 1,
+      fields: { apiKey: "leopards-test-key", apiPassword: "leopards-test-password" },
+    })),
+    enabled: true,
+    isLive: true,
+    additionalConfig: null,
+  };
+  delegate.findUnique = async () => config;
+  delegate.update = async ({ data }: any) => {
+    config.additionalConfig = data.additionalConfig;
+    return config;
+  };
+  const requests: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    requests.push(url);
+    assert.ok(url.includes("/getAllCities/format/json/"), "Leopards service options must come from its city catalog API");
+    return jsonResponse({
+      status: 1,
+      error: 0,
+      city_list: [
+        { id: 1, name: "Karachi", allow_as_origin: true, allow_as_destination: true, shipment_type: ["Overnight", "Flyer"] },
+        { id: 2, name: "Lahore", allow_as_origin: true, allow_as_destination: true, shipment_type: ["Overnight", "Economy"] },
+      ],
+    });
+  }) as typeof fetch;
+
+  try {
+    const options = await getMerchantCourierBookingOptions("store-leopards-types-test", "LEOPARDS");
+    assert.deepStrictEqual(options.serviceTypes, ["Overnight", "Flyer", "Economy"]);
+    assert.strictEqual(options.serviceTypeSource, "carrier_api");
+    assert.deepStrictEqual(options.deliveryCities, ["Karachi", "Lahore"]);
+    assert.strictEqual(requests.length, 1);
+
+    const cached = await getMerchantCourierBookingOptions("store-leopards-types-test", "LEOPARDS");
+    assert.deepStrictEqual(cached.serviceTypes, ["Overnight", "Flyer", "Economy"]);
+    assert.strictEqual(requests.length, 1, "service types should be served from the updated persistent catalog");
   } finally {
     delegate.findUnique = originalFindUnique;
     delegate.update = originalUpdate;
@@ -258,8 +312,8 @@ test("Leopards return booking uses bookPacket and reverses shipper and consignee
         status: 1,
         error: 0,
         city_list: [
-          { id: 1, name: "Karachi", allow_as_origin: true, allow_as_destination: true },
-          { id: 2, name: "Lahore", allow_as_origin: true, allow_as_destination: true },
+          { id: 1, name: "Karachi", allow_as_origin: true, allow_as_destination: true, shipment_type: ["Overnight", "Flyer"] },
+          { id: 2, name: "Lahore", allow_as_origin: true, allow_as_destination: true, shipment_type: ["Overnight", "Economy"] },
         ],
       });
     }
@@ -279,6 +333,7 @@ test("Leopards return booking uses bookPacket and reverses shipper and consignee
     customerEmail: "ayesha@example.com",
     customerPhone: "03001112233",
     cityName: "Karachi",
+    courierServiceType: "Overnight",
     originAddress: { address1: "House 4 Block B", city: "Karachi" },
     items: [{ title: "Shirt", quantity: 2 }],
   }, {
@@ -304,6 +359,7 @@ test("Leopards return booking uses bookPacket and reverses shipper and consignee
   assert.strictEqual(booked.booked_packet_weight, 750);
   assert.strictEqual(booked.booked_packet_collect_amount, 0);
   assert.strictEqual(booked.booked_packet_no_piece, 2);
+  assert.strictEqual(booked.shipment_type, "Overnight", "booking must pass the API-advertised shipment service type");
 });
 
 test("DHL and FedEx ignore legacy sandbox/test settings and use production APIs only", async () => {
