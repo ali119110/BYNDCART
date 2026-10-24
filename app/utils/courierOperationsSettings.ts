@@ -1,6 +1,7 @@
 export type ShipperProfile = {
   name: string;
   phone: string;
+  email: string;
   city: string;
   address: string;
 };
@@ -38,9 +39,9 @@ export const DEFAULT_COURIER_OPERATIONS_SETTINGS: CourierOperationsSettings = {
   labelSize: "A4_3",
   defaultShipperProfileIndex: 0,
   shipperProfiles: [
-    { name: "", phone: "", city: "", address: "" },
-    { name: "", phone: "", city: "", address: "" },
-    { name: "", phone: "", city: "", address: "" },
+    { name: "", phone: "", email: "", city: "", address: "" },
+    { name: "", phone: "", email: "", city: "", address: "" },
+    { name: "", phone: "", email: "", city: "", address: "" },
   ],
 };
 
@@ -63,6 +64,7 @@ export function normalizeCourierOperationsSettings(value: unknown): CourierOpera
     return {
       name: boundedSettingText(profile.name, 100),
       phone: boundedSettingText(profile.phone, 40),
+      email: boundedSettingText(profile.email, 200),
       city: boundedSettingText(profile.city, 100),
       address: boundedSettingText(profile.address, 500),
     };
