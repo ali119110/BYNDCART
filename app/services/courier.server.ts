@@ -363,9 +363,10 @@ async function resolvePostExAddressCodes(
     };
   }
 
+  // PostEx's documented v4.1.9 endpoint is get-merchant-address.
+  // cityName is optional, so omit it to retrieve the merchant's registered addresses.
   const endpoints = [
-    `${POSTEX_API_ROOT}/order/v1/get-pickup-address`,
-    `${POSTEX_API_ROOT}/order/v1/get-merchant-address?cityName=`,
+    `${POSTEX_API_ROOT}/order/v1/get-merchant-address`,
   ];
   const lookupErrors: string[] = [];
   let resolved: PostExAddressCodes | null = null;
@@ -413,7 +414,7 @@ async function resolvePostExAddressCodes(
       }
       lookupErrors.push("PostEx address endpoint succeeded but returned no usable address code.");
     } catch {
-      lookupErrors.push("Could not reach a PostEx merchant-address endpoint.");
+      lookupErrors.push("Could not reach PostEx's get-merchant-address endpoint.");
     }
   }
 
