@@ -28,8 +28,8 @@ export type CourierOperationsSettings = {
 export const DEFAULT_COURIER_OPERATIONS_SETTINGS: CourierOperationsSettings = {
   // Preserve BYNDCART's existing on-demand live tracking behavior for stores not yet configured.
   autoCourierTracking: true,
-  // Keep outbound customer messaging enabled by default to preserve existing notification behavior.
-  sendDeliveryUpdates: true,
+  // Customer messaging is opt-in so a newly installed store cannot send billable messages unexpectedly.
+  sendDeliveryUpdates: false,
   deliveryUpdatePage: "COURIER_LOGS",
   deliveryUpdateTemplate:
     "Dear {{customer_name}}, your order #{{order_number}} of amount Rs {{order_amount}} has been shipped.\n\nCourier: {{courier_name}}\nTracking: {{tracking_number}}\nTrack your parcel: {{tracking_url}}",
