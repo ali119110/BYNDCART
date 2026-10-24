@@ -179,12 +179,10 @@ export function unconfirmedCancel(provider: string) {
 // -----------------------------------------------------------------------------
 const POSTEX_API_ROOT = "https://api.postex.pk/services/integration/api";
 const LEOPARDS_PRODUCTION_API_ROOT = "https://merchantapi.leopardscourier.com/api";
-const LEOPARDS_STAGING_API_ROOT = "https://merchantapistaging.leopardscourier.com/api";
 
-function leopardsApiRoot(credentials: any): string {
-  return credentialValue(credentials, "environment").toLowerCase() === "staging"
-    ? LEOPARDS_STAGING_API_ROOT
-    : LEOPARDS_PRODUCTION_API_ROOT;
+// Courier configuration is production-only. Ignore legacy environment values saved by older UI versions.
+function leopardsApiRoot(_credentials?: any): string {
+  return LEOPARDS_PRODUCTION_API_ROOT;
 }
 
 type LeopardsCity = { id: number | string; name: string; allow_as_origin?: boolean; allow_as_destination?: boolean };
@@ -872,13 +870,10 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
 // -----------------------------------------------------------------------------
 // DHL Express MyDHL REST API (3.3.4)
 // -----------------------------------------------------------------------------
-const DHL_TEST_API_ROOT = "https://express.api.dhl.com/mydhlapi/test";
 const DHL_PRODUCTION_API_ROOT = "https://express.api.dhl.com/mydhlapi";
 
-function dhlApiRoot(credentials: any): string {
-  return credentialValue(credentials, "environment").toLowerCase() === "production"
-    ? DHL_PRODUCTION_API_ROOT
-    : DHL_TEST_API_ROOT;
+function dhlApiRoot(_credentials?: any): string {
+  return DHL_PRODUCTION_API_ROOT;
 }
 
 function valueFrom(source: any, ...keys: string[]): string {
@@ -948,7 +943,7 @@ function httpMessage(payload: any, fallback: string): string {
 export class DHLCourierAdapter implements ICourierAdapter {
   readonly providerName = "DHL";
   readonly displayName = "DHL Express";
-  readonly description = "DHL Express MyDHL REST API: account-authenticated shipment labels and tracking. The supplied REST contract does not expose shipment cancellation; it only documents pickup cancellation.";
+  readonly description = "DHL Express MyDHL production REST API for account-authenticated shipment labels and tracking. The supplied REST contract does not expose shipment cancellation; it only documents pickup cancellation.";
   readonly isLive = true;
   readonly supportsCancellation = false;
 
@@ -1125,10 +1120,8 @@ export class DHLCourierAdapter implements ICourierAdapter {
 // OAuth endpoint is documented by FedEx; shipment/tracking paths follow the supplied specs.
 // -----------------------------------------------------------------------------
 const FEDEX_TOKEN_CACHE = new Map<string, { token: string; expiresAt: number }>();
-function fedexApiRoot(credentials: any): string {
-  return credentialValue(credentials, "environment").toLowerCase() === "production"
-    ? "https://apis.fedex.com"
-    : "https://apis-sandbox.fedex.com";
+function fedexApiRoot(_credentials?: any): string {
+  return "https://apis.fedex.com";
 }
 
 function normalizeFedExParty(address: any, fallback: any, role: string) {
@@ -1188,7 +1181,7 @@ function recursiveFedExFind(root: any, keys: string[], visited = new Set<any>())
 export class FedExCourierAdapter implements ICourierAdapter {
   readonly providerName = "FEDEX";
   readonly displayName = "FedEx";
-  readonly description = "FedEx Ship and Track APIs with OAuth 2.0, PDF label handling, shipment cancellation, and return shipment labels. Confirm the account and selected service in FedEx UAT before production use.";
+  readonly description = "FedEx production Ship and Track APIs with client-credentials OAuth 2.0, PDF label handling, shipment cancellation, and return shipment labels. Production account and service access must be enabled by FedEx.";
   readonly isLive = true;
   readonly supportsCancellation = true;
 
@@ -1198,18 +1191,16 @@ export class FedExCourierAdapter implements ICourierAdapter {
     if (!clientId || !clientSecret) throw new Error("FedEx API client ID and client secret are required.");
     const root = fedexApiRoot(credentials);
     const secretFingerprint = createHash("sha256").update(clientSecret).digest("hex");
-    const cacheKey = `${credentialValue(credentials, "environment")}:${clientId}:${secretFingerprint}`;
+    const cacheKey = `${clientId}:${secretFingerprint}`;
     const cached = FEDEX_TOKEN_CACHE.get(cacheKey);
     if (cached && cached.expiresAt > Date.now() + 60_000) return cached.token;
-    const grantType = credentialValue(credentials, "grantType") || "client_credentials";
-    const form = new URLSearchParams({ grant_type: grantType, client_id: clientId, client_secret: clientSecret });
-    const childId = credentialValue(credentials, "childId");
-    const childSecret = credentialValue(credentials, "childSecret");
-    if (grantType !== "client_credentials") {
-      if (!childId || !childSecret) throw new Error("The selected FedEx OAuth grant requires the customer child ID and child secret.");
-      form.set("child_key", childId);
-      form.set("child_secret", childSecret);
-    }
+    // BYNDCART uses the production FedEx client-credentials OAuth flow.
+    // Environment and grant-type selectors are intentionally not merchant-configurable.
+    const form = new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: clientId,
+      client_secret: clientSecret,
+    });
     const response = await fetch(`${root}/oauth/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
@@ -1701,9 +1692,8 @@ export type CourierApiStatus = "live_booking" | "pending_vendor_docs" | "pending
 const COURIER_SETUP: Record<string, { instructions: string; apiStatus: CourierApiStatus; fields: CourierSetupField[] }> = {
   DHL: {
     apiStatus: "live_booking",
-    instructions: "Enter only your DHL API credentials and shipper account number here. Add sender name, phone, email, city, and address once in Settings → Shipper profiles. Use DHL test mode until production access has been approved.",
+    instructions: "Production API only. Enter your DHL API username, password, and shipper account number. Maintain sender name, phone, email, city, and address once in Settings → Shipper profiles.",
     fields: [
-      { key: "environment", label: "API environment", placeholder: "Choose environment", required: true, type: "select", defaultValue: "test", options: [{ label: "Test", value: "test" }, { label: "Production", value: "production" }] },
       { key: "username", label: "MyDHL API username", placeholder: "DHL API username", required: true, secret: true },
       { key: "password", label: "MyDHL API password", placeholder: "DHL API password", required: true, secret: true },
       { key: "accountNumber", label: "DHL shipper account number", placeholder: "DHL Express account number", required: true, secret: true },
@@ -1711,20 +1701,16 @@ const COURIER_SETUP: Record<string, { instructions: string; apiStatus: CourierAp
   },
   FEDEX: {
     apiStatus: "live_booking",
-    instructions: "Enter FedEx API credentials and account number only. Store sender/contact details centrally in Settings → Shipper profiles. Verify your selected account and shipment service with FedEx before production bookings.",
+    instructions: "Production API only. Enter your FedEx API key/client ID, secret, and account number. Sender/contact details are managed centrally in Settings → Shipper profiles. FedEx must enable production access for these credentials.",
     fields: [
-      { key: "environment", label: "API environment", placeholder: "Choose environment", required: true, type: "select", defaultValue: "sandbox", options: [{ label: "Sandbox", value: "sandbox" }, { label: "Production", value: "production" }] },
-      { key: "grantType", label: "OAuth grant type", placeholder: "Choose grant type", required: true, type: "select", defaultValue: "client_credentials", options: [{ label: "Client credentials", value: "client_credentials" }, { label: "CSP credentials", value: "csp_credentials" }, { label: "Parent-child credentials", value: "client_pc_credentials" }] },
-      { key: "clientId", label: "FedEx API key / client ID", placeholder: "FedEx API key", required: true, secret: true },
-      { key: "clientSecret", label: "FedEx secret key", placeholder: "FedEx secret key", required: true, secret: true },
-      { key: "childId", label: "FedEx customer child key (optional)", placeholder: "Required by some grant types", required: false, secret: true },
-      { key: "childSecret", label: "FedEx customer child secret (optional)", placeholder: "Required by some grant types", required: false, secret: true },
+      { key: "clientId", label: "FedEx API key / client ID", placeholder: "FedEx production API key", required: true, secret: true },
+      { key: "clientSecret", label: "FedEx secret key", placeholder: "FedEx production secret key", required: true, secret: true },
       { key: "accountNumber", label: "FedEx account number", placeholder: "FedEx shipper account number", required: true, secret: true },
     ],
   },
   TCS: {
     apiStatus: "live_booking",
-    instructions: "Enter TCS API access credentials only. Sender city, name, phone, email, and address are read from Settings → Shipper profiles. TCS validates booking credentials when a booking is attempted.",
+    instructions: "Enter TCS production API credentials only. Sender city, name, phone, email, and address are read from Settings → Shipper profiles. TCS booking also requires its assigned cost center code.",
     fields: [
       { key: "clientId", label: "TCS API Client ID", placeholder: "X-IBM-Client-Id", required: true, secret: true },
       { key: "userName", label: "TCS COD username", placeholder: "API username", required: true, secret: true },
@@ -1734,19 +1720,16 @@ const COURIER_SETUP: Record<string, { instructions: string; apiStatus: CourierAp
   },
   POSTEX: {
     apiStatus: "live_booking",
-    instructions: "Enter the PostEx merchant API token. BYNDCART attempts to auto-resolve your registered pickup/store IDs. The two optional ID fields are only fallbacks if your account's address lookup cannot return them; do not enter warehouse contact or address details here.",
+    instructions: "Production API only. Enter your PostEx merchant API token. BYNDCART automatically looks up registered pickup/store address IDs; sender contact and address details are managed in Settings → Shipper profiles.",
     fields: [
-      { key: "apiToken", label: "Merchant API token", placeholder: "Paste the PostEx token", required: true, secret: true },
-      { key: "pickupAddressCode", label: "Pickup address ID (optional fallback)", placeholder: "Only if auto-lookup cannot resolve it", required: false },
-      { key: "storeAddressCode", label: "Store address ID (optional fallback)", placeholder: "Only if auto-lookup cannot resolve it", required: false },
+      { key: "apiToken", label: "Merchant API token", placeholder: "Paste the PostEx production token", required: true, secret: true },
     ],
   },
   LEOPARDS: {
     apiStatus: "live_booking",
-    instructions: "Enter the Leopards API key and password only; choose the environment matching those credentials. Sender name, phone, email, city, and address are managed centrally in Settings → Shipper profiles.",
+    instructions: "Production API only. Enter the Leopards merchant API key and password. Sender name, phone, email, city, and address are managed centrally in Settings → Shipper profiles.",
     fields: [
-      { key: "environment", label: "API environment", placeholder: "Choose API environment", required: false, type: "select", defaultValue: "production", options: [{ label: "Production", value: "production" }, { label: "Staging / UAT", value: "staging" }] },
-      { key: "apiKey", label: "Merchant API key", placeholder: "Leopards API key", required: true, secret: true },
+      { key: "apiKey", label: "Merchant API key", placeholder: "Leopards production API key", required: true, secret: true },
       { key: "apiPassword", label: "Merchant API password", placeholder: "Leopards API password", required: true, secret: true },
     ],
   },
