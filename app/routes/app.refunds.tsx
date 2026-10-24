@@ -28,6 +28,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }),
   ]);
 
+  const refundExchangeIds = Array.from(new Set(
+    refunds.filter((refund) => refund.exchangeRequestId && refund.status !== "CANCELLED")
+      .map((refund) => refund.exchangeRequestId as string),
+  ));
+  const exchangeRequests = refundExchangeIds.length
+    ? await prisma.exchangeRequest.findMany({
+        where: { shopifyStoreId, id: { in: refundExchangeIds } },
+        include: { items: true },
+        orderBy: { createdAt: "desc" },
+      })
+    : [];
+
   const requestOrderIds = Array.from(new Set(baseReturnRequests.map((request) => request.shopifyOrderId)));
   const orderSnapshots = requestOrderIds.length
     ? await prisma.order.findMany({
@@ -54,7 +66,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     };
   });
 
-  return { refunds, evidence, returnRequests };
+  return { refunds, evidence, returnRequests, exchangeRequests };
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -74,27 +86,37 @@ export async function action({ request }: ActionFunctionArgs) {
       const refund = await prisma.refundRecord.findFirst({ where: { id: refundId, shopifyStoreId } });
       if (!refund) return { ok: false, message: "Refund record not found for this store." };
       if (refund.status !== "CONFIRMED") return { ok: false, message: "Confirm the refund payment record before notifying the customer." };
-      if (!refund.returnRequestId) return { ok: false, message: "Customer notifications are currently available for refunds linked to a return request." };
-
-      const returnRequest = await prisma.returnRequest.findFirst({
-        where: { id: refund.returnRequestId, shopifyStoreId },
-        select: { id: true, shopifyOrderId: true, orderNumber: true, customerEmail: true, customerName: true },
-      });
-      if (!returnRequest) return { ok: false, message: "Linked return request was not found for this store." };
-      const attachedEvidence = await listEvidence(shopifyStoreId, returnRequest.id);
-      if (!attachedEvidence.length) return { ok: false, message: "Attach the refund transfer screenshot/receipt before sending customer notifications." };
+      const returnRequest = refund.returnRequestId
+        ? await prisma.returnRequest.findFirst({
+            where: { id: refund.returnRequestId, shopifyStoreId },
+            select: { id: true, shopifyOrderId: true, orderNumber: true, customerEmail: true, customerName: true },
+          })
+        : null;
+      const exchangeRequest = refund.exchangeRequestId
+        ? await prisma.exchangeRequest.findFirst({
+            where: { id: refund.exchangeRequestId, shopifyStoreId },
+            select: { id: true, shopifyOrderId: true, orderNumber: true, customerEmail: true, customerName: true },
+          })
+        : null;
+      const linkedRequest = returnRequest || exchangeRequest;
+      if (!linkedRequest) return { ok: false, message: "Linked return/exchange request was not found for this store." };
+      const attachedEvidence = returnRequest
+        ? await listEvidence(shopifyStoreId, returnRequest.id)
+        : await prisma.evidenceAttachment.findMany({ where: { shopifyStoreId, exchangeRequestId: exchangeRequest!.id } });
+      const merchantReceipts = attachedEvidence.filter((file: any) => file.uploadedBy === "MERCHANT");
+      if (!merchantReceipts.length) return { ok: false, message: "Attach the merchant's transfer screenshot/receipt before sending customer notifications." };
 
       const order = await prisma.order.findFirst({
-        where: { shopifyStoreId, shopifyOrderId: returnRequest.shopifyOrderId },
+        where: { shopifyStoreId, shopifyOrderId: linkedRequest.shopifyOrderId },
         select: { customerEmail: true, customerPhone: true, customerName: true, currency: true },
       });
-      const email = String(returnRequest.customerEmail || order?.customerEmail || "").trim();
+      const email = String(linkedRequest.customerEmail || order?.customerEmail || "").trim();
       const phone = String(order?.customerPhone || "").trim();
       if (!email && !phone) return { ok: false, message: "The linked order has no customer email or phone number." };
 
       const variables = {
-        customer_name: returnRequest.customerName || order?.customerName || "Customer",
-        order_number: returnRequest.orderNumber,
+        customer_name: linkedRequest.customerName || order?.customerName || "Customer",
+        order_number: linkedRequest.orderNumber,
         refund_amount: String(refund.amount),
         refund_currency: refund.currency || "PKR",
         refund_method: refund.method.replaceAll("_", " "),
@@ -222,7 +244,7 @@ function badgeClass(status: string) {
 }
 
 export default function RefundsPage() {
-  const { refunds, evidence, returnRequests } = useLoaderData<typeof loader>();
+  const { refunds, evidence, returnRequests, exchangeRequests } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
 
   return (
@@ -315,6 +337,55 @@ export default function RefundsPage() {
           </table>
         </div>
       </section>
+
+      {exchangeRequests.length > 0 && (
+        <section className="bc-card bc-stack">
+          <div>
+            <p className="bc-eyebrow">EXCHANGE REFUNDS</p>
+            <h2 className="bc-title">Exchange orders with refund records</h2>
+            <p className="bc-muted">These exchanges already have refund records. Review the customer-submitted details and attach a merchant payout receipt before sending the update.</p>
+          </div>
+          <div className="bc-table-wrap">
+            <table className="bc-table">
+              <thead><tr><th>Order</th><th>Customer</th><th>Reason / note</th><th>Items</th><th>Refund</th><th>Receipt / notification</th></tr></thead>
+              <tbody>
+                {exchangeRequests.map((request) => {
+                  const requestEvidence = evidence.filter((item) => item.exchangeRequestId === request.id);
+                  const receiptEvidence = requestEvidence.filter((item) => item.uploadedBy === "MERCHANT");
+                  const existingRefund = refunds.find((item) => item.exchangeRequestId === request.id && item.status !== "CANCELLED");
+                  return (
+                    <tr key={request.id}>
+                      <td><strong>{request.orderNumber}</strong><div className="bc-hint">{new Date(request.createdAt).toLocaleDateString("en-PK")}</div></td>
+                      <td>{request.customerName || "Customer"}<div className="bc-hint">{request.customerEmail}</div></td>
+                      <td>{request.reason || "Reason not specified"}<div className="bc-hint">{request.customerNote || "No additional customer note"}</div></td>
+                      <td>{(request.items || []).map((item: any) => <div key={item.id} className="bc-hint">{item.originalQuantity} × {item.replacementTitle || item.replacementVariantId}<div>{item.priceDifference ? `Price difference: ${String(item.priceDifference)}` : ""}</div></div>)}</td>
+                      <td>{existingRefund ? <><span className={badgeClass(existingRefund.status)}>{existingRefund.status}</span><div className="bc-hint">{existingRefund.currency} {String(existingRefund.amount)} · {existingRefund.method.replaceAll("_", " ")}</div></> : "No active refund record"}</td>
+                      <td>
+                        {existingRefund?.status === "CONFIRMED" && receiptEvidence.length === 0 && (
+                          <Form method="post" encType="multipart/form-data" className="bc-refund-inline-form">
+                            <input type="hidden" name="intent" value="ATTACH_EVIDENCE" />
+                            <input type="hidden" name="exchangeRequestId" value={request.id} />
+                            <label>Upload payout receipt (image, max 1.5 MB)<input name="file" type="file" accept="image/jpeg,image/png,image/webp" required /></label>
+                            <button type="submit" className="bc-btn">Attach receipt</button>
+                          </Form>
+                        )}
+                        {existingRefund?.status === "CONFIRMED" && receiptEvidence.length > 0 && (
+                          <Form method="post">
+                            <input type="hidden" name="intent" value="SEND_REFUND_NOTIFICATION" />
+                            <input type="hidden" name="refundId" value={existingRefund.id} />
+                            <button type="submit" className="bc-btn primary">Send email / WhatsApp</button>
+                          </Form>
+                        )}
+                        {(!existingRefund || existingRefund.status !== "CONFIRMED") && <span className="bc-hint">Complete and confirm the refund record in the Refunds tab.</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       <div className="bc-split">
         <Form method="post" className="bc-form">
