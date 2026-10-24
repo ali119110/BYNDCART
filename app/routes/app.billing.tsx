@@ -34,8 +34,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const planCode = formData.get("planCode") as string;
 
   if (actionType === "subscribe") {
-    const origin = new URL(request.url).origin;
-    const returnUrl = `${origin}/app/billing`;
+    const actionUrl = new URL(request.url);
+    const returnUrlUrl = new URL("/app/billing", actionUrl.origin);
+    // Shopify returns the merchant to this embedded route after approval. Preserve the
+    // store/host context required by embedded authentication instead of dropping it.
+    for (const key of ["shop", "host", "embedded", "locale"]) {
+      const value = actionUrl.searchParams.get(key);
+      if (value) returnUrlUrl.searchParams.set(key, value);
+    }
+    const returnUrl = returnUrlUrl.toString();
     try {
       const result = await createAppSubscription(shopifyStoreId, planCode, returnUrl, admin);
       if (result.confirmationUrl && result.status === "PENDING") {
