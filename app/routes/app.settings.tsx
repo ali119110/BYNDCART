@@ -416,7 +416,7 @@ export default function Settings() {
                 <span className="bco-toggle-copy"><span className="bco-toggle-title">Auto Courier Tracking</span><span className="bco-help">Refresh live shipment status on the customer tracking page for supported couriers.</span></span>
               </label>
               <label className="bco-toggle">
-                <input type="checkbox" name="sendDeliveryUpdates" defaultChecked={Boolean(settings.courierOperationsSettings?.sendDeliveryUpdates ?? true)} />
+                <input type="checkbox" name="sendDeliveryUpdates" defaultChecked={Boolean(settings.courierOperationsSettings?.sendDeliveryUpdates ?? false)} />
                 <span className="bco-switch" aria-hidden="true" />
                 <span className="bco-toggle-copy"><span className="bco-toggle-title">Send delivery updates to customers</span><span className="bco-help">Use your saved WhatsApp template for courier tracking updates when the channel is connected.</span></span>
               </label>
