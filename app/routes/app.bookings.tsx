@@ -747,7 +747,7 @@ export default function BookingsPage() {
           type="button"
           className="bc-btn"
           style={{ marginLeft: "auto" }}
-          onClick={() => window.open("/app/awb", "_blank")}
+          onClick={() => window.open("/app/awb?autoprint=1", "_blank")}
         >
           Print Airway Bills
         </button>
