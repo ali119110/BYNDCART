@@ -1,11 +1,82 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useFetcher, useLoaderData, useSearchParams } from "react-router";
+import { Form, useEffect, useRef, useState, useFetcher, useLoaderData, useSearchParams } from "react-router";
 import prisma from "../db.server";
 import { requireTenantContext } from "../services/tenant.server";
 import { assertPermission } from "../services/permissions.server";
 import { fulfillOrderInShopify } from "../services/booking.server";
 import { cancelShipmentTrack, getStoreShipments, syncShipmentTrackingStatus, syncAllActiveShipments } from "../services/shipments.server";
 import { CourierRegistry, getDecryptedCourierCredentials } from "../services/courier.server";
+
+const ACTIVE_SHIPMENT_STATUSES = ["LABEL_CREATED", "IN_TRANSIT", "OUT_FOR_DELIVERY"] as const;
+
+function normalizeShipmentOrderNumber(value: unknown) {
+  return String(value || "").trim().replace(/^#/, "").toUpperCase();
+}
+
+function shipmentOrderNumberVariants(value: unknown) {
+  const raw = String(value || "").trim();
+  const withoutHash = raw.replace(/^#/, "");
+  return Array.from(new Set([raw, withoutHash, withoutHash ? `#${withoutHash}` : ""].filter(Boolean)));
+}
+
+/** Server-side guard shared by automatic and manual Shopify fulfillment sync. */
+async function getEligibleFulfillmentShipment(shopifyStoreId: string, shipmentId: string) {
+  const shipment = await prisma.shipmentTrack.findFirst({
+    where: {
+      id: shipmentId,
+      shopifyStoreId,
+      type: { in: ["FORWARD", "EXCHANGE"] },
+      status: { in: [...ACTIVE_SHIPMENT_STATUSES] },
+      warehouseIntakes: { none: {} },
+    },
+    select: {
+      id: true,
+      shopifyOrderId: true,
+      orderNumber: true,
+      courier: true,
+      trackingNumber: true,
+      type: true,
+      exchangeRequestId: true,
+    },
+  });
+
+  if (!shipment) {
+    throw new Error("Only active outbound shipments that have not been received at the warehouse can be synced to Shopify.");
+  }
+
+  if (shipment.type === "EXCHANGE") {
+    const numberVariants = shipmentOrderNumberVariants(shipment.orderNumber);
+    const exchange = shipment.exchangeRequestId
+      ? await prisma.exchangeRequest.findFirst({
+          where: { id: shipment.exchangeRequestId, shopifyStoreId },
+          select: { id: true, orderNumber: true, newOrderNumber: true, shopifyOrderId: true, newOrderId: true },
+        })
+      : await prisma.exchangeRequest.findFirst({
+          where: {
+            shopifyStoreId,
+            OR: [
+              { orderNumber: { in: numberVariants } },
+              { newOrderNumber: { in: numberVariants } },
+              { shopifyOrderId: shipment.shopifyOrderId },
+              { newOrderId: shipment.shopifyOrderId },
+            ],
+          },
+          select: { id: true, orderNumber: true, newOrderNumber: true, shopifyOrderId: true, newOrderId: true },
+        });
+
+    const isReplacementOrder = Boolean(
+      exchange
+      && normalizeShipmentOrderNumber(exchange.newOrderNumber) === normalizeShipmentOrderNumber(shipment.orderNumber)
+      && exchange.newOrderId
+      && exchange.newOrderId === shipment.shopifyOrderId
+    );
+    if (!isReplacementOrder) {
+      throw new Error("This exchange shipment is inbound or its replacement Shopify order cannot be verified. Fulfillment sync was skipped.");
+    }
+  }
+
+  return shipment;
+}
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { shopifyStoreId } = await requireTenantContext(request);
@@ -24,29 +95,77 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     pageSize: 10,
   });
 
+  const shipmentIds = storedShipments.map((shipment: any) => String(shipment.id)).filter(Boolean);
   const exchangeIds = Array.from(new Set(storedShipments.map((shipment: any) => shipment.exchangeRequestId).filter(Boolean)));
-  const exchanges = exchangeIds.length
+  const exchangeNumberVariants = Array.from(new Set(storedShipments
+    .filter((shipment: any) => shipment.type === "EXCHANGE")
+    .flatMap((shipment: any) => shipmentOrderNumberVariants(shipment.orderNumber))));
+  const exchangeOr: any[] = [];
+  if (exchangeIds.length) exchangeOr.push({ id: { in: exchangeIds as string[] } });
+  if (exchangeNumberVariants.length) {
+    exchangeOr.push(
+      { orderNumber: { in: exchangeNumberVariants } },
+      { newOrderNumber: { in: exchangeNumberVariants } },
+    );
+  }
+  const exchanges = exchangeOr.length
     ? await prisma.exchangeRequest.findMany({
-        where: { shopifyStoreId, id: { in: exchangeIds as string[] } },
-        select: { id: true, orderNumber: true, newOrderNumber: true },
+        where: { shopifyStoreId, OR: exchangeOr },
+        select: { id: true, orderNumber: true, newOrderNumber: true, shopifyOrderId: true, newOrderId: true },
       })
     : [];
   const exchangeMap = new Map(exchanges.map((exchange: any) => [exchange.id, exchange]));
+  const warehouseIntakes = shipmentIds.length
+    ? await prisma.warehouseIntake.findMany({
+        where: { shopifyStoreId, shipmentTrackId: { in: shipmentIds } },
+        select: { shipmentTrackId: true },
+      })
+    : [];
+  const warehouseReceivedIds = new Set(warehouseIntakes.map((intake: any) => intake.shipmentTrackId).filter(Boolean));
   const shipments = storedShipments.map((shipment: any) => {
-    const exchange = shipment.exchangeRequestId ? exchangeMap.get(shipment.exchangeRequestId) : null;
-    const normalizeOrderNumber = (value: unknown) => String(value || "").trim().replace(/^#/, "").toUpperCase();
-    const shipmentOrderKey = normalizeOrderNumber(shipment.orderNumber);
+    const shipmentOrderKey = normalizeShipmentOrderNumber(shipment.orderNumber);
+    const exchange = (shipment.exchangeRequestId ? exchangeMap.get(shipment.exchangeRequestId) : null)
+      || exchanges.find((candidate: any) =>
+        normalizeShipmentOrderNumber(candidate.orderNumber) === shipmentOrderKey
+        || normalizeShipmentOrderNumber(candidate.newOrderNumber) === shipmentOrderKey
+        || candidate.shopifyOrderId === shipment.shopifyOrderId
+        || candidate.newOrderId === shipment.shopifyOrderId
+      )
+      || null;
     const isInboundExchange = shipment.type === "EXCHANGE"
       && Boolean(exchange)
-      && shipmentOrderKey === normalizeOrderNumber((exchange as any).orderNumber);
+      && shipmentOrderKey === normalizeShipmentOrderNumber((exchange as any).orderNumber);
+    const isOutboundReplacement = shipment.type === "EXCHANGE"
+      && Boolean(exchange)
+      && shipmentOrderKey === normalizeShipmentOrderNumber((exchange as any).newOrderNumber);
+    const warehouseReceived = warehouseReceivedIds.has(shipment.id);
+    const active = (ACTIVE_SHIPMENT_STATUSES as readonly string[]).includes(String(shipment.status).toUpperCase());
+    const replacementOrderLinkValid = isOutboundReplacement
+      && Boolean((exchange as any).newOrderId)
+      && (exchange as any).newOrderId === shipment.shopifyOrderId;
+    const canSyncShopifyFulfillment = !warehouseReceived
+      && active
+      && (shipment.type === "FORWARD" || replacementOrderLinkValid);
     const flowLabel = shipment.type === "RETURN"
       ? "Inbound return"
       : shipment.type === "EXCHANGE"
-        ? (isInboundExchange ? "Inbound exchange" : "Outbound replacement")
+        ? isInboundExchange
+          ? "Inbound exchange"
+          : isOutboundReplacement
+            ? "Outbound replacement"
+            : "Exchange direction unverified"
         : "Outbound delivery";
     return {
       ...shipment,
       flowLabel,
+      warehouseReceived,
+      displayStatus: warehouseReceived ? "RECEIVED AT WAREHOUSE" : shipment.status,
+      canSyncShopifyFulfillment,
+      canRefreshTracking: !warehouseReceived && active,
+      canGenerateLoadSheet: shipment.courier === "POSTEX" && !warehouseReceived && active,
+      canCancel: !warehouseReceived && active && (CourierRegistry.has(shipment.courier)
+        ? CourierRegistry.get(shipment.courier).supportsCancellation !== false
+        : false),
       supportsCancellation: CourierRegistry.has(shipment.courier)
         ? CourierRegistry.get(shipment.courier).supportsCancellation !== false
         : false,
@@ -79,6 +198,55 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       };
     } catch (error) {
       return { success: false, error: error instanceof Error ? error.message : "Active shipment sync failed.", intent };
+    }
+  }
+
+  if (intent === "AUTO_SYNC_SHOPIFY_FULFILLMENTS") {
+    try {
+      await assertPermission(shopifyStoreId, session, "shipments");
+      let requestedIds: unknown;
+      try {
+        requestedIds = JSON.parse(String(formData.get("shipmentIds") || "[]"));
+      } catch {
+        throw new Error("Automatic fulfillment sync received an invalid shipment list.");
+      }
+      if (!Array.isArray(requestedIds)) throw new Error("Automatic fulfillment sync received an invalid shipment list.");
+      const ids = Array.from(new Set(requestedIds.map((id) => String(id || "").trim()).filter(Boolean))).slice(0, 10);
+      const results: Array<{ shipmentId: string; success: boolean; message: string }> = [];
+      for (const id of ids) {
+        try {
+          const shipment = await getEligibleFulfillmentShipment(shopifyStoreId, id);
+          const result = await fulfillOrderInShopify(admin, shipment.shopifyOrderId, shipment.courier, shipment.trackingNumber);
+          results.push({
+            shipmentId: id,
+            success: result.success,
+            message: result.success
+              ? `Shopify fulfillment is synced for ${shipment.orderNumber}.`
+              : result.error || "Shopify fulfillment could not be synced.",
+          });
+        } catch (error) {
+          results.push({
+            shipmentId: id,
+            success: false,
+            message: error instanceof Error ? error.message : "Shopify fulfillment sync failed.",
+          });
+        }
+      }
+      const syncedCount = results.filter((result) => result.success).length;
+      const failedCount = results.length - syncedCount;
+      return {
+        success: failedCount === 0,
+        intent,
+        results,
+        message: `Automatic Shopify fulfillment sync: ${syncedCount} of ${results.length} eligible outbound shipment(s) synced.${failedCount ? ` ${failedCount} require review; failed rows retain a manual retry action.` : ""}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        intent,
+        results: [],
+        error: error instanceof Error ? error.message : "Automatic Shopify fulfillment sync failed.",
+      };
     }
   }
 
@@ -127,25 +295,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     if (intent === "SYNC_SHOPIFY_FULFILLMENT") {
       await assertPermission(shopifyStoreId, session, "shipments");
-      const shipment = await prisma.shipmentTrack.findFirst({
-        where: {
-          id: shipmentId,
-          shopifyStoreId,
-          type: { in: ["FORWARD", "EXCHANGE"] },
-          status: { notIn: ["FAILED", "CANCELLED"] },
-        },
-        select: {
-          id: true,
-          shopifyOrderId: true,
-          orderNumber: true,
-          courier: true,
-          trackingNumber: true,
-          type: true,
-        },
-      });
-      if (!shipment) {
-        throw new Error("Eligible forward/replacement shipment not found for this store. Returns are never used to fulfill the original order.");
-      }
+      const shipment = await getEligibleFulfillmentShipment(shopifyStoreId, shipmentId);
 
       const fulfillment = await fulfillOrderInShopify(
         admin,
@@ -169,10 +319,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     if (intent === "REFRESH_TRACKING") {
       const shipment = await prisma.shipmentTrack.findFirst({
-        where: { id: shipmentId, shopifyStoreId },
+        where: {
+          id: shipmentId,
+          shopifyStoreId,
+          status: { in: [...ACTIVE_SHIPMENT_STATUSES] },
+          warehouseIntakes: { none: {} },
+        },
         select: { trackingNumber: true },
       });
-      if (!shipment) throw new Error("Shipment not found for this store.");
+      if (!shipment) throw new Error("Tracking refresh is only available for active shipments that have not been received at the warehouse.");
       const result = await syncShipmentTrackingStatus(shipment.trackingNumber, shopifyStoreId);
       return { success: true, intent, message: `Tracking refreshed: ${result.status.replaceAll("_", " ")}.`, shipmentId };
     }
@@ -195,6 +350,39 @@ export default function Shipments() {
   const { shipments, search, type, statusFilter, pagination } = useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
   const actionFetcher = useFetcher<typeof action>();
+  const autoSyncFetcher = useFetcher<typeof action>();
+  const autoSyncAttempted = useRef(false);
+  const [syncedShipmentIds, setSyncedShipmentIds] = useState<string[]>([]);
+  const autoSyncIds = shipments
+    .filter((shipment: any) => shipment.canSyncShopifyFulfillment)
+    .map((shipment: any) => shipment.id);
+  const autoSyncKey = autoSyncIds.join(",");
+
+  useEffect(() => {
+    if (autoSyncAttempted.current) return;
+    autoSyncAttempted.current = true;
+    if (autoSyncIds.length) {
+      autoSyncFetcher.submit(
+        { intent: "AUTO_SYNC_SHOPIFY_FULFILLMENTS", shipmentIds: JSON.stringify(autoSyncIds) },
+        { method: "post" },
+      );
+    }
+  }, [autoSyncKey, autoSyncFetcher]);
+
+  useEffect(() => {
+    const results = autoSyncFetcher.data?.results;
+    if (Array.isArray(results)) {
+      const succeeded = results.filter((result: any) => result.success).map((result: any) => result.shipmentId);
+      if (succeeded.length) setSyncedShipmentIds((current) => Array.from(new Set([...current, ...succeeded])));
+    }
+  }, [autoSyncFetcher.data]);
+
+  useEffect(() => {
+    const result = actionFetcher.data;
+    if (result?.success && result.intent === "SYNC_SHOPIFY_FULFILLMENT" && result.shipmentId) {
+      setSyncedShipmentIds((current) => Array.from(new Set([...current, result.shipmentId])));
+    }
+  }, [actionFetcher.data]);
 
   const handleSearchChange = (value: string) => {
     const next = new URLSearchParams(searchParams);
@@ -232,7 +420,7 @@ export default function Shipments() {
         <div className="bc-header-copy">
           <p className="bc-eyebrow">LOGISTICS</p>
           <h1>Shipments</h1>
-          <p>View carrier-created tracking numbers, refresh live courier statuses, download documents, and request cancellation.</p>
+          <p>Outbound Shopify fulfillments sync automatically when this page opens. Received inbound shipments need no further tracking actions.</p>
         </div>
       </header>
 
@@ -248,6 +436,16 @@ export default function Shipments() {
       {actionFetcher.data?.error && (
         <div className="bc-note bad" role="alert">
           {actionFetcher.data.error}
+        </div>
+      )}
+      {autoSyncFetcher.data?.message && (
+        <div className={`bc-note ${autoSyncFetcher.data.success ? "ok" : "warn"}`} role="status">
+          {autoSyncFetcher.data.message}
+        </div>
+      )}
+      {autoSyncFetcher.data?.error && (
+        <div className="bc-note warn" role="status">
+          Automatic fulfillment sync could not complete: {autoSyncFetcher.data.error}
         </div>
       )}
 
@@ -337,8 +535,8 @@ export default function Shipments() {
                     <td>{shipment.courier}</td>
                     <td><code>{shipment.trackingNumber}</code></td>
                     <td>
-                      <span className={shipment.status === "DELIVERED" ? "bc-badge ok" : shipment.status === "FAILED" || shipment.status === "CANCELLED" ? "bc-badge bad" : "bc-badge warn"}>
-                        {shipment.status.replaceAll("_", " ")}
+                      <span className={shipment.warehouseReceived || shipment.status === "DELIVERED" ? "bc-badge ok" : shipment.status === "FAILED" || shipment.status === "CANCELLED" ? "bc-badge bad" : "bc-badge warn"}>
+                        {shipment.displayStatus.replaceAll("_", " ")}
                       </span>
                     </td>
                     <td>
@@ -352,30 +550,34 @@ export default function Shipments() {
                     </td>
                     <td>
                       <div className="bc-shipment-row-actions">
-                        {["FORWARD", "EXCHANGE"].includes(shipment.type) && !["FAILED", "CANCELLED"].includes(shipment.status) && (
+                        {shipment.canSyncShopifyFulfillment && !syncedShipmentIds.includes(shipment.id) && (
                           <actionFetcher.Form method="post">
                             <input type="hidden" name="intent" value="SYNC_SHOPIFY_FULFILLMENT" />
                             <input type="hidden" name="shipmentId" value={shipment.id} />
-                            <button type="submit" className="bc-btn" disabled={actionFetcher.state !== "idle"}>
-                              {actionFetcher.state !== "idle" && actionFetcher.formData?.get("intent") === "SYNC_SHOPIFY_FULFILLMENT" && actionFetcher.formData?.get("shipmentId") === shipment.id
+                            <button type="submit" className="bc-btn" disabled={actionFetcher.state !== "idle" || autoSyncFetcher.state !== "idle"}>
+                              {autoSyncFetcher.state !== "idle" && autoSyncIds.includes(shipment.id)
                                 ? "Syncing Shopify…"
-                                : "Sync Shopify fulfillment"}
+                                : actionFetcher.state !== "idle" && actionFetcher.formData?.get("intent") === "SYNC_SHOPIFY_FULFILLMENT" && actionFetcher.formData?.get("shipmentId") === shipment.id
+                                  ? "Syncing Shopify…"
+                                  : "Retry Shopify fulfillment"}
                             </button>
                           </actionFetcher.Form>
                         )}
-                        {shipment.courier === "POSTEX" && shipment.status !== "CANCELLED" && shipment.status !== "DELIVERED" && (
+                        {shipment.canGenerateLoadSheet && (
                           <Form method="post" target="_blank">
                             <input type="hidden" name="intent" value="GENERATE_POSTEX_LOAD_SHEET" />
                             <input type="hidden" name="shipmentId" value={shipment.id} />
                             <button type="submit" className="bc-btn">Generate load sheet</button>
                           </Form>
                         )}
-                        <actionFetcher.Form method="post">
-                          <input type="hidden" name="intent" value="REFRESH_TRACKING" />
-                          <input type="hidden" name="shipmentId" value={shipment.id} />
-                          <button type="submit" className="bc-btn" disabled={actionFetcher.state !== "idle"}>Refresh tracking</button>
-                        </actionFetcher.Form>
-                        {!(["DELIVERED", "CANCELLED"].includes(shipment.status)) && shipment.supportsCancellation && (
+                        {shipment.canRefreshTracking && (
+                          <actionFetcher.Form method="post">
+                            <input type="hidden" name="intent" value="REFRESH_TRACKING" />
+                            <input type="hidden" name="shipmentId" value={shipment.id} />
+                            <button type="submit" className="bc-btn" disabled={actionFetcher.state !== "idle"}>Refresh tracking</button>
+                          </actionFetcher.Form>
+                        )}
+                        {shipment.canCancel && (
                           <actionFetcher.Form method="post" onSubmit={(event: any) => {
                             if (typeof window !== "undefined" && !window.confirm(`Ask ${shipment.courier} to cancel tracking ${shipment.trackingNumber}?`)) event.preventDefault();
                           }}>
