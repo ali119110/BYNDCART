@@ -17,6 +17,7 @@ import {
   seedDefaultWhatsAppTemplates,
   exchangeMetaEmbeddedSignupCode,
   dispatchWhatsAppNotification,
+  ensureMetaUtilityTemplates,
 } from "../services/whatsapp.server";
 import prisma from "../db.server";
 
@@ -135,8 +136,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     try {
-      await exchangeMetaEmbeddedSignupCode(store.id, code);
-      return { success: true, message: "WhatsApp Business connected successfully! Default templates installed." };
+      const connected = await exchangeMetaEmbeddedSignupCode(store.id, code);
+      const templateSetup = (connected as any)?.templateSetup;
+      if (templateSetup?.failed) {
+        return {
+          success: true,
+          message: `WhatsApp Business connected to ${connected.displayPhoneNumber || "the merchant's number"}. ${templateSetup.created} template(s) submitted and ${templateSetup.approved} already approved, but ${templateSetup.failed} template(s) could not be configured. See the template setup warning and server logs; Meta approval is still required before a template can send.`,
+        };
+      }
+      return {
+        success: true,
+        message: `WhatsApp Business connected to ${connected.displayPhoneNumber || "the merchant's number"}. ${templateSetup?.created || 0} dedicated template(s) submitted, ${templateSetup?.approved || 0} already approved, and ${templateSetup?.pending || 0} pending review. Outbound notifications use approved Meta templates only.`,
+      };
     } catch (err: any) {
       return { success: false, error: err.message || "Failed to link Meta WhatsApp account." };
     }
@@ -144,29 +155,57 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   // 4. Save manual WhatsApp credentials (Phone Number ID, WABA ID, Access Token)
   if (actionType === "saveWhatsAppConfig") {
-    const phoneNumberId = (formData.get("phoneNumberId") as string) || "";
-    const wabaId = (formData.get("wabaId") as string) || "";
-    const accessToken = (formData.get("accessToken") as string) || "";
-    const displayPhoneNumber = (formData.get("displayPhoneNumber") as string) || "";
-    const verifiedName = (formData.get("verifiedName") as string) || "";
+    const phoneNumberId = (formData.get("phoneNumberId") as string || "").trim();
+    const wabaId = (formData.get("wabaId") as string || "").trim();
+    const accessToken = (formData.get("accessToken") as string || "").trim();
+    const displayPhoneNumber = (formData.get("displayPhoneNumber") as string || "").trim();
+    const verifiedName = (formData.get("verifiedName") as string || "").trim();
 
-    if (!phoneNumberId || !accessToken) {
-      return { success: false, error: "Phone Number ID and Access Token are required." };
+    if (!phoneNumberId || !wabaId || !accessToken) {
+      return { success: false, error: "Phone Number ID, WhatsApp Business Account ID, and Access Token are required to verify the merchant's account and create dedicated templates." };
     }
 
     try {
-      await saveWhatsAppConfig(store.id, {
+      // Verify the actual merchant-owned phone number and token before enabling dispatch.
+      const phoneUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(phoneNumberId)}`);
+      phoneUrl.searchParams.set("fields", "id,display_phone_number,verified_name");
+      const phoneResponse = await fetch(phoneUrl, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+      const phonePayload = await phoneResponse.json().catch(() => ({}));
+      if (!phoneResponse.ok || String(phonePayload?.id || "") !== phoneNumberId) {
+        return { success: false, error: phonePayload?.error?.message || "Meta could not verify this Phone Number ID with the supplied token." };
+      }
+      const linkedNumbersUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(wabaId)}/phone_numbers`);
+      const linkedNumbersResponse = await fetch(linkedNumbersUrl, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+      const linkedNumbers = await linkedNumbersResponse.json().catch(() => ({}));
+      if (!linkedNumbersResponse.ok || !Array.isArray(linkedNumbers?.data)
+        || !linkedNumbers.data.some((item: any) => String(item?.id || "") === phoneNumberId)) {
+        return { success: false, error: linkedNumbers?.error?.message || "The Phone Number ID is not linked to the supplied WABA ID." };
+      }
+
+      const saved = await saveWhatsAppConfig(store.id, {
         phoneNumberId,
         wabaId,
         accessToken,
-        displayPhoneNumber,
-        verifiedName,
+        displayPhoneNumber: displayPhoneNumber || phonePayload.display_phone_number || "",
+        verifiedName: verifiedName || phonePayload.verified_name || "",
         connectionType: "MANUAL_TOKEN",
         enabled: true,
       });
-      return { success: true, message: "WhatsApp API connected and default automation templates installed!" };
+      let setup: any = null;
+      try {
+        setup = await ensureMetaUtilityTemplates(wabaId, accessToken);
+      } catch (templateError) {
+        return {
+          success: true,
+          message: `WhatsApp API credentials were verified and saved for ${saved.displayPhoneNumber || "the merchant's number"}, but Meta template setup failed: ${templateError instanceof Error ? templateError.message : "unknown error"}. Fix WhatsApp Business Management permissions and retry connection/template setup. Outbound messages require approved Meta templates.`,
+        };
+      }
+      return {
+        success: true,
+        message: `WhatsApp connected for ${saved.displayPhoneNumber || "the merchant's number"}. ${setup.created} dedicated template(s) submitted, ${setup.approved} already approved, and ${setup.pending} pending Meta review. Only approved templates can send.`,
+      };
     } catch (err: any) {
-      return { success: false, error: err.message || "Failed to save WhatsApp configuration." };
+      return { success: false, error: err.message || "Failed to verify WhatsApp configuration." };
     }
   }
 
@@ -214,7 +253,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     try {
       const testResult = await dispatchWhatsAppNotification({
         to: testPhone,
-        message: "Hello! This is a test alert from BYNDCART WhatsApp Cloud API. Your store notifications are functioning properly.",
+        message: "Hello! This is a test alert from BYNDCART.",
+        eventType: "LIFECYCLE_COMPLETED",
+        templateVariables: { customer_name: "BYNDCART test", order_number: "#TEST" },
         shopifyStoreId: store.id,
       });
 
@@ -703,7 +744,7 @@ export default function Notifications() {
               <div>
                 <h2 className="bc-title" style={{ margin: 0 }}>Automated WhatsApp Alerts</h2>
                 <p className="bc-muted" style={{ fontSize: "13px", marginTop: "2px" }}>
-                  Enable or customize automated customer messages triggered during order fulfillment, courier delivery, and returns.
+                  Enable merchant-facing automation settings for order, courier, return, and exchange events. Meta approval is required for every WhatsApp Business template; edited local text does not instantly change a previously approved Meta template.
                 </p>
               </div>
             </div>
