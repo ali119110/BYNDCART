@@ -420,7 +420,7 @@ export default function Settings() {
               <label className="bco-toggle">
                 <input type="checkbox" name="autoCourierTracking" defaultChecked={Boolean(settings.courierOperationsSettings?.autoCourierTracking ?? true)} />
                 <span className="bco-switch" aria-hidden="true" />
-                <span className="bco-toggle-copy"><span className="bco-toggle-title">Auto Courier Tracking</span><span className="bco-help">Refresh live shipment status on the customer tracking page for supported couriers.</span></span>
+                <span className="bco-toggle-copy"><span className="bco-toggle-title">Auto Courier Tracking</span><span className="bco-help">Refresh active shipment status in the background every 15 minutes across enabled couriers, and when a customer checks tracking.</span></span>
               </label>
               <label className="bco-toggle">
                 <input type="checkbox" name="sendDeliveryUpdates" defaultChecked={Boolean(settings.courierOperationsSettings?.sendDeliveryUpdates ?? false)} />
