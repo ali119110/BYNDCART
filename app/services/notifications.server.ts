@@ -7,6 +7,7 @@ export interface SendEmailInput {
   to: string;
   subject: string;
   html: string;
+  replyTo?: string;
 }
 
 const RESEND_API_URL = "https://api.resend.com/emails";
@@ -33,6 +34,7 @@ export async function sendEmail(input: SendEmailInput) {
       body: JSON.stringify({
         from: FROM_ADDRESS,
         to: input.to,
+        ...(input.replyTo ? { reply_to: input.replyTo } : {}),
         subject: input.subject,
         html: input.html,
       }),
@@ -382,10 +384,16 @@ export async function processNotificationJob(payload: {
     let sendResult: { success: boolean; error?: string } = { success: false };
 
     if (channel === "EMAIL") {
+      // Keep a provider-verified BYNDCART sender, but reply directly to the merchant's
+      // configured notification/support inbox. Arbitrary merchant domains cannot be
+      // used as the From address until that domain is verified by the email provider.
+      const mailSettings = await getSettings(shopifyStoreId).catch(() => null);
+      const replyTo = String(mailSettings?.notificationEmail || mailSettings?.supportEmail || "").trim();
       sendResult = await sendEmail({
         to: recipient,
         subject: renderedSubject,
         html: renderedBody,
+        ...(replyTo && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(replyTo) ? { replyTo } : {}),
       });
     } else if (channel === "WHATSAPP") {
       sendResult = await dispatchWhatsAppNotification({
