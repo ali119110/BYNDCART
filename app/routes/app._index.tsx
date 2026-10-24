@@ -334,7 +334,9 @@ export default function Dashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const shop = loaderData?.shop ?? "Connected Store";
+  const shopDomain = loaderData?.shopDomain ?? "";
   const currentRange = loaderData?.range ?? "30d";
+  const revalidator = useRevalidator();
   const dataAvailable = loaderData?.dataAvailable !== false;
   const dateRangeError = loaderData?.dateRangeError ?? null;
   const [customFrom, setCustomFrom] = React.useState(loaderData?.customFrom ?? "");
@@ -345,12 +347,11 @@ export default function Dashboard() {
     setCustomTo(loaderData?.customTo ?? "");
     setDateInputError(null);
   }, [loaderData?.customFrom, loaderData?.customTo]);
-  const historicalOrdersAccess = loaderData?.historicalOrdersAccess ?? { checked: false, hasReadAllOrders: false };
   const metrics = loaderData?.metrics ?? {
     returnsCount: 0,
     exchangesCount: 0,
     incomingExchanges: 0,
-    outgoingExchanges: 0,
+    replacementOrderRequests: 0,
     returnIntake: 0,
   };
   const operations = loaderData?.operations ?? {
@@ -359,9 +360,47 @@ export default function Dashboard() {
     inTransit: 0,
     awaitingInspection: 0,
     pendingRefunds: 0,
+    pendingRefundAmountPkr: 0,
     failedShipments: 0,
     bookedParcels: 0,
+    staleShipments: 0,
+    unreconciledCodCount: 0,
+    unreconciledCodAmount: 0,
+    disputedCod: 0,
   };
+  const health = loaderData?.health ?? {
+    syncStatus: "UNKNOWN",
+    lastSyncAt: null,
+    hasSyncError: false,
+    webhookStatus: "UNKNOWN",
+    lastReconciledAt: null,
+    failedJobs: 0,
+    unprocessedWebhooks: 0,
+  };
+
+  const withRangeContext = (href: string) => {
+    const [pathname, query = ""] = href.split("?");
+    const params = new URLSearchParams(query);
+    ["range", "from", "to", "tz"].forEach((key) => {
+      const value = searchParams.get(key);
+      if (value) params.set(key, value);
+    });
+    const suffix = params.toString();
+    return suffix ? pathname + "?" + suffix : pathname;
+  };
+
+  const formatMoneyPkr = (value: number) =>
+    dataAvailable ? "Rs. " + value.toLocaleString("en-PK", { maximumFractionDigits: 2 }) : "—";
+
+  const attentionItems = [
+    { label: "Failed shipments", count: operations.failedShipments, detail: "Carrier status needs review", to: withRangeContext("/app/shipments"), priority: 1 },
+    { label: "COD disputes", count: operations.disputedCod, detail: "Settlement values do not match", to: withRangeContext("/app/reconciliation"), priority: 1 },
+    { label: "Stale tracking", count: operations.staleShipments, detail: "No shipment update for 48+ hours", to: withRangeContext("/app/shipments"), priority: 2 },
+    { label: "Refunds awaiting confirmation", count: operations.pendingRefunds, detail: "Confirm only after checking payment evidence", to: withRangeContext("/app/refunds"), priority: 2 },
+    { label: "Warehouse inspection", count: operations.awaitingInspection, detail: "Received parcels awaiting inspection", to: withRangeContext("/app/warehouse"), priority: 2 },
+    { label: "Returns awaiting review", count: operations.pendingReturns, detail: "Return requests still pending", to: withRangeContext("/app/returns"), priority: 3 },
+    { label: "Exchanges awaiting review", count: operations.pendingExchanges, detail: "Exchange requests still pending", to: withRangeContext("/app/exchanges"), priority: 3 },
+  ].filter((item) => Number(item.count) > 0).sort((a, b) => a.priority - b.priority);
   const recentReturns = loaderData?.recentReturns ?? [];
   const recentExchanges = loaderData?.recentExchanges ?? [];
 
@@ -449,29 +488,26 @@ export default function Dashboard() {
             )}
           </div>
 
-          <div className="bc-dashboard-store" title={shop}>
+          <div className="bc-dashboard-store" title={shopDomain || shop}>
             <span className="bc-store-avatar" aria-hidden="true">
               {String(shop || "S").trim().slice(0, 1).toUpperCase() || "S"}
             </span>
             <span className="bc-store-copy">
-              <span className="bc-store-label">STORE</span>
+              <span className="bc-store-label">CONNECTED STORE</span>
               <strong>{shop}</strong>
+              <span className="bc-store-domain">{shopDomain}</span>
             </span>
           </div>
         </div>
       </header>
 
-      {historicalOrdersAccess.checked && !historicalOrdersAccess.hasReadAllOrders && (
-        <section role="status" aria-label="Historical order access notice" style={{ margin: "14px 0", padding: "12px 16px", borderRadius: "8px", border: "1px solid #e4e4e7", background: "#f4f4f5", color: "#18181b" }}>
-          <strong>Historical order access note</strong>
-          <p style={{ margin: "4px 0 0", lineHeight: 1.45, fontSize: "13px" }}>Shopify grants order access without read_all_orders scope. Older orders may need partner approval for full store history.</p>
-        </section>
-      )}
+
 
       {!dataAvailable && (
         <section className="bc-dashboard-data-error" role="alert">
           <strong>Dashboard data could not be loaded.</strong>
-          <p>Metrics are hidden instead of showing misleading zeros. Reload the dashboard; the technical error is available in the server logs.</p>
+          <p>Metrics are hidden instead of showing misleading zeros. Retry loading the dashboard; if the issue continues, contact support.</p>
+          <button type="button" className="bc-btn" onClick={() => revalidator.revalidate()}>Retry</button>
         </section>
       )}
 
@@ -485,7 +521,7 @@ export default function Dashboard() {
         </div>
 
         <div className="bc-kpi-grid">
-          <Link to="/app/returns" className="bc-kpi-card bc-kpi-link">
+          <Link to={withRangeContext("/app/returns")} className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Return requests</span>
             </div>
@@ -493,7 +529,7 @@ export default function Dashboard() {
             <span className="bc-kpi-sub">View returns</span>
           </Link>
 
-          <Link to="/app/exchanges" className="bc-kpi-card bc-kpi-link">
+          <Link to={withRangeContext("/app/exchanges")} className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Exchange requests</span>
             </div>
@@ -501,23 +537,23 @@ export default function Dashboard() {
             <span className="bc-kpi-sub">View exchanges</span>
           </Link>
 
-          <Link to="/app/warehouse" className="bc-kpi-card bc-kpi-link">
+          <Link to={withRangeContext("/app/warehouse")} className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Incoming exchanges</span>
             </div>
             <p className="bc-kpi-value">{formatCount(metrics.incomingExchanges)}</p>
-            <span className="bc-kpi-sub">Approved or received exchange requests</span>
+            <span className="bc-kpi-sub">Approved or received requests created in this range</span>
           </Link>
 
-          <Link to="/app/warehouse?tab=EXCHANGES&filter=EXCHANGED" className="bc-kpi-card bc-kpi-link">
+          <Link to={withRangeContext("/app/exchanges")} className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
-              <span className="bc-kpi-label">Outgoing exchanges</span>
+              <span className="bc-kpi-label">Replacement order linked</span>
             </div>
-            <p className="bc-kpi-value">{formatCount(metrics.outgoingExchanges)}</p>
-            <span className="bc-kpi-sub">Replacements fulfilled</span>
+            <p className="bc-kpi-value">{formatCount(metrics.replacementOrderRequests)}</p>
+            <span className="bc-kpi-sub">Requests with a replacement order recorded</span>
           </Link>
 
-          <Link to="/app/warehouse?tab=RETURNS&filter=WAREHOUSE" className="bc-kpi-card bc-kpi-link">
+          <Link to={withRangeContext("/app/warehouse?tab=RETURNS&filter=WAREHOUSE")} className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Return intake</span>
             </div>
@@ -527,29 +563,58 @@ export default function Dashboard() {
         </div>
       </section>
 
+      {/* Prioritized action center */}
+      <section className="bc-dashboard-section" aria-labelledby="bc-attention-title">
+        <div className="bc-dashboard-section-heading">
+          <div>
+            <h2 id="bc-attention-title">Needs attention</h2>
+            <p>Prioritized items that may need an action now.</p>
+          </div>
+          <span className="bc-dashboard-section-tag">{dataAvailable ? attentionItems.length + " active" : "Unavailable"}</span>
+        </div>
+        {!dataAvailable ? (
+          <div className="bc-empty-state"><strong>Action queue unavailable</strong><p>Retry loading dashboard data to see current work.</p></div>
+        ) : attentionItems.length === 0 ? (
+          <div className="bc-empty-state"><strong>No urgent items detected</strong><p>There are no open failed-shipment, COD-dispute, stale-tracking, pending-refund, or review queues right now.</p></div>
+        ) : (
+          <div className="bc-attention-list">
+            {attentionItems.map((item) => (
+              <Link key={item.label} to={item.to} className={item.priority === 1 ? "bc-attention-row is-critical" : "bc-attention-row"}>
+                <span className="bc-attention-copy">
+                  <strong>{item.label}</strong>
+                  <span>{item.detail}</span>
+                </span>
+                <span className="bc-attention-count">{formatCount(item.count)}</span>
+                <span className="bc-attention-open">Open <span aria-hidden="true">→</span></span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+
       {/* Operational Queue */}
       <section className="bc-dashboard-section" aria-labelledby="bc-operations-title">
         <div className="bc-dashboard-section-heading">
           <div>
-            <h2 id="bc-operations-title">Operational queue</h2>
-            <p>Action items requiring attention.</p>
+            <h2 id="bc-operations-title">Live operational queues</h2>
+            <p>Current backlog; these counts are not limited by the selected date range.</p>
           </div>
         </div>
 
         <div className="bc-ops-grid">
-          <Link className="bc-ops-card" to="/app/bookings">
-            <span className="bc-ops-label">Bookings ready</span>
+          <Link className="bc-ops-card" to={withRangeContext("/app/shipments")}>
+            <span className="bc-ops-label">Labels created · awaiting first scan</span>
             <span className="bc-ops-value">{formatCount(operations.bookedParcels)}</span>
           </Link>
-          <Link className={`bc-ops-card ${operations.pendingReturns > 0 ? "has-attention" : ""}`} to="/app/returns">
+          <Link className={`bc-ops-card ${operations.pendingReturns > 0 ? "has-attention" : ""}`} to={withRangeContext("/app/returns")}>
             <span className="bc-ops-label">Pending returns</span>
             <span className="bc-ops-value">{formatCount(operations.pendingReturns)}</span>
           </Link>
-          <Link className={`bc-ops-card ${operations.pendingExchanges > 0 ? "has-attention" : ""}`} to="/app/exchanges">
+          <Link className={`bc-ops-card ${operations.pendingExchanges > 0 ? "has-attention" : ""}`} to={withRangeContext("/app/exchanges")}>
             <span className="bc-ops-label">Pending exchanges</span>
             <span className="bc-ops-value">{formatCount(operations.pendingExchanges)}</span>
           </Link>
-          <Link className="bc-ops-card" to="/app/shipments?type=All">
+          <Link className="bc-ops-card" to={withRangeContext("/app/shipments?type=All")}>
             <span className="bc-ops-label">Parcels in transit</span>
             <span className="bc-ops-value">{formatCount(operations.inTransit)}</span>
           </Link>
@@ -557,14 +622,85 @@ export default function Dashboard() {
             <span className="bc-ops-label">Awaiting inspection</span>
             <span className="bc-ops-value">{formatCount(operations.awaitingInspection)}</span>
           </Link>
-          <Link className={`bc-ops-card ${operations.pendingRefunds > 0 ? "has-attention" : ""}`} to="/app/refunds">
+          <Link className={`bc-ops-card ${operations.pendingRefunds > 0 ? "has-attention" : ""}`} to={withRangeContext("/app/refunds")}>
             <span className="bc-ops-label">Refunds pending</span>
             <span className="bc-ops-value">{formatCount(operations.pendingRefunds)}</span>
           </Link>
-          <Link className={`bc-ops-card ${operations.failedShipments > 0 ? "has-error" : ""}`} to="/app/shipments">
+          <Link className={`bc-ops-card ${operations.failedShipments > 0 ? "has-error" : ""}`} to={withRangeContext("/app/shipments")}>
             <span className="bc-ops-label">Failed shipments</span>
             <span className="bc-ops-value">{formatCount(operations.failedShipments)}</span>
           </Link>
+          <Link className={operations.unreconciledCodCount > 0 ? "bc-ops-card has-attention" : "bc-ops-card"} to={withRangeContext("/app/reconciliation")}>
+            <span className="bc-ops-label">COD awaiting reconciliation</span>
+            <span className="bc-ops-value">{formatCount(operations.unreconciledCodCount)}</span>
+          </Link>
+          <Link className={operations.staleShipments > 0 ? "bc-ops-card has-attention" : "bc-ops-card"} to={withRangeContext("/app/shipments")}>
+            <span className="bc-ops-label">Tracking stale 48+ hours</span>
+            <span className="bc-ops-value">{formatCount(operations.staleShipments)}</span>
+          </Link>
+        </div>
+      </section>
+
+      {/* Financial exposure and settlement risk */}
+      <section className="bc-dashboard-section" aria-labelledby="bc-money-title">
+        <div className="bc-dashboard-section-heading">
+          <div>
+            <h2 id="bc-money-title">Money needing follow-up</h2>
+            <p>Amounts are shown only where the record explicitly stores PKR; other currencies are not converted.</p>
+          </div>
+        </div>
+        <div className="bc-money-grid">
+          <Link className="bc-money-card" to={withRangeContext("/app/refunds")}>
+            <span className="bc-kpi-label">Refund records pending</span>
+            <strong>{formatCount(operations.pendingRefunds)}</strong>
+            <span className="bc-money-amount">{formatMoneyPkr(operations.pendingRefundAmountPkr)}</span>
+            <span className="bc-money-caption">Pending amount in PKR only · not confirmed paid</span>
+          </Link>
+          <Link className="bc-money-card" to={withRangeContext("/app/reconciliation")}>
+            <span className="bc-kpi-label">Unreconciled COD records</span>
+            <strong>{formatCount(operations.unreconciledCodCount)}</strong>
+            <span className="bc-money-amount">{formatMoneyPkr(operations.unreconciledCodAmount)}</span>
+            <span className="bc-money-caption">Total expected amount across expected, imported and disputed records</span>
+          </Link>
+          <Link className="bc-money-card" to={withRangeContext("/app/reconciliation")}>
+            <span className="bc-kpi-label">COD disputes</span>
+            <strong>{formatCount(operations.disputedCod)}</strong>
+            <span className="bc-money-caption">Reconcile against courier and bank evidence</span>
+          </Link>
+        </div>
+      </section>
+
+      {/* Data freshness and integration health */}
+      <section className="bc-dashboard-section" aria-labelledby="bc-health-title">
+        <div className="bc-dashboard-section-heading">
+          <div>
+            <h2 id="bc-health-title">Data and integration health</h2>
+            <p>Freshness indicators help distinguish zero activity from delayed integrations.</p>
+          </div>
+        </div>
+        <div className="bc-health-grid">
+          <article className="bc-health-card">
+            <span className="bc-kpi-label">Shopify sync</span>
+            <strong className="bc-health-value">{dataAvailable ? health.syncStatus : "Unavailable"}</strong>
+            <span className={health.hasSyncError || health.syncStatus === "FAILED" ? "bc-health-status is-problem" : "bc-health-status"}>
+              {health.hasSyncError || health.syncStatus === "FAILED" ? "Sync error reported" : "Status reported by BYNDCART"}
+            </span>
+            <span className="bc-health-detail">Last successful sync: {health.lastSyncAt ? new Date(health.lastSyncAt).toLocaleString() : "Not recorded"}</span>
+          </article>
+          <article className="bc-health-card">
+            <span className="bc-kpi-label">Webhook registration</span>
+            <strong className="bc-health-value">{dataAvailable ? health.webhookStatus : "Unavailable"}</strong>
+            <span className={health.webhookStatus === "FAILED" ? "bc-health-status is-problem" : "bc-health-status"}>
+              {health.webhookStatus === "FAILED" ? "Registration issue reported" : "Registration status"}
+            </span>
+            <span className="bc-health-detail">Unprocessed webhook events: {formatCount(health.unprocessedWebhooks)}</span>
+          </article>
+          <article className="bc-health-card">
+            <span className="bc-kpi-label">Background jobs</span>
+            <strong className="bc-health-value">{formatCount(health.failedJobs)}</strong>
+            <span className={health.failedJobs > 0 ? "bc-health-status is-problem" : "bc-health-status"}>Failed jobs for this store</span>
+            <span className="bc-health-detail">Last COD reconciliation: {health.lastReconciledAt ? new Date(health.lastReconciledAt).toLocaleString() : "Not recorded"}</span>
+          </article>
         </div>
       </section>
 
@@ -584,7 +720,7 @@ export default function Dashboard() {
                 <h3 id="bc-recent-returns-title">Recent returns</h3>
                 <p>Latest return requests</p>
               </div>
-              <Link className="bc-text-link" to="/app/returns">View all</Link>
+              <Link className="bc-text-link" to={withRangeContext("/app/returns")}>View all</Link>
             </header>
 
             {!dataAvailable ? (
@@ -626,7 +762,7 @@ export default function Dashboard() {
                 <h3 id="bc-recent-exchanges-title">Recent exchanges</h3>
                 <p>Latest exchange requests</p>
               </div>
-              <Link className="bc-text-link" to="/app/exchanges">View all</Link>
+              <Link className="bc-text-link" to={withRangeContext("/app/exchanges")}>View all</Link>
             </header>
 
             {!dataAvailable ? (
