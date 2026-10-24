@@ -213,6 +213,7 @@ export default function AwbPrintPage() {
           }
           .awb-card {
             margin: 0 auto !important;
+            page-break-after: auto !important;
             page-break-inside: avoid !important;
             border: 2px solid #000 !important;
           }
