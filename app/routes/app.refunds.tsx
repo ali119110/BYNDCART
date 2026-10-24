@@ -1,5 +1,8 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData } from "react-router";
+import { useState } from "react";
+import prisma from "../db.server";
+import { triggerLifecycleNotification } from "../services/notifications.server";
 import { requireTenantContext } from "../utils/tenant.server";
 import { assertPermission } from "../services/permissions.server";
 import { listEvidence, saveEvidence } from "../services/evidence.server";
@@ -15,11 +18,73 @@ const REFUND_METHODS = ["SHOPIFY", "STORE_CREDIT", "BANK_TRANSFER", "EASYPAISA",
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { shopifyStoreId } = await requireTenantContext(request);
-  const [refunds, evidence] = await Promise.all([
+  const [refunds, evidence, returns, exchanges] = await Promise.all([
     listRefundRecords(shopifyStoreId),
     listEvidence(shopifyStoreId),
+    prisma.returnRequest.findMany({
+      where: { shopifyStoreId, status: { in: ["APPROVED", "COMPLETED"] } },
+      include: { items: true },
+      orderBy: { updatedAt: "desc" },
+      take: 200,
+    }),
+    prisma.exchangeRequest.findMany({
+      where: { shopifyStoreId, status: { in: ["PENDING", "APPROVED"] } },
+      include: { items: true },
+      orderBy: { updatedAt: "desc" },
+      take: 200,
+    }),
   ]);
-  return { refunds, evidence };
+
+  const shopifyOrderIds = Array.from(new Set([
+    ...returns.map((item: any) => item.shopifyOrderId),
+    ...exchanges.map((item: any) => item.shopifyOrderId),
+  ].filter(Boolean)));
+  const orders = shopifyOrderIds.length
+    ? await prisma.order.findMany({
+        where: { shopifyStoreId, shopifyOrderId: { in: shopifyOrderIds } },
+      })
+    : [];
+  const orderMap = new Map(orders.map((order: any) => [order.shopifyOrderId, order]));
+  const refundRequestKeys = new Set(refunds
+    .filter((refund) => refund.status !== "CANCELLED")
+    .flatMap((refund) => [
+      refund.returnRequestId ? `RETURN:${refund.returnRequestId}` : "",
+      refund.exchangeRequestId ? `EXCHANGE:${refund.exchangeRequestId}` : "",
+    ])
+    .filter(Boolean));
+
+  const refundableRequests = [
+    ...returns.map((item: any) => ({ ...item, requestType: "RETURN", order: orderMap.get(item.shopifyOrderId) || null })),
+    ...exchanges.map((item: any) => ({ ...item, requestType: "EXCHANGE", order: orderMap.get(item.shopifyOrderId) || null })),
+  ].filter((item: any) => !refundRequestKeys.has(`${item.requestType}:${item.id}`));
+
+  const linkedReturns = Array.from(new Set(refunds.map((refund) => refund.returnRequestId).filter(Boolean))) as string[];
+  const linkedExchanges = Array.from(new Set(refunds.map((refund) => refund.exchangeRequestId).filter(Boolean))) as string[];
+  const [refundReturnDetails, refundExchangeDetails] = await Promise.all([
+    linkedReturns.length ? prisma.returnRequest.findMany({ where: { shopifyStoreId, id: { in: linkedReturns } }, include: { items: true } }) : [],
+    linkedExchanges.length ? prisma.exchangeRequest.findMany({ where: { shopifyStoreId, id: { in: linkedExchanges } }, include: { items: true } }) : [],
+  ]);
+  const refundDetailMap = new Map<string, any>();
+  refundReturnDetails.forEach((request: any) => refundDetailMap.set(`RETURN:${request.id}`, request));
+  refundExchangeDetails.forEach((request: any) => refundDetailMap.set(`EXCHANGE:${request.id}`, request));
+  const refundOrderIds = Array.from(new Set([
+    ...refundReturnDetails.map((item: any) => item.shopifyOrderId),
+    ...refundExchangeDetails.map((item: any) => item.shopifyOrderId),
+  ].filter(Boolean)));
+  const refundOrders = refundOrderIds.length
+    ? await prisma.order.findMany({ where: { shopifyStoreId, shopifyOrderId: { in: refundOrderIds } } })
+    : [];
+  const refundOrderMap = new Map(refundOrders.map((order: any) => [order.shopifyOrderId, order]));
+  const hydratedRefunds = refunds.map((refund) => {
+    const requestType = refund.returnRequestId ? "RETURN" : "EXCHANGE";
+    const requestId = refund.returnRequestId || refund.exchangeRequestId;
+    const request = requestId ? refundDetailMap.get(`${requestType}:${requestId}`) : null;
+    const order = request ? refundOrderMap.get(request.shopifyOrderId) || null : null;
+    const linkedEvidence = evidence.filter((item) => item.returnRequestId === refund.returnRequestId || item.exchangeRequestId === refund.exchangeRequestId);
+    return { ...refund, requestType, requestDetails: request || null, orderDetails: order, linkedEvidence };
+  });
+
+  return { refunds: hydratedRefunds, evidence, refundableRequests };
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -30,14 +95,93 @@ export async function action({ request }: ActionFunctionArgs) {
 
   try {
     if (intent === "CONFIRM_REFUND") {
-      await confirmRefundRecord(String(form.get("refundId") || ""), shopifyStoreId);
-      return { ok: true, message: "Refund marked confirmed by a merchant. This is not a payment-provider receipt." };
+      const refundId = String(form.get("refundId") || "").trim();
+      const refund = await prisma.refundRecord.findFirst({ where: { id: refundId, shopifyStoreId } });
+      if (!refund) return { ok: false, message: "Refund record not found for this store." };
+      if (refund.status === "CONFIRMED") return { ok: true, message: "This refund is already confirmed." };
+
+      const proof = form.get("proof");
+      const requiresProof = !["SHOPIFY", "STORE_CREDIT"].includes(refund.method);
+      const proofFile = proof instanceof File && proof.size > 0 ? proof : null;
+      if (requiresProof && !proofFile) {
+        return { ok: false, message: "Upload the payment receipt/screenshot before confirming this refund." };
+      }
+      if (proofFile && !["image/jpeg", "image/png", "image/webp"].includes(proofFile.type)) {
+        return { ok: false, message: "Payment proof must be a JPEG, PNG, or WebP screenshot." };
+      }
+
+      const requestType = refund.returnRequestId ? "RETURN" : "EXCHANGE";
+      const requestId = refund.returnRequestId || refund.exchangeRequestId;
+      const requestRecord = requestId
+        ? requestType === "RETURN"
+          ? await prisma.returnRequest.findFirst({ where: { id: requestId, shopifyStoreId } })
+          : await prisma.exchangeRequest.findFirst({ where: { id: requestId, shopifyStoreId } })
+        : null;
+      if (!requestRecord) return { ok: false, message: "The linked return/exchange request was not found." };
+      const order = await prisma.order.findFirst({
+        where: { shopifyStoreId, shopifyOrderId: requestRecord.shopifyOrderId },
+      });
+
+      // Save the proof before changing the refund to CONFIRMED so a storage validation
+      // failure cannot leave a manually paid refund without the required receipt.
+      if (proofFile) {
+        const bytes = Buffer.from(await proofFile.arrayBuffer());
+        await saveEvidence({
+          shopifyStoreId,
+          returnRequestId: refund.returnRequestId || undefined,
+          exchangeRequestId: refund.exchangeRequestId || undefined,
+          fileName: proofFile.name || "refund-payment-proof",
+          mimeType: proofFile.type,
+          sizeBytes: bytes.byteLength,
+          contentBase64: bytes.toString("base64"),
+          uploadedBy: "MERCHANT",
+        });
+      }
+
+      await confirmRefundRecord(refundId, shopifyStoreId);
+      const customerEmail = String((requestRecord as any).customerEmail || order?.customerEmail || "").trim();
+      const customerName = String((requestRecord as any).customerName || order?.customerName || "Customer").trim();
+      const customerPhone = String(order?.customerPhone || "").trim();
+      const variables = {
+        customer_name: customerName,
+        order_number: requestRecord.orderNumber,
+        refund_amount: Number(refund.amount).toFixed(2),
+        refund_method: refund.method.replaceAll("_", " "),
+        refund_reference: refund.reference || "",
+      };
+      const notices = await Promise.all([
+        customerEmail ? triggerLifecycleNotification({
+          shopifyStoreId,
+          eventType: "REFUND_INITIATED",
+          entityId: refund.id,
+          recipientEmail: customerEmail,
+          channel: "EMAIL",
+          variables,
+        }) : Promise.resolve({ status: "SKIPPED_NO_EMAIL" }),
+        customerPhone ? triggerLifecycleNotification({
+          shopifyStoreId,
+          eventType: "REFUND_INITIATED",
+          entityId: refund.id,
+          recipientEmail: customerEmail,
+          recipientPhone: customerPhone,
+          channel: "WHATSAPP",
+          variables,
+        }) : Promise.resolve({ status: "SKIPPED_NO_PHONE" }),
+      ]);
+      const noticeSummary = notices.some((notice: any) => notice.status === "QUEUED")
+        ? " Customer notification delivery was attempted; check Notification logs for provider acceptance."
+        : " No customer contact was available, so no notification was sent.";
+      return {
+        ok: true,
+        message: `Refund payment confirmed${proofFile ? " with screenshot evidence saved" : ""}.${noticeSummary} This confirmation is a merchant record, not independent payment-provider proof.`,
+      };
     }
 
     if (intent === "ATTACH_EVIDENCE") {
       const file = form.get("file");
       const sourceUrl = String(form.get("sourceUrl") || "").trim();
       const returnRequestId = String(form.get("returnRequestId") || "").trim();
+      const exchangeRequestId = String(form.get("exchangeRequestId") || "").trim();
       if (!(file instanceof File) && !sourceUrl) {
         return { ok: false, message: "Choose a file or paste an HTTPS URL." };
       }
@@ -54,7 +198,8 @@ export async function action({ request }: ActionFunctionArgs) {
       }
       await saveEvidence({
         shopifyStoreId,
-        returnRequestId,
+        returnRequestId: returnRequestId || undefined,
+        exchangeRequestId: exchangeRequestId || undefined,
         fileName,
         mimeType,
         sizeBytes,
@@ -62,7 +207,7 @@ export async function action({ request }: ActionFunctionArgs) {
         contentBase64,
         uploadedBy: "MERCHANT",
       });
-      return { ok: true, message: "Evidence saved for this return." };
+      return { ok: true, message: "Evidence saved for this return/exchange." };
     }
 
     const method = String(form.get("method") || "");
