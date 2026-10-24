@@ -44,6 +44,26 @@ export async function loader({ request }: LoaderFunctionArgs) {
         },
       },
     });
+  } else {
+    // The Booking page's "Print Airway Bills" button intentionally opens this route
+    // without explicit IDs. Print current tenant's non-cancelled/non-failed labels
+    // instead of rendering an empty print page.
+    shipments = await prisma.shipmentTrack.findMany({
+      where: {
+        shopifyStoreId,
+        status: { notIn: ["CANCELLED", "FAILED"] },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      include: {
+        shopifyStore: {
+          select: {
+            shop: true,
+            storeSettings: true,
+          },
+        },
+      },
+    });
   }
 
   // Read one merchant-level label/profile configuration, shared by every courier.
