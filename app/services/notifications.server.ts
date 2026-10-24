@@ -7,6 +7,8 @@ export interface SendEmailInput {
   to: string;
   subject: string;
   html: string;
+  /** A merchant-configured reply address; the FROM address must still be verified by the mail provider. */
+  replyTo?: string;
 }
 
 const RESEND_API_URL = "https://api.resend.com/emails";
@@ -35,6 +37,7 @@ export async function sendEmail(input: SendEmailInput) {
         to: input.to,
         subject: input.subject,
         html: input.html,
+        ...(input.replyTo && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.replyTo) ? { reply_to: input.replyTo } : {}),
       }),
     });
 
@@ -382,10 +385,19 @@ export async function processNotificationJob(payload: {
     let sendResult: { success: boolean; error?: string } = { success: false };
 
     if (channel === "EMAIL") {
+      let merchantReplyTo: string | undefined;
+      try {
+        const settings = await getSettings(shopifyStoreId);
+        const candidate = String(settings?.notificationEmail || "").trim();
+        if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(candidate)) merchantReplyTo = candidate;
+      } catch {
+        // The platform's verified FROM address remains usable if merchant settings are unavailable.
+      }
       sendResult = await sendEmail({
         to: recipient,
         subject: renderedSubject,
         html: renderedBody,
+        replyTo: merchantReplyTo,
       });
     } else if (channel === "WHATSAPP") {
       sendResult = await dispatchWhatsAppNotification({
