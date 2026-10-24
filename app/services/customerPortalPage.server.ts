@@ -442,34 +442,38 @@ function htmlPage(branding: StoreBranding, title: string, body: string, status =
   <title>${escapeHtml(title)} — ${escapeHtml(brandName)}</title>
   <style>
     :root {
-      --bc-p-bg: #f8f9fa;
+      --bc-p-bg: #f4f6fb;
       --bc-p-surface: #ffffff;
       --bc-p-ink: #111827;
       --bc-p-muted: #6b7280;
-      --bc-p-line: #e5e7eb;
-      --bc-p-primary: #111827;
-      --bc-p-primary-hover: #1f2937;
+      --bc-p-line: #e3e8f0;
+      --bc-p-primary: #172554;
+      --bc-p-primary-hover: #1e3a8a;
       --bc-p-accent: #2563eb;
       --bc-p-success: #15803d;
       --bc-p-success-bg: #f0fdf4;
       --bc-p-danger: #b91c1c;
       --bc-p-danger-bg: #fef2f2;
-      --bc-p-radius: 10px;
+      --bc-p-radius: 14px;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: var(--bc-p-bg);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background:
+        radial-gradient(ellipse at 15% 0%, rgba(219, 234, 254, 0.48), transparent 38rem),
+        var(--bc-p-bg);
       color: var(--bc-p-ink);
-      line-height: 1.5;
+      line-height: 1.55;
       -webkit-font-smoothing: antialiased;
     }
     .portal-header {
-      background: var(--bc-p-surface);
-      border-bottom: 1px solid var(--bc-p-line);
-      padding: 20px 24px;
+      background: rgba(255, 255, 255, 0.92);
+      border-bottom: 1px solid rgba(226, 232, 240, 0.9);
+      padding: 22px 24px;
       text-align: center;
+      box-shadow: 0 4px 20px rgba(15, 23, 42, 0.025);
+      backdrop-filter: blur(12px);
     }
     .portal-logo {
       max-height: 48px;
@@ -493,9 +497,9 @@ function htmlPage(branding: StoreBranding, title: string, body: string, status =
       margin-top: 6px;
     }
     main {
-      max-width: 760px;
+      width: min(100%, 1040px);
       margin: 0 auto;
-      padding: 24px 16px 64px;
+      padding: 34px 24px 72px;
     }
     h1 { font-size: 24px; letter-spacing: -0.02em; margin: 0 0 8px; }
     h2 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
@@ -503,13 +507,36 @@ function htmlPage(branding: StoreBranding, title: string, body: string, status =
     p { margin: 0 0 12px; }
     .muted { color: var(--bc-p-muted); font-size: 13px; line-height: 1.45; }
     .portal-card {
+      min-width: 0;
       background: var(--bc-p-surface);
       border: 1px solid var(--bc-p-line);
-      border-radius: var(--bc-p-radius);
-      padding: 20px;
-      margin: 16px 0;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      border-radius: 16px;
+      padding: clamp(18px, 2.5vw, 28px);
+      margin: 18px 0;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.045), 0 1px 2px rgba(15, 23, 42, 0.025);
     }
+    .portal-card > h2 { letter-spacing: -0.02em; }
+    .portal-card .muted { max-width: 780px; }
+    .order-panel-header {
+      border-bottom: 1px solid var(--bc-p-line);
+      padding-bottom: 18px;
+      margin-bottom: 20px;
+    }
+    .portal-login-header h2 { font-size: 23px; letter-spacing: -0.03em; }
+    .portal-login-card { max-width: 560px; }
+    .order-history-card .history-row { padding: 16px 0; }
+    .history-row { overflow-wrap: anywhere; }
+    .item-card {
+      border: 1px solid var(--bc-p-line);
+      border-radius: 12px;
+      padding: 16px;
+      margin: 10px 0;
+      background: #fff;
+    }
+    .item-head { gap: 14px; align-items: flex-start; }
+    .item-image { border-radius: 10px; }
+    .portal-card .btn.primary { box-shadow: 0 4px 12px rgba(23, 37, 84, 0.12); }
+    .portal-card .btn:focus-visible { outline: 3px solid rgba(37, 99, 235, 0.24); outline-offset: 2px; }
     .portal-login-card {
       max-width: 480px;
       margin: 32px auto;
@@ -806,10 +833,20 @@ function htmlPage(branding: StoreBranding, title: string, body: string, status =
       color: #9ca3af;
     }
     .portal-footer-right strong { color: #4b5563; }
+    @media (max-width: 760px) {
+      main { padding: 20px 14px 48px; }
+      .portal-header { padding: 18px 14px; }
+      .portal-card { border-radius: 13px; }
+      .portal-login-card { margin: 18px 0; max-width: none; }
+    }
     @media (max-width: 600px) {
       .item-fields { grid-template-columns: 1fr; }
       .portal-footer-inner { flex-direction: column; align-items: flex-start; }
       .portal-footer-right { margin-left: 0; }
+      .portal-card { padding: 16px; }
+      .history-row-header { flex-wrap: wrap; }
+      .history-date { margin-left: 0; }
+      .item-head { align-items: flex-start; }
     }
   </style>
 </head>
