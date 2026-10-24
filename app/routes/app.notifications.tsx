@@ -45,6 +45,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig,
       metaAppId: process.env.META_APP_ID || process.env.WHATSAPP_APP_ID || "",
       metaConfigId: process.env.META_CONFIG_ID || "",
+      metaSolutionId: process.env.META_SOLUTION_ID || "",
       emailProviderConfigured: Boolean(process.env.RESEND_API_KEY),
       logs: logs.map((l) => ({
         ...l,
@@ -63,6 +64,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig: null,
       metaAppId: "",
       metaConfigId: "",
+      metaSolutionId: "",
       emailProviderConfigured: Boolean(process.env.RESEND_API_KEY),
       logs: [],
       loadError:
@@ -297,6 +299,7 @@ export default function Notifications() {
     emailProviderConfigured,
     metaAppId,
     metaConfigId,
+    metaSolutionId,
     logs,
     loadError,
   } = useLoaderData<typeof loader>();
@@ -434,8 +437,8 @@ export default function Notifications() {
   const launchMetaEmbeddedSignup = () => {
     if (typeof window === "undefined") return;
 
-    if (!metaAppId || !metaConfigId) {
-      alert("Meta App ID and WhatsApp Embedded Signup Configuration ID must be configured by the BYNDCART platform provider before Embedded Signup can start.");
+    if (!metaAppId || !metaConfigId || !metaSolutionId) {
+      alert("BYNDCART provider setup is incomplete. Configure META_APP_ID, META_CONFIG_ID, and META_SOLUTION_ID before Embedded Signup can onboard a merchant as a BYNDCART-connected solution.");
       setShowManualModal(true);
       return;
     }
