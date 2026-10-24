@@ -91,13 +91,17 @@ export async function createRefundRecord(input: {
   });
 }
 
-export async function confirmRefundRecord(id: string, shopifyStoreId: string) {
+export async function confirmRefundRecord(id: string, shopifyStoreId: string, reference?: string) {
   const current = await prisma.refundRecord.findFirst({ where: { id, shopifyStoreId } });
   if (!current) throw new Error("Refund record not found.");
   if (current.status === "CONFIRMED") return current;
   return prisma.refundRecord.update({
     where: { id },
-    data: { status: "CONFIRMED", confirmedAt: new Date() },
+    data: {
+      status: "CONFIRMED",
+      confirmedAt: new Date(),
+      ...(reference !== undefined ? { reference: reference.trim() || current.reference } : {}),
+    },
   });
 }
 
