@@ -262,6 +262,11 @@ export default function Settings() {
         </div>
       </header>
 
+      <nav aria-label="Settings shortcuts" style={{ display: "flex", flexWrap: "wrap", gap: "8px", margin: "0 0 16px" }}>
+        <a href="#bco-courier-workspace" className="bc-btn" style={{ textDecoration: "none" }}>Courier &amp; booking settings</a>
+        <a href="#bco-shipper-title" className="bc-btn" style={{ textDecoration: "none" }}>Shipper profiles</a>
+      </nav>
+
       <section className="bc-card bc-portal-card bc-stack" aria-labelledby="bc-portal-title">
         <div className="bc-portal-heading">
           <div className="bc-portal-icon" aria-hidden="true">
@@ -413,7 +418,7 @@ export default function Settings() {
           @media (max-width: 760px) { .bco-grid, .bco-toggle-list, .bco-profile-grid { grid-template-columns: minmax(0, 1fr); } .bco-heading { padding: 14px; } .bco-body { padding: 14px; } }
         `}</style>
 
-        <div style={{ margin: "2px 0 14px" }}>
+        <div id="bco-courier-workspace" style={{ margin: "2px 0 14px", scrollMarginTop: "24px" }}>
           <p className="bc-eyebrow" style={{ marginBottom: "5px" }}>COURIER WORKSPACE</p>
           <h2 style={{ margin: 0, color: "#0f172a", fontSize: "20px", fontWeight: 800 }}>Courier &amp; label settings</h2>
           <p className="bc-muted" style={{ margin: "5px 0 0", maxWidth: "760px" }}>
