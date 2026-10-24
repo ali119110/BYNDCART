@@ -46,6 +46,7 @@ export interface UnfulfilledOrder {
   existingShipmentId?: string;
   existingTracking?: string;
   existingCourier?: string;
+  existingShipmentStatus?: string;
 }
 
 export interface SingleBookingInput {
@@ -303,14 +304,19 @@ export async function fetchUnfulfilledOrders(
       // Keep already-booked orders visible if Shopify still says UNFULFILLED.
       // The row is locked against duplicate booking and offers a safe Shopify sync action.
       const existingShipments = await prisma.shipmentTrack.findMany({
-        where: { shopifyStoreId, type: "FORWARD", status: { notIn: ["FAILED", "CANCELLED"] } },
-        select: { id: true, shopifyOrderId: true, orderNumber: true, trackingNumber: true, courier: true },
+        where: { shopifyStoreId, type: { in: ["FORWARD", "EXCHANGE"] }, status: { not: "FAILED" } },
+        select: { id: true, shopifyOrderId: true, orderNumber: true, trackingNumber: true, courier: true, status: true },
         orderBy: { createdAt: "desc" },
       }).catch(() => []);
 
-      const bookedOrderMap = new Map<string, { id: string; trackingNumber: string; courier: string }>();
+      const bookedOrderMap = new Map<string, { id: string; trackingNumber: string; courier: string; status: string }>();
       for (const ship of existingShipments) {
-        const existingInfo = { id: String(ship.id), trackingNumber: String(ship.trackingNumber), courier: String(ship.courier) };
+        const existingInfo = {
+          id: String(ship.id),
+          trackingNumber: String(ship.trackingNumber),
+          courier: String(ship.courier),
+          status: String(ship.status || "UNKNOWN").toUpperCase(),
+        };
         if (ship.shopifyOrderId && !bookedOrderMap.has(String(ship.shopifyOrderId))) {
           bookedOrderMap.set(String(ship.shopifyOrderId), existingInfo);
         }
@@ -368,8 +374,12 @@ export async function fetchUnfulfilledOrders(
         }));
 
         const existingInfo = bookedOrderMap.get(String(node.id)) || bookedOrderMap.get(`orderNumber:${orderNumber}`);
-        const alreadyBooked = Boolean(existingInfo)
-          || tags.some((t: string) => t.toLowerCase().startsWith("booked-") || t.toLowerCase().startsWith("cn:"));
+        const existingShipmentIsActive = Boolean(existingInfo && !["FAILED", "CANCELLED"].includes(existingInfo.status));
+        const hasBookingTag = tags.some((t: string) => t.toLowerCase().startsWith("booked-") || t.toLowerCase().startsWith("cn:"));
+        // A cancellation confirmed by the carrier releases the order for rebooking, even
+        // if an old Shopify booking tag remains. An orphan tag without a local shipment
+        // still requires manual review so a duplicate carrier label is never created.
+        const alreadyBooked = existingShipmentIsActive || (!existingInfo && hasBookingTag);
 
         return {
           id: node.id,
@@ -401,6 +411,7 @@ export async function fetchUnfulfilledOrders(
           alreadyBooked,
           existingShipmentId: existingInfo?.id,
           existingTracking: existingInfo?.trackingNumber,
+          existingShipmentStatus: existingInfo?.status,
           existingCourier: existingInfo?.courier,
         };
       });
@@ -424,21 +435,26 @@ export async function fetchUnfulfilledOrders(
       take: limit,
     }).catch(() => []);
 
-    const existingShipments = await prisma.shipmentTrack.findMany({
-      where: { shopifyStoreId, type: "FORWARD", status: { notIn: ["FAILED", "CANCELLED"] } },
-      select: { id: true, shopifyOrderId: true, orderNumber: true, trackingNumber: true, courier: true },
-      orderBy: { createdAt: "desc" },
-    }).catch(() => []);
+      const existingShipments = await prisma.shipmentTrack.findMany({
+        where: { shopifyStoreId, type: { in: ["FORWARD", "EXCHANGE"] }, status: { not: "FAILED" } },
+        select: { id: true, shopifyOrderId: true, orderNumber: true, trackingNumber: true, courier: true, status: true },
+        orderBy: { createdAt: "desc" },
+      }).catch(() => []);
 
-    const bookedOrderMap = new Map<string, { id: string; trackingNumber: string; courier: string }>();
-    for (const ship of existingShipments) {
-      const existingInfo = { id: String(ship.id), trackingNumber: String(ship.trackingNumber), courier: String(ship.courier) };
-      if (ship.shopifyOrderId && !bookedOrderMap.has(String(ship.shopifyOrderId))) {
-        bookedOrderMap.set(String(ship.shopifyOrderId), existingInfo);
+      const bookedOrderMap = new Map<string, { id: string; trackingNumber: string; courier: string; status: string }>();
+      for (const ship of existingShipments) {
+        const existingInfo = {
+          id: String(ship.id),
+          trackingNumber: String(ship.trackingNumber),
+          courier: String(ship.courier),
+          status: String(ship.status || "UNKNOWN").toUpperCase(),
+        };
+        if (ship.shopifyOrderId && !bookedOrderMap.has(String(ship.shopifyOrderId))) {
+          bookedOrderMap.set(String(ship.shopifyOrderId), existingInfo);
+        }
+        const orderNumberKey = `orderNumber:${String(ship.orderNumber)}`;
+        if (!bookedOrderMap.has(orderNumberKey)) bookedOrderMap.set(orderNumberKey, existingInfo);
       }
-      const orderNumberKey = `orderNumber:${String(ship.orderNumber)}`;
-      if (!bookedOrderMap.has(orderNumberKey)) bookedOrderMap.set(orderNumberKey, existingInfo);
-    }
 
     const mappedOrders: UnfulfilledOrder[] = dbOrders.map((order) => {
       const orderNumber = order.orderNumber;
@@ -467,7 +483,7 @@ export async function fetchUnfulfilledOrders(
       const matchedCity = matchPakistaniCity(rawCity, fullAddress);
 
       const existingInfo = bookedOrderMap.get(String(order.shopifyOrderId)) || bookedOrderMap.get(`orderNumber:${orderNumber}`);
-      const alreadyBooked = Boolean(existingInfo);
+      const alreadyBooked = Boolean(existingInfo && !["FAILED", "CANCELLED"].includes(existingInfo.status));
 
       return {
         id: order.shopifyOrderId,
