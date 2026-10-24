@@ -93,7 +93,7 @@ export default function Analytics() {
     ...monthlyTrend.map((t) => Math.max(t.returnsCount, t.exchangesCount))
   );
 
-  const maxProductReturnCount = Math.max(1, ...topReturnedProducts.map((p) => p.requestedUnits));
+  const maxProductReturnCount = Math.max(1, ...topReturnedProducts.map((p) => p.receivedUnits));
 
   // Top 5 reasons and top 5 products (enforce max 5)
   const displayReasons = returnReasons.slice(0, 5);
@@ -244,7 +244,7 @@ export default function Analytics() {
         </div>
       </section>
 
-      {/* Top 5 Return Reasons Breakdown + Top 5 Products by Return Units Requested */}
+      {/* Return reason breakdown + product/SKU return performance */}
       <div className="bc-split">
         <section className="bc-card">
           <h2 className="bc-title">Top 5 Return Reasons</h2>
@@ -277,23 +277,30 @@ export default function Analytics() {
         </section>
 
         <section className="bc-card">
-          <h2 className="bc-title">Top 5 Most-Returned Products</h2>
+          <h2 className="bc-title">Product / SKU Return Performance</h2>
+          <p className="bc-muted">Ranked by received/inspected units for orders placed in the selected period. Returns may be received later.</p>
           {!dataAvailable ? (
             <p className="bc-muted">Product data unavailable until analytics loads successfully.</p>
           ) : displayProducts.length === 0 ? (
-            <p className="bc-muted">This fills in after orders sync and return requests exist.</p>
+            <p className="bc-muted">Product return performance appears once orders and warehouse item statuses have synced.</p>
           ) : (
             <div className="bc-stack">
               {displayProducts.map((p, idx) => (
-                <div key={idx} style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
-                    <span>{p.title}</span>
-                    <strong>{p.requestedUnits} {p.requestedUnits === 1 ? "requested unit" : "requested units"}</strong>
+                <div key={p.productKey || idx} style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px", fontSize: "13px" }}>
+                    <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>
+                      {p.title}{p.sku ? ` · SKU ${p.sku}` : ""}
+                    </span>
+                    <strong style={{ whiteSpace: "nowrap" }}>{p.unitReturnRate === null ? "Rate N/A" : p.unitReturnRate + "%"}</strong>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "11px", color: "#6b7280" }}>
+                    <span>{p.receivedUnits} received / inspected</span>
+                    <span>{p.soldUnits} sold · {p.requestedUnits} requested</span>
                   </div>
                   <div style={{ width: "100%", height: "6px", background: "#e1e3e5", borderRadius: "3px" }}>
                     <div
                       style={{
-                        width: `${(p.requestedUnits / maxProductReturnCount) * 100}%`,
+                        width: `${(p.receivedUnits / maxProductReturnCount) * 100}%`,
                         height: "100%",
                         background: "#263f8c",
                         borderRadius: "3px",
