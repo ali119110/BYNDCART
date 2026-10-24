@@ -185,7 +185,7 @@ function leopardsApiRoot(_credentials?: any): string {
   return LEOPARDS_PRODUCTION_API_ROOT;
 }
 
-type LeopardsCity = { id: number | string; name: string; allow_as_origin?: boolean; allow_as_destination?: boolean };
+type LeopardsCity = { id: number | string; name: string; shipment_type?: string[] | string; allow_as_origin?: boolean; allow_as_destination?: boolean };
 
 function credentialValue(credentials: any, key: string): string {
   const value = credentials?.[key] ?? credentials?.credentials?.[key];
@@ -219,6 +219,21 @@ async function loadLeopardsCities(apiKey: string, apiPassword: string, apiRoot =
     throw new Error(apiPayloadMessage(payload, "Leopards did not return a valid city list. Verify the API key/password and production access."));
   }
   return payload.city_list as LeopardsCity[];
+}
+
+function leopardsCityShipmentTypes(city: LeopardsCity | undefined): string[] {
+  const rawTypes = city?.shipment_type;
+  const candidates = Array.isArray(rawTypes)
+    ? rawTypes
+    : typeof rawTypes === "string"
+      ? rawTypes.split(/[,;|]/)
+      : [];
+  return uniqueOptionStringsInOrder(candidates.map((value) => String(value || "").trim()));
+}
+
+function sameLeopardsCityName(left: string, right: string): boolean {
+  return left.trim().toLocaleLowerCase().replace(/\s+/g, " ")
+    === right.trim().toLocaleLowerCase().replace(/\s+/g, " ");
 }
 
 function resolveLeopardsCityId(cities: LeopardsCity[], cityName: string, purpose: "origin" | "destination"): number {
@@ -728,6 +743,22 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
       return unconfirmedBooking(this.providerName, error instanceof Error ? error.message : "Could not resolve Leopards origin/destination cities.");
     }
 
+    const destinationCityRecord = cities.find((city) => sameLeopardsCityName(String(city.name || ""), receiverCityName));
+    const cityShipmentTypes = leopardsCityShipmentTypes(destinationCityRecord);
+    if (!cityShipmentTypes.length) {
+      return unconfirmedBooking(this.providerName, `Leopards did not return supported shipment types for destination city "${receiverCityName}". Refresh the Leopards city catalog before booking.`);
+    }
+    const requestedServiceType = String(input.courierServiceType || "").trim();
+    const selectedServiceType = requestedServiceType
+      ? cityShipmentTypes.find((type) => type.toLocaleLowerCase() === requestedServiceType.toLocaleLowerCase())
+      : cityShipmentTypes[0];
+    if (!selectedServiceType) {
+      return unconfirmedBooking(
+        this.providerName,
+        `Leopards does not support shipment type "${requestedServiceType}" for ${receiverCityName}. Available types: ${cityShipmentTypes.join(", ")}.`,
+      );
+    }
+
     let shipmentId: number;
     try { shipmentId = extractNumericShopifyId(input.orderId); }
     catch (error) { return unconfirmedBooking(this.providerName, error instanceof Error ? error.message : "Shopify order ID is invalid."); }
@@ -755,6 +786,7 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
       shipment_email: sender.email,
       shipment_phone: sender.phone,
       shipment_address: sender.address,
+      shipment_type: selectedServiceType,
       consignment_name_eng: receiver.name,
       consignment_email: receiver.email,
       consignment_phone: receiver.phone,
@@ -2003,7 +2035,7 @@ type FetchedMerchantCourierBookingOptions = MerchantCourierBookingOptions & {
 
 type PersistedMerchantCourierBookingOptions = FetchedMerchantCourierBookingOptions & {
   /** Increment to invalidate city catalogs created by a previous provider-lookup contract. */
-  cacheVersion: 2;
+  cacheVersion: 3;
   credentialFingerprint: string;
   cachedAt: string;
 };
@@ -2137,16 +2169,20 @@ async function fetchMerchantCourierBookingOptionsUncached(
     const pickupCities = uniqueOptionStrings(cities
       .filter((city) => city.allow_as_origin !== false && String(city.allow_as_origin).toLowerCase() !== "false" && String(city.allow_as_origin) !== "0")
       .map((city) => city.name));
-    const deliveryCities = uniqueOptionStrings(cities
-      .filter((city) => city.allow_as_destination !== false && String(city.allow_as_destination).toLowerCase() !== "false" && String(city.allow_as_destination) !== "0")
-      .map((city) => city.name));
+    const deliveryCityRecords = cities
+      .filter((city) => city.allow_as_destination !== false && String(city.allow_as_destination).toLowerCase() !== "false" && String(city.allow_as_destination) !== "0");
+    const deliveryCities = uniqueOptionStrings(deliveryCityRecords.map((city) => city.name));
+    const serviceTypes = uniqueOptionStringsInOrder(deliveryCityRecords.flatMap((city) => leopardsCityShipmentTypes(city)));
+    if (!serviceTypes.length) {
+      throw new Error("Leopards returned its city list but no shipment_type values. Refresh the courier connection or ask Leopards for the current eCom API city-list contract.");
+    }
     return {
       providerName: provider,
       pickupCities,
       deliveryCities,
-      serviceTypes: ["Normal", "Reverse", "Replacement"],
+      serviceTypes,
       citySource: "carrier_api",
-      serviceTypeSource: "integration",
+      serviceTypeSource: "carrier_api",
       cityRecords: cities,
     };
   }
@@ -2198,7 +2234,7 @@ function isValidPersistedBookingOptions(
 ): value is PersistedMerchantCourierBookingOptions {
   return Boolean(
     value
-    && value.cacheVersion === 2
+    && value.cacheVersion === 3
     && value.providerName === provider
     && value.credentialFingerprint === fingerprint
     && typeof value.cachedAt === "string"
@@ -2260,7 +2296,7 @@ export async function getMerchantCourierBookingOptions(
   const fetched = await fetchMerchantCourierBookingOptionsUncached(shopifyStoreId, provider);
   const persisted: PersistedMerchantCourierBookingOptions = {
     ...fetched,
-    cacheVersion: 2,
+    cacheVersion: 3,
     credentialFingerprint,
     cachedAt: new Date().toISOString(),
   };
