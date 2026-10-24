@@ -43,6 +43,7 @@ export interface UnfulfilledOrder {
   items: BookingLineItem[];
   tags: string[];
   alreadyBooked: boolean;
+  existingShipmentId?: string;
   existingTracking?: string;
   existingCourier?: string;
 }
@@ -299,15 +300,22 @@ export async function fetchUnfulfilledOrders(
         .map((edge: any) => edge.node)
         .filter((node: any) => String(node?.displayFulfillmentStatus || "").toUpperCase() === "UNFULFILLED");
 
-      // Get all existing active forward shipments for this store to identify already booked orders
+      // Keep already-booked orders visible if Shopify still says UNFULFILLED.
+      // The row is locked against duplicate booking and offers a safe Shopify sync action.
       const existingShipments = await prisma.shipmentTrack.findMany({
-        where: { shopifyStoreId, type: "FORWARD", status: { not: "FAILED" } },
-        select: { orderNumber: true, trackingNumber: true, courier: true },
+        where: { shopifyStoreId, type: "FORWARD", status: { notIn: ["FAILED", "CANCELLED"] } },
+        select: { id: true, shopifyOrderId: true, orderNumber: true, trackingNumber: true, courier: true },
+        orderBy: { createdAt: "desc" },
       }).catch(() => []);
 
-      const bookedOrderMap = new Map<string, { trackingNumber: string; courier: string }>();
+      const bookedOrderMap = new Map<string, { id: string; trackingNumber: string; courier: string }>();
       for (const ship of existingShipments) {
-        bookedOrderMap.set(ship.orderNumber, { trackingNumber: ship.trackingNumber, courier: ship.courier });
+        const existingInfo = { id: String(ship.id), trackingNumber: String(ship.trackingNumber), courier: String(ship.courier) };
+        if (ship.shopifyOrderId && !bookedOrderMap.has(String(ship.shopifyOrderId))) {
+          bookedOrderMap.set(String(ship.shopifyOrderId), existingInfo);
+        }
+        const orderNumberKey = `orderNumber:${String(ship.orderNumber)}`;
+        if (!bookedOrderMap.has(orderNumberKey)) bookedOrderMap.set(orderNumberKey, existingInfo);
       }
 
       // Map Shopify nodes to UnfulfilledOrder — extracts real customer/address data
@@ -359,10 +367,9 @@ export async function fetchUnfulfilledOrders(
           price: Number(e.node.originalUnitPriceSet?.shopMoney?.amount || 0),
         }));
 
-        const alreadyBooked =
-          bookedOrderMap.has(orderNumber) ||
-          tags.some((t: string) => t.toLowerCase().startsWith("booked-") || t.toLowerCase().startsWith("cn:"));
-        const existingInfo = bookedOrderMap.get(orderNumber);
+        const existingInfo = bookedOrderMap.get(String(node.id)) || bookedOrderMap.get(`orderNumber:${orderNumber}`);
+        const alreadyBooked = Boolean(existingInfo)
+          || tags.some((t: string) => t.toLowerCase().startsWith("booked-") || t.toLowerCase().startsWith("cn:"));
 
         return {
           id: node.id,
@@ -392,13 +399,16 @@ export async function fetchUnfulfilledOrders(
           items,
           tags,
           alreadyBooked,
+          existingShipmentId: existingInfo?.id,
           existingTracking: existingInfo?.trackingNumber,
           existingCourier: existingInfo?.courier,
         };
       });
 
-      // Do not offer an order again if a forward label already exists, or Shopify has its booking tag.
-      return mappedOrders.filter((order) => !order.alreadyBooked);
+      // Do not hide Shopify-unfulfilled orders merely because a courier booking already exists.
+      // Already-booked rows are visible and read-only; the UI lets the operator sync Shopify
+      // against the saved shipment instead of submitting a second carrier booking.
+      return mappedOrders;
     } catch (error) {
       console.error("[Booking] Live Shopify GraphQL query failed; refusing stale database orders:", error);
       const details = error instanceof Error ? error.message : "Unknown Shopify GraphQL error.";
@@ -415,13 +425,19 @@ export async function fetchUnfulfilledOrders(
     }).catch(() => []);
 
     const existingShipments = await prisma.shipmentTrack.findMany({
-      where: { shopifyStoreId, type: "FORWARD", status: { not: "FAILED" } },
-      select: { orderNumber: true, trackingNumber: true, courier: true },
+      where: { shopifyStoreId, type: "FORWARD", status: { notIn: ["FAILED", "CANCELLED"] } },
+      select: { id: true, shopifyOrderId: true, orderNumber: true, trackingNumber: true, courier: true },
+      orderBy: { createdAt: "desc" },
     }).catch(() => []);
 
-    const bookedOrderMap = new Map<string, { trackingNumber: string; courier: string }>();
+    const bookedOrderMap = new Map<string, { id: string; trackingNumber: string; courier: string }>();
     for (const ship of existingShipments) {
-      bookedOrderMap.set(ship.orderNumber, { trackingNumber: ship.trackingNumber, courier: ship.courier });
+      const existingInfo = { id: String(ship.id), trackingNumber: String(ship.trackingNumber), courier: String(ship.courier) };
+      if (ship.shopifyOrderId && !bookedOrderMap.has(String(ship.shopifyOrderId))) {
+        bookedOrderMap.set(String(ship.shopifyOrderId), existingInfo);
+      }
+      const orderNumberKey = `orderNumber:${String(ship.orderNumber)}`;
+      if (!bookedOrderMap.has(orderNumberKey)) bookedOrderMap.set(orderNumberKey, existingInfo);
     }
 
     const mappedOrders: UnfulfilledOrder[] = dbOrders.map((order) => {
@@ -450,8 +466,8 @@ export async function fetchUnfulfilledOrders(
       const fullAddress = [address1, address2].filter(Boolean).join(", ");
       const matchedCity = matchPakistaniCity(rawCity, fullAddress);
 
-      const alreadyBooked = bookedOrderMap.has(orderNumber);
-      const existingInfo = bookedOrderMap.get(orderNumber);
+      const existingInfo = bookedOrderMap.get(String(order.shopifyOrderId)) || bookedOrderMap.get(`orderNumber:${orderNumber}`);
+      const alreadyBooked = Boolean(existingInfo);
 
       return {
         id: order.shopifyOrderId,
@@ -480,7 +496,7 @@ export async function fetchUnfulfilledOrders(
         existingCourier: existingInfo?.courier,
       };
     });
-    return mappedOrders.filter((order) => !order.alreadyBooked);
+    return mappedOrders;
   } catch (error) {
     console.error("[Booking] Database fallback for unfulfilled orders failed:", error);
     return [];
