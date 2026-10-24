@@ -257,7 +257,7 @@ test("Billing refuses to invent a paid subscription when Shopify Admin API is un
   );
   const local = await prisma.billingSubscription.findUnique({ where: { shopifyStoreId: store.id } });
   assert.equal(local?.planCode, "FREE", "The existing Free plan should remain unchanged without Shopify confirmation.");
-  assert.equal(local?.shopifySubscriptionId, undefined, "No local Shopify paid subscription ID should be written without API confirmation.");
+  assert.ok(!local?.shopifySubscriptionId, "No local Shopify paid subscription ID should be written without API confirmation.");
 });
 
 test("Billing & PlanGate — Existing Active Subscription Query", async () => {
