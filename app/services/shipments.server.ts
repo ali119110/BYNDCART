@@ -465,6 +465,21 @@ export async function syncShipmentTrackingStatus(trackingNumber: string, shopify
     throw new Error(`Shipment with tracking number ${trackingNumber} not found.`);
   }
 
+  const warehouseIntake = await prisma.warehouseIntake.findFirst({
+    where: { shopifyStoreId: shipment.shopifyStoreId, shipmentTrackId: shipment.id },
+    select: { id: true },
+  });
+  if (warehouseIntake) {
+    return {
+      success: true,
+      trackingNumber,
+      status: shipment.status as StandardShipmentStatus,
+      location: shipment.location,
+      skipped: true,
+      reason: "Shipment has already been received at the warehouse.",
+    };
+  }
+
   const adapter = CourierRegistry.get(shipment.courier);
   if (!adapter.isLive) throw new Error(`${adapter.displayName} tracking is disabled in BYNDCART.`);
   const credentials = await getDecryptedCourierCredentials(shipment.shopifyStoreId, adapter.providerName);
@@ -729,6 +744,7 @@ export async function getStoreShipments(shopifyStoreId: string, options: GetShip
 
   const mapped: any = shipments.map((s) => ({
     id: s.id,
+    shopifyOrderId: s.shopifyOrderId,
     orderNumber: s.orderNumber,
     type: s.type,
     courier: s.courier,
@@ -766,6 +782,7 @@ export async function syncAllActiveShipments(shopifyStoreId: string) {
     where: {
       shopifyStoreId,
       status: { in: ["LABEL_CREATED", "IN_TRANSIT", "OUT_FOR_DELIVERY"] },
+      warehouseIntakes: { none: {} },
     },
     select: { trackingNumber: true },
     take: 25,
