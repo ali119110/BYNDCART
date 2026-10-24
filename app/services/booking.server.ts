@@ -617,6 +617,15 @@ async function sharedCourierRuleTags(
   return Array.from(tags);
 }
 
+async function scheduleCourierTrackingRefresh(shopifyStoreId: string): Promise<void> {
+  try {
+    const { ensureCourierTrackingScheduled } = await import("../worker.server");
+    await ensureCourierTrackingScheduled(shopifyStoreId);
+  } catch (error) {
+    console.warn("[Booking] Shipment was saved, but automatic tracking could not be queued:", error);
+  }
+}
+
 /**
  * Adds tracking tags plus the shared trust/duplicate tags to a Shopify order.
  */
@@ -803,6 +812,7 @@ export async function bookCourierShipment(
           shipperProfileIndex,
         },
       });
+      await scheduleCourierTrackingRefresh(shopifyStoreId);
 
       // Fulfill in Shopify
       const fulfillment = await fulfillOrderInShopify(admin, input.orderId, "RIDER", trackingNumber);
@@ -953,6 +963,7 @@ export async function bookCourierShipment(
         shipperProfileIndex,
       },
     });
+    await scheduleCourierTrackingRefresh(shopifyStoreId);
 
     // A reverse pickup must not fulfill the original Shopify order.
     const fulfillment = shipmentType === "RETURN"
