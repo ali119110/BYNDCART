@@ -1,9 +1,8 @@
 import React from "react";
-import { useLoaderData, useSearchParams, Link } from "react-router";
+import { useLoaderData, useSearchParams, Link, useRevalidator } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { requireTenantContext } from "../utils/tenant.server";
 import prisma from "../db.server";
-import { executeInitialShopifySync } from "../services/shopifySync.server";
 
 function isValidTimeZone(value: string): boolean {
   try {
@@ -85,7 +84,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
         startDate = candidateStart;
         endExclusiveDate = candidateEnd;
       } else {
-        // Never silently use an invalid custom range. Disclose the 30-day fallback.
         startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
         endExclusiveDate = now;
         dateRangeError = "Choose a valid start and end date. The dashboard is temporarily showing the last 30 days.";
@@ -94,147 +92,245 @@ export async function loader({ request }: LoaderFunctionArgs) {
       const days = Number(range.slice(0, -1));
       startDate = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
       endExclusiveDate = now;
-    } // "all" intentionally leaves both bounds undefined.
+    }
 
-    const dateFilter = startDate || endExclusiveDate
+    const requestDateFilter = startDate || endExclusiveDate
       ? { createdAt: { ...(startDate ? { gte: startDate } : {}), ...(endExclusiveDate ? { lt: endExclusiveDate } : {}) } }
       : {};
+    const receivedDateFilter = startDate || endExclusiveDate
+      ? { receivedAt: { ...(startDate ? { gte: startDate } : {}), ...(endExclusiveDate ? { lt: endExclusiveDate } : {}) } }
+      : {};
+    const staleBefore = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+    const unsettledCodStatuses = ["EXPECTED", "IMPORTED", "DISPUTED"];
 
-    let store = await prisma.shopifyStore.findUnique({
+    const store = await prisma.shopifyStore.findUnique({
       where: { id: shopifyStoreId },
       select: {
         shop: true,
         syncStatus: true,
         lastSyncAt: true,
+        lastSyncError: true,
+        webhookStatus: true,
+        lastReconciledAt: true,
       },
     });
 
-    // Auto-trigger sync if syncStatus is PENDING or lastSyncAt is missing
-    if (store && (store.syncStatus === "PENDING" || !store.lastSyncAt) && admin) {
-      try {
-        await executeInitialShopifySync({ shopifyStoreId, admin });
-        store = await prisma.shopifyStore.findUnique({
-          where: { id: shopifyStoreId },
-          select: {
-            shop: true,
-            syncStatus: true,
-            lastSyncAt: true,
-          },
-        });
-      } catch (syncErr) {
-        console.error("[Dashboard Loader] Auto-sync attempt failed:", syncErr);
-      }
-    }
+    // Resolve a friendly Shopify shop name without blocking database queries.
+    // If Shopify is temporarily unavailable, safely fall back to the tenant's store domain.
+    const identityPromise: Promise<{ name: string; domain: string }> = admin
+      ? admin.graphql("query DashboardShopIdentity { shop { name primaryDomain { url } } }")
+          .then(async (response: any) => {
+            const payload = await response.json();
+            const shop = payload?.data?.shop;
+            return {
+              name: typeof shop?.name === "string" && shop.name.trim() ? shop.name.trim() : (store?.shop ?? "Connected Store"),
+              domain: typeof shop?.primaryDomain?.url === "string" && shop.primaryDomain.url.trim() ? shop.primaryDomain.url.trim() : (store?.shop ?? ""),
+            };
+          })
+          .catch(() => ({ name: store?.shop ?? "Connected Store", domain: store?.shop ?? "" }))
+      : Promise.resolve({ name: store?.shop ?? "Connected Store", domain: store?.shop ?? "" });
 
-    let historicalOrdersAccess = { checked: false, hasReadAllOrders: false };
-    if (admin) {
-      try {
-        const scopeResponse = await admin.graphql(`
-          query DashboardAccessScopes {
-            currentAppInstallation { accessScopes { handle } }
-          }
-        `);
-        const scopePayload = await scopeResponse.json();
-        if (scopePayload?.errors?.length) {
-          throw new Error(scopePayload.errors.map((entry: any) => entry.message).join("; "));
-        }
-        const scopes = scopePayload?.data?.currentAppInstallation?.accessScopes;
-        if (Array.isArray(scopes)) {
-          historicalOrdersAccess = {
-            checked: true,
-            hasReadAllOrders: scopes.some((scope: any) => scope.handle === "read_all_orders"),
-          };
-        }
-      } catch (scopeError) {
-        console.warn("[Dashboard Loader] Could not determine historical-order access:", scopeError);
-      }
-    }
-
-    // Query real counts from Database with date filter where relevant
-    const [
-      returnsCount,
-      exchangesCount,
-      incomingExchanges,
-      outgoingExchanges,
-      returnIntake,
-      recentReturnsDb,
-      recentExchangesDb,
-      pendingReturns,
-      pendingExchanges,
-      inTransit,
-      awaitingInspection,
-      pendingRefunds,
-      failedShipments,
-      bookedParcels,
-    ] = await Promise.all([
-      // Total return requests in range
-      prisma.returnRequest.count({ where: { shopifyStoreId, ...dateFilter } }),
-      // Total exchange requests in range
-      prisma.exchangeRequest.count({ where: { shopifyStoreId, ...dateFilter } }),
-      // Incoming Exchanges: customer parcels returning to warehouse (APPROVED or RECEIVED)
+    const queryPromise = Promise.all([
+      prisma.returnRequest.count({ where: { shopifyStoreId, ...requestDateFilter } }),
+      prisma.exchangeRequest.count({ where: { shopifyStoreId, ...requestDateFilter } }),
       prisma.exchangeRequest.count({
-        where: { shopifyStoreId, status: { in: ["APPROVED", "RECEIVED"] }, ...dateFilter },
+        where: { shopifyStoreId, status: { in: ["APPROVED", "RECEIVED"] }, ...requestDateFilter },
       }),
-      // Outgoing Exchanges: replacement parcels sent to customers (FULFILLED or COMPLETED)
       prisma.exchangeRequest.count({
-        where: { shopifyStoreId, status: { in: ["FULFILLED", "COMPLETED"] }, ...dateFilter },
+        where: { shopifyStoreId, newOrderId: { not: null }, ...requestDateFilter },
       }),
-      // Count historical inbound return intakes, including ones already inspected.
       prisma.warehouseIntake.count({
         where: {
           shopifyStoreId,
           returnRequestId: { not: null },
           status: { in: ["RECEIVED", "INSPECTED"] },
-          ...dateFilter,
+          ...receivedDateFilter,
         },
       }),
-      // Recent returns
       prisma.returnRequest.findMany({
-        where: { shopifyStoreId, ...dateFilter },
+        where: { shopifyStoreId, ...requestDateFilter },
         take: 5,
         orderBy: { createdAt: "desc" },
       }),
-      // Recent exchanges
       prisma.exchangeRequest.findMany({
-        where: { shopifyStoreId, ...dateFilter },
+        where: { shopifyStoreId, ...requestDateFilter },
         take: 5,
         orderBy: { createdAt: "desc" },
         include: { items: true },
       }),
-      // Operational queues
-      prisma.returnRequest.count({ where: { shopifyStoreId, status: "PENDING" } }),
-      prisma.exchangeRequest.count({ where: { shopifyStoreId, status: "PENDING" } }),
-      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: { in: ["IN_TRANSIT", "OUT_FOR_DELIVERY"] } } }),
+      // Live queues deliberately ignore the historical date filter. Grouping related
+      // states reduces the dashboard's concurrent database round-trips.
+      prisma.shipmentTrack.groupBy({
+        by: ["status"],
+        where: { shopifyStoreId },
+        _count: { _all: true },
+      }),
       prisma.warehouseIntake.count({ where: { shopifyStoreId, status: "RECEIVED" } }),
-      prisma.refundRecord.count({ where: { shopifyStoreId, status: "PENDING" } }),
-      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "FAILED" } }),
-      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "LABEL_CREATED" } }),
+      prisma.refundRecord.groupBy({
+        by: ["status", "currency"],
+        where: { shopifyStoreId },
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+      prisma.shipmentTrack.count({
+        where: {
+          shopifyStoreId,
+          status: { in: ["IN_TRANSIT", "OUT_FOR_DELIVERY"] },
+          updatedAt: { lt: staleBefore },
+        },
+      }),
+      prisma.codSettlement.groupBy({
+        by: ["status"],
+        where: { shopifyStoreId },
+        _count: { _all: true },
+        _sum: { expectedAmount: true },
+      }),
+      prisma.backgroundJob.count({ where: { shopifyStoreId, status: "FAILED" } }),
+      prisma.webhookEvent.count({ where: { shopifyStoreId, processed: false } }),
+      prisma.returnRequest.groupBy({
+        by: ["status"],
+        where: { shopifyStoreId },
+        _count: { _all: true },
+      }),
+      prisma.exchangeRequest.groupBy({
+        by: ["status"],
+        where: { shopifyStoreId },
+        _count: { _all: true },
+      }),
+      prisma.shipmentTrack.groupBy({
+        by: ["courier", "status"],
+        where: { shopifyStoreId, ...requestDateFilter },
+        _count: { _all: true },
+        orderBy: { courier: "asc" },
+      }),
     ]);
 
+    const [rows, identity] = await Promise.all([queryPromise, identityPromise]);
+    const [
+      returnsCount,
+      exchangesCount,
+      incomingExchanges,
+      replacementOrderRequests,
+      returnIntake,
+      recentReturnsDb,
+      recentExchangesDb,
+      shipmentStatusRaw,
+      awaitingInspection,
+      refundFinancialRaw,
+      staleShipments,
+      codSnapshotRaw,
+      failedJobs,
+      unprocessedWebhooks,
+      returnLifecycleRaw,
+      exchangeLifecycleRaw,
+      courierSnapshotRaw,
+    ] = rows;
+
+    const countForStatus = (entries: { status: string; _count: { _all: number } }[], status: string) =>
+      entries.find((entry) => entry.status === status)?._count._all ?? 0;
+    const pendingReturns = countForStatus(returnLifecycleRaw, "PENDING");
+    const pendingExchanges = countForStatus(exchangeLifecycleRaw, "PENDING");
+    const returnsAwaitingInboundParcel = countForStatus(returnLifecycleRaw, "APPROVED");
+    const exchangesAwaitingInboundParcel = countForStatus(exchangeLifecycleRaw, "APPROVED");
+    const inTransit = countForStatus(shipmentStatusRaw, "IN_TRANSIT") + countForStatus(shipmentStatusRaw, "OUT_FOR_DELIVERY");
+    const failedShipments = countForStatus(shipmentStatusRaw, "FAILED");
+    const bookedParcels = countForStatus(shipmentStatusRaw, "LABEL_CREATED");
+    const pendingRefunds = refundFinancialRaw
+      .filter((entry) => entry.status === "PENDING")
+      .reduce((sum, entry) => sum + entry._count._all, 0);
+    const failedRefunds = refundFinancialRaw
+      .filter((entry) => entry.status === "FAILED")
+      .reduce((sum, entry) => sum + entry._count._all, 0);
+    const pendingRefundAmountPkr = refundFinancialRaw
+      .filter((entry) => entry.status === "PENDING" && entry.currency === "PKR")
+      .reduce((sum, entry) => sum + Number(entry._sum.amount ?? 0), 0);
+    const unreconciledCodRows = codSnapshotRaw.filter((entry) => unsettledCodStatuses.includes(entry.status));
+    const unreconciledCodCount = unreconciledCodRows.reduce((sum, entry) => sum + entry._count._all, 0);
+    const unreconciledCodAmount = unreconciledCodRows.reduce((sum, entry) => sum + Number(entry._sum.expectedAmount ?? 0), 0);
+    const disputedCod = countForStatus(codSnapshotRaw, "DISPUTED");
+
+    const summarizeLifecycle = (entries: typeof returnLifecycleRaw) =>
+      entries
+        .map((entry) => ({ status: entry.status, count: entry._count._all }))
+        .sort((a, b) => b.count - a.count);
+
+    const courierMap = new Map<string, {
+      courier: string;
+      total: number;
+      inTransit: number;
+      delivered: number;
+      failed: number;
+      labelCreated: number;
+      other: number;
+    }>();
+    for (const entry of courierSnapshotRaw) {
+      const courier = entry.courier || "Unknown courier";
+      const summary = courierMap.get(courier) ?? {
+        courier,
+        total: 0,
+        inTransit: 0,
+        delivered: 0,
+        failed: 0,
+        labelCreated: 0,
+        other: 0,
+      };
+      const count = entry._count._all;
+      summary.total += count;
+      if (entry.status === "IN_TRANSIT" || entry.status === "OUT_FOR_DELIVERY") summary.inTransit += count;
+      else if (entry.status === "DELIVERED") summary.delivered += count;
+      else if (entry.status === "FAILED") summary.failed += count;
+      else if (entry.status === "LABEL_CREATED") summary.labelCreated += count;
+      else summary.other += count;
+      courierMap.set(courier, summary);
+    }
+    const courierSnapshot = Array.from(courierMap.values()).sort((a, b) => b.total - a.total).slice(0, 8);
+
     return {
-      shop: store?.shop ?? "Connected Store",
+      shop: identity.name,
+      shopDomain: identity.domain,
       range,
       customFrom,
       customTo,
       timeZone,
       dateRangeError,
       dataAvailable: true,
-      historicalOrdersAccess,
+      health: {
+        syncStatus: store?.syncStatus ?? "UNKNOWN",
+        lastSyncAt: store?.lastSyncAt?.toISOString() ?? null,
+        hasSyncError: Boolean(store?.lastSyncError),
+        webhookStatus: store?.webhookStatus ?? "UNKNOWN",
+        lastReconciledAt: store?.lastReconciledAt?.toISOString() ?? null,
+        failedJobs,
+        unprocessedWebhooks,
+      },
       metrics: {
         returnsCount,
         exchangesCount,
         incomingExchanges,
-        outgoingExchanges,
+        replacementOrderRequests,
         returnIntake,
       },
+      lifecycle: {
+        returns: summarizeLifecycle(returnLifecycleRaw),
+        exchanges: summarizeLifecycle(exchangeLifecycleRaw),
+      },
+      courierSnapshot,
       operations: {
         pendingReturns,
         pendingExchanges,
+        returnsAwaitingInboundParcel,
+        exchangesAwaitingInboundParcel,
+        failedRefunds,
         inTransit,
         awaitingInspection,
         pendingRefunds,
+        pendingRefundAmountPkr,
         failedShipments,
         bookedParcels,
+        staleShipments,
+        unreconciledCodCount,
+        unreconciledCodAmount,
+        disputedCod,
       },
       recentReturns: recentReturnsDb.map((r) => ({
         id: r.id,
@@ -247,7 +343,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         id: e.id,
         orderNumber: e.orderNumber,
         customerName: e.customerName || e.customerEmail,
-        replacementTitle: e.items?.[0]?.replacementTitle || "Replacement Item",
+        replacementTitle: e.items?.[0]?.replacementTitle || (e.items?.length > 1 ? e.items.length + " replacement items" : "Replacement item not specified"),
         status: e.status,
         date: e.createdAt.toISOString(),
       })),
@@ -256,28 +352,47 @@ export async function loader({ request }: LoaderFunctionArgs) {
     console.error("[Dashboard Loader] Error:", error);
     return {
       shop: "Connected Store",
+      shopDomain: "",
       range: "30d",
       customFrom: "",
       customTo: "",
       timeZone: "UTC",
       dateRangeError: null,
       dataAvailable: false,
-      historicalOrdersAccess: { checked: false, hasReadAllOrders: false },
+      health: {
+        syncStatus: "UNKNOWN",
+        lastSyncAt: null,
+        hasSyncError: false,
+        webhookStatus: "UNKNOWN",
+        lastReconciledAt: null,
+        failedJobs: 0,
+        unprocessedWebhooks: 0,
+      },
       metrics: {
         returnsCount: 0,
         exchangesCount: 0,
         incomingExchanges: 0,
-        outgoingExchanges: 0,
+        replacementOrderRequests: 0,
         returnIntake: 0,
       },
+      lifecycle: { returns: [], exchanges: [] },
+      courierSnapshot: [],
       operations: {
         pendingReturns: 0,
         pendingExchanges: 0,
+        returnsAwaitingInboundParcel: 0,
+        exchangesAwaitingInboundParcel: 0,
+        failedRefunds: 0,
         inTransit: 0,
         awaitingInspection: 0,
         pendingRefunds: 0,
+        pendingRefundAmountPkr: 0,
         failedShipments: 0,
         bookedParcels: 0,
+        staleShipments: 0,
+        unreconciledCodCount: 0,
+        unreconciledCodAmount: 0,
+        disputedCod: 0,
       },
       recentReturns: [],
       recentExchanges: [],
@@ -305,7 +420,9 @@ export default function Dashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
 
   const shop = loaderData?.shop ?? "Connected Store";
+  const shopDomain = loaderData?.shopDomain ?? "";
   const currentRange = loaderData?.range ?? "30d";
+  const revalidator = useRevalidator();
   const dataAvailable = loaderData?.dataAvailable !== false;
   const dateRangeError = loaderData?.dateRangeError ?? null;
   const [customFrom, setCustomFrom] = React.useState(loaderData?.customFrom ?? "");
@@ -316,23 +433,68 @@ export default function Dashboard() {
     setCustomTo(loaderData?.customTo ?? "");
     setDateInputError(null);
   }, [loaderData?.customFrom, loaderData?.customTo]);
-  const historicalOrdersAccess = loaderData?.historicalOrdersAccess ?? { checked: false, hasReadAllOrders: false };
   const metrics = loaderData?.metrics ?? {
     returnsCount: 0,
     exchangesCount: 0,
     incomingExchanges: 0,
-    outgoingExchanges: 0,
+    replacementOrderRequests: 0,
     returnIntake: 0,
   };
   const operations = loaderData?.operations ?? {
     pendingReturns: 0,
     pendingExchanges: 0,
+    returnsAwaitingInboundParcel: 0,
+    exchangesAwaitingInboundParcel: 0,
+    failedRefunds: 0,
     inTransit: 0,
     awaitingInspection: 0,
     pendingRefunds: 0,
+    pendingRefundAmountPkr: 0,
     failedShipments: 0,
     bookedParcels: 0,
+    staleShipments: 0,
+    unreconciledCodCount: 0,
+    unreconciledCodAmount: 0,
+    disputedCod: 0,
   };
+  const lifecycle = loaderData?.lifecycle ?? { returns: [], exchanges: [] };
+  const courierSnapshot = loaderData?.courierSnapshot ?? [];
+  const health = loaderData?.health ?? {
+    syncStatus: "UNKNOWN",
+    lastSyncAt: null,
+    hasSyncError: false,
+    webhookStatus: "UNKNOWN",
+    lastReconciledAt: null,
+    failedJobs: 0,
+    unprocessedWebhooks: 0,
+  };
+
+  const withRangeContext = (href: string) => {
+    const [pathname, query = ""] = href.split("?");
+    const params = new URLSearchParams(query);
+    ["range", "from", "to", "tz"].forEach((key) => {
+      const value = searchParams.get(key);
+      if (value) params.set(key, value);
+    });
+    const suffix = params.toString();
+    return suffix ? pathname + "?" + suffix : pathname;
+  };
+
+  const formatMoneyPkr = (value: number) =>
+    dataAvailable ? "Rs. " + value.toLocaleString("en-PK", { maximumFractionDigits: 2 }) : "—";
+
+  const attentionItems = [
+    { label: "Failed shipments", count: operations.failedShipments, detail: "Carrier status needs review", to: withRangeContext("/app/shipments"), priority: 1 },
+    { label: "COD disputes", count: operations.disputedCod, detail: "Settlement values do not match", to: withRangeContext("/app/reconciliation"), priority: 1 },
+    { label: "Failed refunds", count: operations.failedRefunds, detail: "A refund record is marked failed", to: withRangeContext("/app/refunds"), priority: 1 },
+    { label: "Stale tracking", count: operations.staleShipments, detail: "No shipment update for 48+ hours", to: withRangeContext("/app/shipments"), priority: 2 },
+    { label: "Refunds awaiting confirmation", count: operations.pendingRefunds, detail: "Confirm only after checking payment evidence", to: withRangeContext("/app/refunds"), priority: 2 },
+    { label: "Return parcels not yet received", count: operations.returnsAwaitingInboundParcel, detail: "Approved returns awaiting inbound receipt", to: withRangeContext("/app/returns"), priority: 2 },
+    { label: "Exchange parcels not yet received", count: operations.exchangesAwaitingInboundParcel, detail: "Approved exchanges awaiting inbound receipt", to: withRangeContext("/app/exchanges"), priority: 2 },
+    { label: "Warehouse inspection", count: operations.awaitingInspection, detail: "Received parcels awaiting inspection", to: withRangeContext("/app/warehouse"), priority: 2 },
+    { label: "Returns awaiting review", count: operations.pendingReturns, detail: "Return requests still pending", to: withRangeContext("/app/returns"), priority: 3 },
+    { label: "Exchanges awaiting review", count: operations.pendingExchanges, detail: "Exchange requests still pending", to: withRangeContext("/app/exchanges"), priority: 3 },
+  ].filter((item) => Number(item.count) > 0).sort((a, b) => a.priority - b.priority);
   const recentReturns = loaderData?.recentReturns ?? [];
   const recentExchanges = loaderData?.recentExchanges ?? [];
 
@@ -420,29 +582,26 @@ export default function Dashboard() {
             )}
           </div>
 
-          <div className="bc-dashboard-store" title={shop}>
+          <div className="bc-dashboard-store" title={shopDomain || shop}>
             <span className="bc-store-avatar" aria-hidden="true">
               {String(shop || "S").trim().slice(0, 1).toUpperCase() || "S"}
             </span>
             <span className="bc-store-copy">
-              <span className="bc-store-label">STORE</span>
+              <span className="bc-store-label">CONNECTED STORE</span>
               <strong>{shop}</strong>
+              <span className="bc-store-domain">{shopDomain}</span>
             </span>
           </div>
         </div>
       </header>
 
-      {historicalOrdersAccess.checked && !historicalOrdersAccess.hasReadAllOrders && (
-        <section role="status" aria-label="Historical order access notice" style={{ margin: "14px 0", padding: "12px 16px", borderRadius: "8px", border: "1px solid #e4e4e7", background: "#f4f4f5", color: "#18181b" }}>
-          <strong>Historical order access note</strong>
-          <p style={{ margin: "4px 0 0", lineHeight: 1.45, fontSize: "13px" }}>Shopify grants order access without read_all_orders scope. Older orders may need partner approval for full store history.</p>
-        </section>
-      )}
+
 
       {!dataAvailable && (
         <section className="bc-dashboard-data-error" role="alert">
           <strong>Dashboard data could not be loaded.</strong>
-          <p>Metrics are hidden instead of showing misleading zeros. Reload the dashboard; the technical error is available in the server logs.</p>
+          <p>Metrics are hidden instead of showing misleading zeros. Retry loading the dashboard; if the issue continues, contact support.</p>
+          <button type="button" className="bc-btn" onClick={() => revalidator.revalidate()}>Retry</button>
         </section>
       )}
 
@@ -456,7 +615,7 @@ export default function Dashboard() {
         </div>
 
         <div className="bc-kpi-grid">
-          <Link to="/app/returns" className="bc-kpi-card bc-kpi-link">
+          <Link to={withRangeContext("/app/returns")} className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Return requests</span>
             </div>
@@ -464,7 +623,7 @@ export default function Dashboard() {
             <span className="bc-kpi-sub">View returns</span>
           </Link>
 
-          <Link to="/app/exchanges" className="bc-kpi-card bc-kpi-link">
+          <Link to={withRangeContext("/app/exchanges")} className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Exchange requests</span>
             </div>
@@ -472,23 +631,23 @@ export default function Dashboard() {
             <span className="bc-kpi-sub">View exchanges</span>
           </Link>
 
-          <Link to="/app/warehouse" className="bc-kpi-card bc-kpi-link">
+          <Link to={withRangeContext("/app/warehouse")} className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Incoming exchanges</span>
             </div>
             <p className="bc-kpi-value">{formatCount(metrics.incomingExchanges)}</p>
-            <span className="bc-kpi-sub">Approved or received exchange requests</span>
+            <span className="bc-kpi-sub">Approved or received requests created in this range</span>
           </Link>
 
-          <Link to="/app/warehouse?tab=EXCHANGES&filter=EXCHANGED" className="bc-kpi-card bc-kpi-link">
+          <Link to={withRangeContext("/app/exchanges")} className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
-              <span className="bc-kpi-label">Outgoing exchanges</span>
+              <span className="bc-kpi-label">Replacement order linked</span>
             </div>
-            <p className="bc-kpi-value">{formatCount(metrics.outgoingExchanges)}</p>
-            <span className="bc-kpi-sub">Replacements fulfilled</span>
+            <p className="bc-kpi-value">{formatCount(metrics.replacementOrderRequests)}</p>
+            <span className="bc-kpi-sub">Requests with a replacement order recorded</span>
           </Link>
 
-          <Link to="/app/warehouse?tab=RETURNS&filter=WAREHOUSE" className="bc-kpi-card bc-kpi-link">
+          <Link to={withRangeContext("/app/warehouse?tab=RETURNS&filter=WAREHOUSE")} className="bc-kpi-card bc-kpi-link">
             <div className="bc-kpi-card-top">
               <span className="bc-kpi-label">Return intake</span>
             </div>
@@ -498,29 +657,58 @@ export default function Dashboard() {
         </div>
       </section>
 
+      {/* Prioritized action center */}
+      <section className="bc-dashboard-section" aria-labelledby="bc-attention-title">
+        <div className="bc-dashboard-section-heading">
+          <div>
+            <h2 id="bc-attention-title">Needs attention</h2>
+            <p>Prioritized items that may need an action now.</p>
+          </div>
+          <span className="bc-dashboard-section-tag">{dataAvailable ? attentionItems.length + " active" : "Unavailable"}</span>
+        </div>
+        {!dataAvailable ? (
+          <div className="bc-empty-state"><strong>Action queue unavailable</strong><p>Retry loading dashboard data to see current work.</p></div>
+        ) : attentionItems.length === 0 ? (
+          <div className="bc-empty-state"><strong>No urgent items detected</strong><p>There are no open failed-shipment, COD-dispute, stale-tracking, pending-refund, or review queues right now.</p></div>
+        ) : (
+          <div className="bc-attention-list">
+            {attentionItems.map((item) => (
+              <Link key={item.label} to={item.to} className={item.priority === 1 ? "bc-attention-row is-critical" : "bc-attention-row"}>
+                <span className="bc-attention-copy">
+                  <strong>{item.label}</strong>
+                  <span>{item.detail}</span>
+                </span>
+                <span className="bc-attention-count">{formatCount(item.count)}</span>
+                <span className="bc-attention-open">Open <span aria-hidden="true">→</span></span>
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+
       {/* Operational Queue */}
       <section className="bc-dashboard-section" aria-labelledby="bc-operations-title">
         <div className="bc-dashboard-section-heading">
           <div>
-            <h2 id="bc-operations-title">Operational queue</h2>
-            <p>Action items requiring attention.</p>
+            <h2 id="bc-operations-title">Live operational queues</h2>
+            <p>Current backlog; these counts are not limited by the selected date range.</p>
           </div>
         </div>
 
         <div className="bc-ops-grid">
-          <Link className="bc-ops-card" to="/app/bookings">
-            <span className="bc-ops-label">Bookings ready</span>
+          <Link className="bc-ops-card" to={withRangeContext("/app/shipments")}>
+            <span className="bc-ops-label">Labels created · awaiting first scan</span>
             <span className="bc-ops-value">{formatCount(operations.bookedParcels)}</span>
           </Link>
-          <Link className={`bc-ops-card ${operations.pendingReturns > 0 ? "has-attention" : ""}`} to="/app/returns">
+          <Link className={`bc-ops-card ${operations.pendingReturns > 0 ? "has-attention" : ""}`} to={withRangeContext("/app/returns")}>
             <span className="bc-ops-label">Pending returns</span>
             <span className="bc-ops-value">{formatCount(operations.pendingReturns)}</span>
           </Link>
-          <Link className={`bc-ops-card ${operations.pendingExchanges > 0 ? "has-attention" : ""}`} to="/app/exchanges">
+          <Link className={`bc-ops-card ${operations.pendingExchanges > 0 ? "has-attention" : ""}`} to={withRangeContext("/app/exchanges")}>
             <span className="bc-ops-label">Pending exchanges</span>
             <span className="bc-ops-value">{formatCount(operations.pendingExchanges)}</span>
           </Link>
-          <Link className="bc-ops-card" to="/app/shipments?type=All">
+          <Link className="bc-ops-card" to={withRangeContext("/app/shipments?type=All")}>
             <span className="bc-ops-label">Parcels in transit</span>
             <span className="bc-ops-value">{formatCount(operations.inTransit)}</span>
           </Link>
@@ -528,15 +716,181 @@ export default function Dashboard() {
             <span className="bc-ops-label">Awaiting inspection</span>
             <span className="bc-ops-value">{formatCount(operations.awaitingInspection)}</span>
           </Link>
-          <Link className={`bc-ops-card ${operations.pendingRefunds > 0 ? "has-attention" : ""}`} to="/app/refunds">
+          <Link className={`bc-ops-card ${operations.pendingRefunds > 0 ? "has-attention" : ""}`} to={withRangeContext("/app/refunds")}>
             <span className="bc-ops-label">Refunds pending</span>
             <span className="bc-ops-value">{formatCount(operations.pendingRefunds)}</span>
           </Link>
-          <Link className={`bc-ops-card ${operations.failedShipments > 0 ? "has-error" : ""}`} to="/app/shipments">
+          <Link className={`bc-ops-card ${operations.failedShipments > 0 ? "has-error" : ""}`} to={withRangeContext("/app/shipments")}>
             <span className="bc-ops-label">Failed shipments</span>
             <span className="bc-ops-value">{formatCount(operations.failedShipments)}</span>
           </Link>
+          <Link className={operations.unreconciledCodCount > 0 ? "bc-ops-card has-attention" : "bc-ops-card"} to={withRangeContext("/app/reconciliation")}>
+            <span className="bc-ops-label">COD awaiting reconciliation</span>
+            <span className="bc-ops-value">{formatCount(operations.unreconciledCodCount)}</span>
+          </Link>
+          <Link className={operations.staleShipments > 0 ? "bc-ops-card has-attention" : "bc-ops-card"} to={withRangeContext("/app/shipments")}>
+            <span className="bc-ops-label">Tracking stale 48+ hours</span>
+            <span className="bc-ops-value">{formatCount(operations.staleShipments)}</span>
+          </Link>
         </div>
+      </section>
+
+      {/* Financial exposure and settlement risk */}
+      <section className="bc-dashboard-section" aria-labelledby="bc-money-title">
+        <div className="bc-dashboard-section-heading">
+          <div>
+            <h2 id="bc-money-title">Money needing follow-up</h2>
+            <p>Amounts are shown only where the record explicitly stores PKR; other currencies are not converted.</p>
+          </div>
+        </div>
+        <div className="bc-money-grid">
+          <Link className="bc-money-card" to={withRangeContext("/app/refunds")}>
+            <span className="bc-kpi-label">Refund records pending</span>
+            <strong>{formatCount(operations.pendingRefunds)}</strong>
+            <span className="bc-money-amount">{formatMoneyPkr(operations.pendingRefundAmountPkr)}</span>
+            <span className="bc-money-caption">Pending amount in PKR only · not confirmed paid</span>
+          </Link>
+          <Link className="bc-money-card" to={withRangeContext("/app/reconciliation")}>
+            <span className="bc-kpi-label">Unreconciled COD records</span>
+            <strong>{formatCount(operations.unreconciledCodCount)}</strong>
+            <span className="bc-money-amount">{formatMoneyPkr(operations.unreconciledCodAmount)}</span>
+            <span className="bc-money-caption">Total expected amount across expected, imported and disputed records</span>
+          </Link>
+          <Link className="bc-money-card" to={withRangeContext("/app/reconciliation")}>
+            <span className="bc-kpi-label">COD disputes</span>
+            <strong>{formatCount(operations.disputedCod)}</strong>
+            <span className="bc-money-caption">Reconcile against courier and bank evidence</span>
+          </Link>
+        </div>
+      </section>
+
+      {/* Data freshness and integration health */}
+      <section className="bc-dashboard-section" aria-labelledby="bc-health-title">
+        <div className="bc-dashboard-section-heading">
+          <div>
+            <h2 id="bc-health-title">Data and integration health</h2>
+            <p>Freshness indicators help distinguish zero activity from delayed integrations.</p>
+          </div>
+        </div>
+        <div className="bc-health-grid">
+          <article className="bc-health-card">
+            <span className="bc-kpi-label">Shopify sync</span>
+            <strong className="bc-health-value">{dataAvailable ? health.syncStatus : "Unavailable"}</strong>
+            <span className={health.hasSyncError || health.syncStatus === "FAILED" ? "bc-health-status is-problem" : "bc-health-status"}>
+              {health.hasSyncError || health.syncStatus === "FAILED" ? "Sync error reported" : "Status reported by BYNDCART"}
+            </span>
+            <span className="bc-health-detail">Last successful sync: {health.lastSyncAt ? new Date(health.lastSyncAt).toLocaleString() : "Not recorded"}</span>
+          </article>
+          <article className="bc-health-card">
+            <span className="bc-kpi-label">Webhook registration</span>
+            <strong className="bc-health-value">{dataAvailable ? health.webhookStatus : "Unavailable"}</strong>
+            <span className={health.webhookStatus === "FAILED" || health.unprocessedWebhooks > 0 ? "bc-health-status is-problem" : "bc-health-status"}>
+              {health.webhookStatus === "FAILED" ? "Registration issue reported" : health.unprocessedWebhooks > 0 ? "Unprocessed events need review" : "Registration status"}
+            </span>
+            <span className="bc-health-detail">Unprocessed webhook events: {formatCount(health.unprocessedWebhooks)}</span>
+          </article>
+          <article className="bc-health-card">
+            <span className="bc-kpi-label">Background jobs</span>
+            <strong className="bc-health-value">{formatCount(health.failedJobs)}</strong>
+            <span className={health.failedJobs > 0 ? "bc-health-status is-problem" : "bc-health-status"}>{health.failedJobs > 0 ? "Failed jobs need review" : "No failed jobs recorded"}</span>
+            <span className="bc-health-detail">Last COD reconciliation: {health.lastReconciledAt ? new Date(health.lastReconciledAt).toLocaleString() : "Not recorded"}</span>
+          </article>
+        </div>
+      </section>
+
+      {/* Current request lifecycle */}
+      <section className="bc-dashboard-section" aria-labelledby="bc-lifecycle-title">
+        <div className="bc-dashboard-section-heading">
+          <div>
+            <h2 id="bc-lifecycle-title">Request lifecycle</h2>
+            <p>Current stage snapshot across all open and completed requests; use it to spot work accumulating at a stage.</p>
+          </div>
+        </div>
+        <div className="bc-lifecycle-grid">
+          <article className="bc-health-card">
+            <div className="bc-lifecycle-heading">
+              <h3>Returns by stage</h3>
+              <Link className="bc-text-link" to={withRangeContext("/app/returns")}>View returns</Link>
+            </div>
+            {!dataAvailable ? (
+              <p className="bc-muted">Lifecycle data unavailable.</p>
+            ) : lifecycle.returns.length === 0 ? (
+              <p className="bc-muted">No return requests recorded yet.</p>
+            ) : (
+              <div className="bc-lifecycle-rows">
+                {lifecycle.returns.map((stage: { status: string; count: number }) => (
+                  <div className="bc-lifecycle-row" key={stage.status}>
+                    <span>{stage.status.replaceAll("_", " ")}</span>
+                    <strong>{formatCount(stage.count)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
+          <article className="bc-health-card">
+            <div className="bc-lifecycle-heading">
+              <h3>Exchanges by stage</h3>
+              <Link className="bc-text-link" to={withRangeContext("/app/exchanges")}>View exchanges</Link>
+            </div>
+            {!dataAvailable ? (
+              <p className="bc-muted">Lifecycle data unavailable.</p>
+            ) : lifecycle.exchanges.length === 0 ? (
+              <p className="bc-muted">No exchange requests recorded yet.</p>
+            ) : (
+              <div className="bc-lifecycle-rows">
+                {lifecycle.exchanges.map((stage: { status: string; count: number }) => (
+                  <div className="bc-lifecycle-row" key={stage.status}>
+                    <span>{stage.status.replaceAll("_", " ")}</span>
+                    <strong>{formatCount(stage.count)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
+        </div>
+      </section>
+
+      {/* Courier shipment snapshot */}
+      <section className="bc-dashboard-section" aria-labelledby="bc-courier-title">
+        <div className="bc-dashboard-section-heading">
+          <div>
+            <h2 id="bc-courier-title">Courier snapshot</h2>
+            <p>Bookings created in the selected period, grouped by their latest stored status. Carrier data can lag based on integration coverage.</p>
+          </div>
+          <Link className="bc-text-link" to={withRangeContext("/app/shipments")}>View shipments</Link>
+        </div>
+        {!dataAvailable ? (
+          <div className="bc-empty-state"><strong>Courier data unavailable</strong><p>Retry loading dashboard data to view courier statuses.</p></div>
+        ) : courierSnapshot.length === 0 ? (
+          <div className="bc-empty-state"><strong>No shipment records in this period</strong><p>Shipment status summaries appear here after bookings are recorded.</p></div>
+        ) : (
+          <div className="bc-dashboard-table-wrap">
+            <table className="bc-dashboard-table bc-courier-snapshot-table">
+              <thead>
+                <tr>
+                  <th scope="col">Courier</th>
+                  <th scope="col">Shipments</th>
+                  <th scope="col">In transit</th>
+                  <th scope="col">Delivered</th>
+                  <th scope="col">Failed</th>
+                  <th scope="col">Awaiting first scan</th>
+                </tr>
+              </thead>
+              <tbody>
+                {courierSnapshot.map((row: { courier: string; total: number; inTransit: number; delivered: number; failed: number; labelCreated: number }) => (
+                  <tr key={row.courier}>
+                    <td><span className="bc-table-primary">{row.courier}</span></td>
+                    <td>{formatCount(row.total)}</td>
+                    <td>{formatCount(row.inTransit)}</td>
+                    <td>{formatCount(row.delivered)}</td>
+                    <td><span className={row.failed > 0 ? "bc-status-badge bc-status-danger" : "bc-status-badge bc-status-neutral"}>{formatCount(row.failed)}</span></td>
+                    <td>{formatCount(row.labelCreated)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       {/* Recent Activity */}
@@ -555,7 +909,7 @@ export default function Dashboard() {
                 <h3 id="bc-recent-returns-title">Recent returns</h3>
                 <p>Latest return requests</p>
               </div>
-              <Link className="bc-text-link" to="/app/returns">View all</Link>
+              <Link className="bc-text-link" to={withRangeContext("/app/returns")}>View all</Link>
             </header>
 
             {!dataAvailable ? (
@@ -597,7 +951,7 @@ export default function Dashboard() {
                 <h3 id="bc-recent-exchanges-title">Recent exchanges</h3>
                 <p>Latest exchange requests</p>
               </div>
-              <Link className="bc-text-link" to="/app/exchanges">View all</Link>
+              <Link className="bc-text-link" to={withRangeContext("/app/exchanges")}>View all</Link>
             </header>
 
             {!dataAvailable ? (

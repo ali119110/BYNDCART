@@ -2360,3 +2360,296 @@ a.bc-btn svg {
   background: var(--bc-surface);
   border-color: var(--bc-ink-muted);
 }
+
+
+/* Dashboard control-center additions: actionable queues, money exposure and data health. */
+.bc-store-domain {
+  display: block;
+  max-width: 260px;
+  color: var(--bc-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.bc-range-filter {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.bc-attention-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.bc-attention-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--bc-line);
+  border-radius: var(--bc-radius);
+  background: var(--bc-surface);
+  color: var(--bc-ink);
+  text-decoration: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.bc-attention-row:hover {
+  border-color: var(--bc-line-strong);
+  background: var(--bc-surface-subtle);
+}
+
+.bc-attention-row.is-critical {
+  border-left: 3px solid var(--bc-danger, #b42318);
+}
+
+.bc-attention-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.bc-attention-copy strong {
+  color: var(--bc-ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.bc-attention-copy > span {
+  color: var(--bc-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.bc-attention-count {
+  min-width: 36px;
+  color: var(--bc-ink);
+  font-size: 20px;
+  font-weight: 750;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.bc-attention-open {
+  color: var(--bc-brand);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.bc-money-grid,
+.bc-health-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.bc-money-card,
+.bc-health-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--bc-line);
+  border-radius: var(--bc-radius-lg);
+  background: var(--bc-surface);
+  box-shadow: var(--bc-shadow);
+}
+
+.bc-money-card {
+  color: var(--bc-ink);
+  text-decoration: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.bc-money-card:hover {
+  border-color: var(--bc-line-strong);
+  background: var(--bc-surface-subtle);
+}
+
+.bc-money-card > strong {
+  color: var(--bc-ink);
+  font-size: 29px;
+  line-height: 1.15;
+  font-weight: 750;
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.bc-money-amount {
+  color: var(--bc-ink);
+  font-size: 17px;
+  line-height: 1.35;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.bc-money-caption {
+  color: var(--bc-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.bc-health-value {
+  color: var(--bc-ink);
+  font-size: 19px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.bc-health-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--bc-line);
+  border-radius: 999px;
+  color: var(--bc-muted);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.bc-health-status.is-problem {
+  border-color: #f0c5c0;
+  background: #fff4f2;
+  color: #9f2720;
+}
+
+.bc-health-detail {
+  color: var(--bc-muted);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.bc-dashboard-data-error .bc-btn {
+  margin-top: 8px;
+}
+
+@media (max-width: 900px) {
+  .bc-money-grid,
+  .bc-health-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .bc-dashboard-controls {
+    width: 100%;
+  }
+
+  .bc-dashboard-filter-stack {
+    align-items: flex-start;
+  }
+
+  .bc-range-filter {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 620px) {
+  .bc-money-grid,
+  .bc-health-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bc-attention-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    padding: 12px;
+  }
+
+  .bc-attention-open {
+    grid-column: 1 / -1;
+    padding-top: 2px;
+  }
+
+  .bc-dashboard-store {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .bc-store-copy {
+    min-width: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bc-attention-row,
+  .bc-money-card {
+    transition: none;
+  }
+}
+
+
+.bc-lifecycle-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.bc-lifecycle-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+}
+
+.bc-lifecycle-heading h3 {
+  margin: 0;
+  color: var(--bc-ink);
+  font-size: 14px;
+  font-weight: 750;
+}
+
+.bc-lifecycle-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.bc-lifecycle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--bc-line);
+  color: var(--bc-muted);
+  font-size: 12px;
+}
+
+.bc-lifecycle-row:last-child {
+  border-bottom: 0;
+}
+
+.bc-lifecycle-row strong {
+  color: var(--bc-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.bc-courier-snapshot-table th,
+.bc-courier-snapshot-table td {
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .bc-lifecycle-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bc-courier-snapshot-table {
+    min-width: 640px;
+  }
+}
