@@ -743,25 +743,27 @@ export default function BookingsPage() {
           </div>
         )}
 
-        <button
-          type="button"
-          className="bc-btn"
-          style={{ marginLeft: "auto" }}
-          disabled={!unfulfilledOrders.some((order) => order.alreadyBooked && order.existingShipmentId)}
-          onClick={() => {
-            const ids = unfulfilledOrders
-              .filter((order) => order.alreadyBooked && order.existingShipmentId)
-              .map((order) => order.existingShipmentId)
-              .filter((id): id is string => Boolean(id));
-            if (!ids.length) {
-              window.alert("No saved shipment labels are available to print yet. Book the order first and reload this page.");
-              return;
-            }
-            window.open(`/app/awb?ids=${encodeURIComponent(ids.join(","))}`, "_blank", "noopener,noreferrer");
-          }}
-        >
-          Print Airway Bills ({unfulfilledOrders.filter((order) => order.alreadyBooked && order.existingShipmentId).length})
-        </button>
+        {(() => {
+          const printableShipmentIds = unfulfilledOrders
+            .filter((order) => order.alreadyBooked && order.existingShipmentId && !["CANCELLED", "FAILED"].includes(String(order.existingShipmentStatus || "").toUpperCase()))
+            .map((order) => order.existingShipmentId)
+            .filter((id): id is string => Boolean(id));
+          return printableShipmentIds.length > 0 ? (
+            <a
+              className="bc-btn"
+              href={`/app/awb?ids=${encodeURIComponent(printableShipmentIds.join(","))}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ marginLeft: "auto", textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+            >
+              Print Airway Bills ({printableShipmentIds.length})
+            </a>
+          ) : (
+            <button type="button" className="bc-btn" disabled style={{ marginLeft: "auto", opacity: 0.55 }}>
+              Print Airway Bills (0)
+            </button>
+          );
+        })()}
       </div>
 
       {activeTab === "BOOK" && (
