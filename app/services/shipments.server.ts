@@ -258,6 +258,13 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
     },
   });
 
+  try {
+    const { ensureCourierTrackingScheduled } = await import("../worker.server");
+    await ensureCourierTrackingScheduled(input.shopifyStoreId);
+  } catch (trackingScheduleError) {
+    console.warn("[Shipment Service] Shipment was saved, but automatic tracking could not be queued:", trackingScheduleError);
+  }
+
   // FedEx and DHL return Base64 label documents. Keep bytes server-side and expose only
   // the authenticated /app/shipments-label URL; do not store large data URIs in labelUrl.
   if (labelResult?.labelContentBase64) {
