@@ -656,6 +656,11 @@ export async function bookCourierShipment(
   const shipmentType = serviceType === "Reverse" || serviceType === "Reversed"
     ? "RETURN"
     : serviceType === "Replacement" ? "EXCHANGE" : "FORWARD";
+  const shipperProfileIndex = Number.isInteger(input.shipperProfileIndex)
+    && Number(input.shipperProfileIndex) >= 0
+    && Number(input.shipperProfileIndex) < 3
+    ? Number(input.shipperProfileIndex)
+    : undefined;
 
   const normalizedPhone = normalizePakistaniMobile(String(input.customerPhone || ""));
   let validationError: string | null = null;
@@ -783,7 +788,7 @@ export async function bookCourierShipment(
           status: "LABEL_CREATED",
           destinationCity: input.cityName,
           codAmount: input.codAmountPKR.toFixed(2),
-          shipperProfileIndex: input.shipperProfileIndex,
+          shipperProfileIndex,
         },
         create: {
           shopifyStoreId,
@@ -795,7 +800,7 @@ export async function bookCourierShipment(
           status: "LABEL_CREATED",
           destinationCity: input.cityName,
           codAmount: input.codAmountPKR.toFixed(2),
-          shipperProfileIndex: input.shipperProfileIndex,
+          shipperProfileIndex,
         },
       });
 
@@ -932,7 +937,7 @@ export async function bookCourierShipment(
         labelUrl: labelResult.labelUrl,
         destinationCity: input.cityName,
         codAmount: (shipmentType === "RETURN" ? 0 : input.codAmountPKR).toFixed(2),
-        shipperProfileIndex: input.shipperProfileIndex,
+        shipperProfileIndex,
       },
       create: {
         shopifyStoreId,
@@ -945,7 +950,7 @@ export async function bookCourierShipment(
         status: "LABEL_CREATED",
         destinationCity: input.cityName,
         codAmount: (shipmentType === "RETURN" ? 0 : input.codAmountPKR).toFixed(2),
-        shipperProfileIndex: input.shipperProfileIndex,
+        shipperProfileIndex,
       },
     });
 
