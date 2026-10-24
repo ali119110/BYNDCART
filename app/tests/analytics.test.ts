@@ -54,6 +54,9 @@ prisma.refundRecord.groupBy = (async () => [
 prisma.$queryRaw = (async (query: any) => {
   // Check if raw query is for monthly trend or top returned products
   const str = String(query);
+  if (str.includes("received_return_units")) {
+    return [{ sold_units: 60, received_return_units: 6 }];
+  }
   if (str.includes("generate_series")) {
     return [
       { month: "Jan", returns_count: BigInt(2), exchanges_count: BigInt(1) },
@@ -132,6 +135,9 @@ test("Analytics Service - Get Store Financial Metrics in PKR", async () => {
   assert.strictEqual(analytics.summary.totalRefunded, 12000, "only confirmed PKR refund records contribute to the PKR payout KPI");
   assert.strictEqual(analytics.summary.returnRequestShare, 71.4);
   assert.strictEqual(analytics.summary.exchangeRequestShare, 28.6);
+  assert.strictEqual(analytics.summary.soldUnits, 60);
+  assert.strictEqual(analytics.summary.receivedReturnUnits, 6);
+  assert.strictEqual(analytics.summary.unitReturnRate, 10, "unit rate uses warehouse-confirmed received/inspected units from the selected order cohort");
   assert.strictEqual(analytics.summary.confirmedRefundsByCurrency.find((row: any) => row.currency === "USD")?.amount, 20);
   assert.strictEqual(analytics.summary.revenueFromExchanges, 1500);
   assert.strictEqual(analytics.topReturnedProducts[0].title, "Embroidered Kurti");
