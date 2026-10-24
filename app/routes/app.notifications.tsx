@@ -300,6 +300,51 @@ export default function Notifications() {
 
   const [testPhone, setTestPhone] = useState("");
   const [showTestModal, setShowTestModal] = useState(false);
+  const [metaSdkReady, setMetaSdkReady] = useState(false);
+
+  // Meta Embedded Signup requires the Facebook JavaScript SDK; without loading and
+  // initializing it, the Connect button always falls back to manual credentials.
+  React.useEffect(() => {
+    if (typeof window === "undefined" || !metaAppId) return;
+    const w = window as any;
+    const initializeMeta = () => {
+      if (!w.FB) return false;
+      try {
+        w.FB.init({
+          appId: metaAppId,
+          cookie: true,
+          xfbml: false,
+          version: "v21.0",
+        });
+        setMetaSdkReady(true);
+        return true;
+      } catch (error) {
+        console.error("[Notifications] Meta SDK initialization failed:", error);
+        setMetaSdkReady(false);
+        return false;
+      }
+    };
+
+    if (w.FB && initializeMeta()) return;
+    w.fbAsyncInit = () => { initializeMeta(); };
+    let script = document.getElementById("byndcart-facebook-jssdk") as HTMLScriptElement | null;
+    if (!script) {
+      script = document.createElement("script");
+      script.id = "byndcart-facebook-jssdk";
+      script.src = "https://connect.facebook.net/en_US/sdk.js";
+      script.async = true;
+      script.defer = true;
+      script.crossOrigin = "anonymous";
+      script.onload = () => { initializeMeta(); };
+      script.onerror = () => {
+        setMetaSdkReady(false);
+        console.error("[Notifications] Facebook JavaScript SDK could not be loaded.");
+      };
+      document.head.appendChild(script);
+    } else if (w.FB) {
+      initializeMeta();
+    }
+  }, [metaAppId]);
 
   const isWaConnected = Boolean(
     whatsappConfig?.enabled && whatsappConfig?.phoneNumberId && whatsappConfig?.accessToken
@@ -323,14 +368,14 @@ export default function Notifications() {
   const launchMetaEmbeddedSignup = () => {
     if (typeof window === "undefined") return;
 
-    if (!metaAppId) {
-      alert("Meta App ID is not configured in server environment. Please use manual credentials entry.");
+    if (!metaAppId || !metaConfigId) {
+      alert("Meta App ID and WhatsApp Embedded Signup Configuration ID must be configured by the BYNDCART platform provider before Embedded Signup can start.");
       setShowManualModal(true);
       return;
     }
 
     const fb = (window as any).FB;
-    if (fb) {
+    if (fb && metaSdkReady) {
       fb.login(
         (response: any) => {
           if (response.authResponse?.code) {
@@ -501,9 +546,10 @@ export default function Notifications() {
                     type="button"
                     className="bc-btn primary"
                     onClick={launchMetaEmbeddedSignup}
-                    style={{ padding: "10px 24px", fontSize: "14px" }}
+                    disabled={!metaSdkReady && Boolean(metaAppId && metaConfigId)}
+                    style={{ padding: "10px 24px", fontSize: "14px", opacity: !metaSdkReady && metaAppId && metaConfigId ? 0.65 : 1 }}
                   >
-                    Connect WhatsApp
+                    {metaSdkReady ? "Connect WhatsApp" : "Loading Meta connection…"}
                   </button>
 
                   <button
