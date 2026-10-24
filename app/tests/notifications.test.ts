@@ -171,6 +171,20 @@ test("Notifications Engine — Template Variable Rendering & Secret Sanitization
 
   assert.equal(rendered, "Hello Fatima Noor, order #1099 total PKR 4500.");
 
+  const bracketRendered = renderTemplate(
+    "Dear [customer_name] - [customer_phone], order [order_number].[line][line]*Tracking:* [tracking_number]",
+    {
+      customer_name: "Fatima Noor",
+      customer_phone: "03001234567",
+      order_number: "#1099",
+      tracking_number: "PE123456",
+    },
+  );
+  assert.equal(
+    bracketRendered,
+    "Dear Fatima Noor - 03001234567, order #1099.\n\n*Tracking:* PE123456",
+  );
+
   const sanitized = sanitizeLogBody("Your api_key: secret_123456 pass password=my_secret_pass");
   assert.equal(sanitized.includes("secret_123456"), false);
   assert.equal(sanitized.includes("••••••••"), true);

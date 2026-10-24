@@ -2,6 +2,8 @@ import prisma from "../db.server";
 import { CourierRegistry, getDecryptedCourierCredentials, type LabelResult } from "./courier.server";
 import { logAction } from "./audit.server";
 import { triggerLifecycleNotification } from "./notifications.server";
+import { getCourierOperationsSettings } from "./settings.server";
+import { checkFeatureAccess } from "./planGate.server";
 import {
   matchPakistaniCity,
   normalizePakistaniMobile,
@@ -56,6 +58,7 @@ export interface SingleBookingInput {
   cityName: string;
   codAmountPKR: number;
   weightKg: number;
+  shipperProfileIndex?: number;
   remarks?: string;
   items?: Array<{ title: string; quantity: number; price?: number; sku?: string }>;
 }
@@ -520,18 +523,134 @@ async function fulfillOrderInShopify(
   }
 }
 
+function canonicalCustomerPhone(value: unknown): string {
+  let digits = String(value || "").replace(/\D/g, "");
+  if (digits.startsWith("0092")) digits = digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("0")) return `92${digits.slice(1)}`;
+  if (digits.length === 10 && digits.startsWith("3")) return `92${digits}`;
+  return digits;
+}
+
+function customerPhoneVariants(value: unknown): string[] {
+  const raw = String(value || "").replace(/\D/g, "");
+  const canonical = canonicalCustomerPhone(raw);
+  const variants = new Set([raw, canonical]);
+  if (canonical.startsWith("92") && canonical.length === 12) variants.add(`0${canonical.slice(2)}`);
+  if (raw.startsWith("0") && raw.length === 11) variants.add(`92${raw.slice(1)}`);
+  return Array.from(variants).filter((v) => v.length >= 10);
+}
+
 /**
- * Adds tracking and booking tags to the Shopify order
+ * Evaluate shared, merchant-level duplicate/trust rules from the combined BYNDCART
+ * order and shipment history. These checks are best-effort and never block a carrier booking.
  */
-async function tagShopifyOrder(admin: any, orderId: string, courier: string, trackingNumber: string): Promise<void> {
+async function sharedCourierRuleTags(
+  shopifyStoreId: string,
+  orderId: string,
+  customerPhone: string,
+): Promise<string[]> {
+  const rules = await getCourierOperationsSettings(shopifyStoreId);
+  const variants = customerPhoneVariants(customerPhone);
+  if (!variants.length || (!rules.fraudCheckEnabled && !rules.duplicateCheckEnabled)) return [];
+
+  // Enforce the paid-plan gate at runtime too, so saved settings cannot keep running after downgrade.
+  const aiChecksAllowed = await checkFeatureAccess(shopifyStoreId, "COURIER_AI_CHECKS").catch(() => false);
+  if (!aiChecksAllowed) return [];
+
+  const tags = new Set<string>();
+
+  if (rules.duplicateCheckEnabled) {
+    try {
+      const cutoff = new Date(Date.now() - rules.duplicateCheckDurationMinutes * 60 * 1000);
+      const recentOrders = await prisma.order.findMany({
+        where: {
+          shopifyStoreId,
+          shopifyOrderId: { not: orderId },
+          shopifyCreatedAt: { gte: cutoff },
+          customerPhone: { in: variants },
+        },
+        select: { shopifyOrderId: true },
+        take: 100,
+        orderBy: { shopifyCreatedAt: "desc" },
+      });
+      if (recentOrders.length > 0) tags.add("courier: Duplicate Order");
+    } catch (error) {
+      console.warn("[Booking] Duplicate check could not read recent order history:", error);
+    }
+  }
+
+  if (rules.fraudCheckEnabled) {
+    try {
+      const historyOrders = await prisma.order.findMany({
+        where: { shopifyStoreId, customerPhone: { in: variants } },
+        select: { shopifyOrderId: true },
+        take: 1000,
+        orderBy: { shopifyCreatedAt: "desc" },
+      });
+      const orderIds = Array.from(new Set(historyOrders.map((row) => row.shopifyOrderId).filter(Boolean)));
+      const shipments = orderIds.length
+        ? await prisma.shipmentTrack.findMany({
+            where: {
+              shopifyStoreId,
+              shopifyOrderId: { in: orderIds },
+              type: "FORWARD",
+              status: { notIn: ["FAILED", "CANCELLED"] },
+            },
+            select: { status: true },
+            take: 2000,
+          })
+        : [];
+      const ratio = shipments.length
+        ? shipments.filter((shipment) => String(shipment.status).toUpperCase() === "DELIVERED").length / shipments.length
+        : null;
+      const rule = rules.fraudTagDefinition;
+      const thresholdMatch = rule.match(/>\s*(\d+(?:\.\d+)?)\s*%/);
+      const threshold = thresholdMatch ? Number(thresholdMatch[1]) / 100 : 0.85;
+      const tagName = rule.split(/\s+-\s+if\s+|\s+—\s+/i)[0].trim();
+      const isReviewRule = /review|risk|fraud/i.test(tagName);
+      if (ratio !== null && tagName && (
+        (isReviewRule && ratio <= threshold)
+        || (!isReviewRule && ratio > threshold)
+      )) {
+        tags.add(tagName);
+      }
+    } catch (error) {
+      console.warn("[Booking] Customer trust check could not read cross-courier shipment history:", error);
+    }
+  }
+
+  return Array.from(tags);
+}
+
+async function scheduleCourierTrackingRefresh(shopifyStoreId: string): Promise<void> {
+  try {
+    const { ensureCourierTrackingScheduled } = await import("../worker.server");
+    await ensureCourierTrackingScheduled(shopifyStoreId);
+  } catch (error) {
+    console.warn("[Booking] Shipment was saved, but automatic tracking could not be queued:", error);
+  }
+}
+
+/**
+ * Adds tracking tags plus the shared trust/duplicate tags to a Shopify order.
+ */
+async function tagShopifyOrder(
+  admin: any,
+  shopifyStoreId: string,
+  orderId: string,
+  courier: string,
+  trackingNumber: string,
+  customerPhone: string,
+): Promise<void> {
   try {
     const tags = [`Booked-${courier}`, `CN:${trackingNumber}`];
-    await admin.graphql(TAGS_ADD_MUTATION, {
-      variables: {
-        id: orderId,
-        tags,
-      },
-    });
+    for (const tag of await sharedCourierRuleTags(shopifyStoreId, orderId, customerPhone)) {
+      if (!tags.includes(tag)) tags.push(tag);
+    }
+    const response = await admin.graphql(TAGS_ADD_MUTATION, { variables: { id: orderId, tags } });
+    const payload = await response.json().catch(() => ({}));
+    const errors = payload?.data?.tagsAdd?.userErrors || [];
+    if (errors.length) console.warn(`[Booking] Shopify rejected order tags for ${orderId}:`, errors);
   } catch (err) {
     console.warn(`[Booking] Could not tag order ${orderId}:`, err);
   }
@@ -551,6 +670,11 @@ export async function bookCourierShipment(
   const shipmentType = serviceType === "Reverse" || serviceType === "Reversed"
     ? "RETURN"
     : serviceType === "Replacement" ? "EXCHANGE" : "FORWARD";
+  const shipperProfileIndex = Number.isInteger(input.shipperProfileIndex)
+    && Number(input.shipperProfileIndex) >= 0
+    && Number(input.shipperProfileIndex) < 3
+    ? Number(input.shipperProfileIndex)
+    : undefined;
 
   const normalizedPhone = normalizePakistaniMobile(String(input.customerPhone || ""));
   let validationError: string | null = null;
@@ -678,6 +802,7 @@ export async function bookCourierShipment(
           status: "LABEL_CREATED",
           destinationCity: input.cityName,
           codAmount: input.codAmountPKR.toFixed(2),
+          shipperProfileIndex,
         },
         create: {
           shopifyStoreId,
@@ -689,12 +814,14 @@ export async function bookCourierShipment(
           status: "LABEL_CREATED",
           destinationCity: input.cityName,
           codAmount: input.codAmountPKR.toFixed(2),
+          shipperProfileIndex,
         },
       });
+      await scheduleCourierTrackingRefresh(shopifyStoreId);
 
       // Fulfill in Shopify
       const fulfillment = await fulfillOrderInShopify(admin, input.orderId, "RIDER", trackingNumber);
-      await tagShopifyOrder(admin, input.orderId, "Rider", trackingNumber);
+      await tagShopifyOrder(admin, shopifyStoreId, input.orderId, "Rider", trackingNumber, input.customerPhone);
 
       await logAction({
         shopifyStoreId,
@@ -765,6 +892,18 @@ export async function bookCourierShipment(
     }
 
     const adapter = CourierRegistry.get(normCourier);
+    const sharedCourierSettings = await getCourierOperationsSettings(shopifyStoreId).catch((settingsError) => {
+      console.warn("[Booking] Could not read shared shipper profile; using courier-specific address settings.", settingsError);
+      return null;
+    });
+    const effectiveShipperProfileIndex = shipperProfileIndex ?? sharedCourierSettings?.defaultShipperProfileIndex ?? 0;
+    const selectedShipperProfile = sharedCourierSettings?.shipperProfiles[effectiveShipperProfileIndex]
+      || sharedCourierSettings?.shipperProfiles[0]
+      || { name: "", phone: "", city: "", address: "" };
+    const courierWarehouseAddress =
+      (credentials.credentials as any)?.warehouseAddress || (credentials as any).warehouseAddress || "";
+    const courierWarehouseCity =
+      (credentials.credentials as any)?.warehouseCity || (credentials as any).warehouseCity || "";
 
     const bookingPayload = {
       shopifyStoreId,
@@ -777,8 +916,8 @@ export async function bookCourierShipment(
       courierServiceType: serviceType,
       destinationAddress: shipmentType === "RETURN"
         ? {
-            address1: (credentials.credentials as any)?.warehouseAddress || (credentials as any).warehouseAddress || "",
-            city: (credentials.credentials as any)?.warehouseCity || (credentials as any).warehouseCity || "Karachi",
+            address1: courierWarehouseAddress || selectedShipperProfile.address || "",
+            city: courierWarehouseCity || selectedShipperProfile.city || "Karachi",
           }
         : {
             address1: input.customerAddress,
@@ -790,8 +929,8 @@ export async function bookCourierShipment(
             city: input.cityName,
           }
         : {
-            address1: (credentials.credentials as any)?.warehouseAddress || (credentials as any).warehouseAddress || "",
-            city: (credentials as any).warehouseCity || credentials.credentials?.warehouseCity || "Karachi",
+            address1: courierWarehouseAddress || selectedShipperProfile.address || "",
+            city: courierWarehouseCity || selectedShipperProfile.city || "Karachi",
           },
       weightKg: Number(input.weightKg) || 0.5,
       codAmountPKR: shipmentType === "RETURN" ? 0 : Number(input.codAmountPKR) || 0,
@@ -825,6 +964,7 @@ export async function bookCourierShipment(
         labelUrl: labelResult.labelUrl,
         destinationCity: input.cityName,
         codAmount: (shipmentType === "RETURN" ? 0 : input.codAmountPKR).toFixed(2),
+        shipperProfileIndex,
       },
       create: {
         shopifyStoreId,
@@ -837,8 +977,10 @@ export async function bookCourierShipment(
         status: "LABEL_CREATED",
         destinationCity: input.cityName,
         codAmount: (shipmentType === "RETURN" ? 0 : input.codAmountPKR).toFixed(2),
+        shipperProfileIndex,
       },
     });
+    await scheduleCourierTrackingRefresh(shopifyStoreId);
 
     // A reverse pickup must not fulfill the original Shopify order.
     const fulfillment = shipmentType === "RETURN"
@@ -846,7 +988,7 @@ export async function bookCourierShipment(
       : await fulfillOrderInShopify(admin, input.orderId, normCourier, trackingNumber);
 
     // Tag in Shopify
-    await tagShopifyOrder(admin, input.orderId, normCourier, trackingNumber);
+    await tagShopifyOrder(admin, shopifyStoreId, input.orderId, normCourier, trackingNumber, input.customerPhone);
 
     // Audit log
     await logAction({

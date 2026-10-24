@@ -28,7 +28,7 @@ export const PLAN_CONFIGS: Record<string, PlanConfig> = {
     currency: "USD",
     interval: "EVERY_30_DAYS",
     monthlyReturnLimit: 100,
-    features: ["BASIC_RETURNS", "EXCHANGES", "CUSTOM_RULES"],
+    features: ["BASIC_RETURNS", "EXCHANGES", "CUSTOM_RULES", "COURIER_AI_CHECKS"],
   },
   GROWTH: {
     code: "GROWTH",
@@ -37,7 +37,7 @@ export const PLAN_CONFIGS: Record<string, PlanConfig> = {
     currency: "USD",
     interval: "EVERY_30_DAYS",
     monthlyReturnLimit: 500,
-    features: ["BASIC_RETURNS", "EXCHANGES", "CUSTOM_RULES", "MULTIPLE_COURIERS", "ADVANCED_ANALYTICS"],
+    features: ["BASIC_RETURNS", "EXCHANGES", "CUSTOM_RULES", "MULTIPLE_COURIERS", "ADVANCED_ANALYTICS", "COURIER_AI_CHECKS"],
   },
   PRO: {
     code: "PRO",
@@ -46,7 +46,7 @@ export const PLAN_CONFIGS: Record<string, PlanConfig> = {
     currency: "USD",
     interval: "EVERY_30_DAYS",
     monthlyReturnLimit: -1, // Unlimited
-    features: ["BASIC_RETURNS", "EXCHANGES", "CUSTOM_RULES", "MULTIPLE_COURIERS", "ADVANCED_ANALYTICS", "PRIORITY_SUPPORT", "UNLIMITED_RETURNS"],
+    features: ["BASIC_RETURNS", "EXCHANGES", "CUSTOM_RULES", "MULTIPLE_COURIERS", "ADVANCED_ANALYTICS", "PRIORITY_SUPPORT", "UNLIMITED_RETURNS", "COURIER_AI_CHECKS"],
   },
 };
 

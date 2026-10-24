@@ -1,5 +1,5 @@
 import prisma from "../db.server";
-import { getSettings } from "./settings.server";
+import { getSettings, getCourierOperationsSettings } from "./settings.server";
 import { enqueueJob } from "./jobs.server";
 import { WhatsAppRegistry, dispatchWhatsAppNotification, getWhatsAppConfig, DEFAULT_WHATSAPP_AUTOMATIONS } from "./whatsapp.server";
 
@@ -182,13 +182,16 @@ export const DEFAULT_TEMPLATES: Record<NotificationEventType, DefaultTemplateCon
  * Replaces {{variables}} in template string safely.
  */
 export function renderTemplate(template: string, variables: Record<string, any>): string {
-  let result = template;
+  let result = String(template || "");
   for (const [key, val] of Object.entries(variables)) {
     const valueStr = val !== undefined && val !== null ? String(val) : "";
-    const reg = new RegExp(`{{\\s*${key}\\s*}}`, "g");
-    result = result.replace(reg, valueStr);
+    // Template variable names are defined by BYNDCART and consist of letters/underscores.
+    result = result.replace(new RegExp("\\{\\{\\s*" + key + "\\s*\\}\\}", "g"), valueStr);
+    result = result.replace(new RegExp("\\[\\s*" + key + "\\s*\\]", "g"), valueStr);
   }
-  return result;
+  return result
+    .replace(/\[line\]/gi, "\n")
+    .replace(/\{\{\s*line\s*\}\}/gi, "\n");
 }
 
 /**
@@ -297,6 +300,29 @@ export async function processNotificationJob(payload: {
   const { notificationLogId, shopifyStoreId, eventType, channel, recipient, variables } = payload;
 
   try {
+    // The event is executed in-band and also enqueued for retry. Skip the queued duplicate
+    // if the in-band dispatch already delivered or deliberately skipped this exact notification.
+    const currentLog = await prisma.notificationLog.findUnique({
+      where: { id: notificationLogId },
+      select: { status: true },
+    });
+    if (currentLog?.status === "SENT" || currentLog?.status === "SKIPPED") {
+      return { success: true, status: "SKIPPED" };
+    }
+
+    // Courier delivery messaging is one shared merchant-level setting for every provider.
+    let sharedCourierSettings = null as Awaited<ReturnType<typeof getCourierOperationsSettings>> | null;
+    if (eventType === "TRACKING_UPDATE" && channel === "WHATSAPP") {
+      sharedCourierSettings = await getCourierOperationsSettings(shopifyStoreId);
+      if (!sharedCourierSettings.sendDeliveryUpdates) {
+        await prisma.notificationLog.update({
+          where: { id: notificationLogId },
+          data: { status: "SKIPPED", error: "Courier delivery updates disabled in Settings" },
+        });
+        return { success: true, status: "SKIPPED" };
+      }
+    }
+
     // Resolve template (DB custom or default fallback)
     const customTemplate = await prisma.notificationTemplate.findUnique({
       where: {
@@ -311,7 +337,11 @@ export async function processNotificationJob(payload: {
     const defaultConfig = DEFAULT_TEMPLATES[eventType] || DEFAULT_TEMPLATES.RETURN_SUBMITTED;
     const isEnabled = customTemplate ? customTemplate.enabled : true;
     const subjectTemplate = customTemplate ? customTemplate.subject : defaultConfig.subject;
-    const bodyTemplate = customTemplate ? customTemplate.body : defaultConfig.body;
+    const bodyTemplate = eventType === "TRACKING_UPDATE"
+      && channel === "WHATSAPP"
+      && sharedCourierSettings
+      ? (sharedCourierSettings.deliveryUpdateTemplate || (customTemplate ? customTemplate.body : defaultConfig.body))
+      : (customTemplate ? customTemplate.body : defaultConfig.body);
 
     // Check if notification event is disabled by merchant
     if (!isEnabled) {
@@ -337,8 +367,16 @@ export async function processNotificationJob(payload: {
       return { success: false, error: "Invalid recipient" };
     }
 
-    const renderedSubject = renderTemplate(subjectTemplate, variables);
-    const renderedBody = renderTemplate(bodyTemplate, variables);
+    const templateVariables = {
+      ...variables,
+      customer_phone: variables.customer_phone ?? variables.phone ?? "",
+      order_amount: variables.order_amount ?? variables.cod_amount ?? variables.invoice_payment ?? "",
+      courier_name: variables.courier_name ?? variables.carrier ?? variables.courier ?? "",
+      tracking_number: variables.tracking_number ?? variables.trackingNumber ?? "",
+      tracking_url: variables.tracking_url ?? variables.trackingUrl ?? "",
+    };
+    const renderedSubject = renderTemplate(subjectTemplate, templateVariables);
+    const renderedBody = renderTemplate(bodyTemplate, templateVariables);
     const sanitizedBody = sanitizeLogBody(renderedBody);
 
     let sendResult: { success: boolean; error?: string } = { success: false };

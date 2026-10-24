@@ -2,6 +2,29 @@ import db from "../db.server";
 
 type ShopMetadata = { email: string | null; name: string | null };
 
+export {
+  DEFAULT_COURIER_OPERATIONS_SETTINGS,
+  normalizeCourierOperationsSettings,
+} from "../utils/courierOperationsSettings";
+export type {
+  CourierOperationsSettings,
+  ShipperProfile,
+} from "../utils/courierOperationsSettings";
+
+import {
+  normalizeCourierOperationsSettings,
+  type CourierOperationsSettings,
+} from "../utils/courierOperationsSettings";
+
+/** Shared merchant-level preferences used by booking, labels and all configured couriers. */
+export async function getCourierOperationsSettings(shopifyStoreId: string): Promise<CourierOperationsSettings> {
+  const row = await db.storeSettings.findUnique({
+    where: { shopifyStoreId },
+    select: { courierOperationsSettings: true },
+  });
+  return normalizeCourierOperationsSettings(row?.courierOperationsSettings);
+}
+
 export async function getSettings(shopifyStoreId: string, admin?: any) {
   const store = process.env.NODE_ENV === "test"
     ? null
@@ -223,6 +246,7 @@ export async function updateSettings(
     supportEmail?: string | null;
     whatsappNumber?: string | null;
     returnAddress?: string | null;
+    courierOperationsSettings?: CourierOperationsSettings | any;
     policies?: any;
   }
 ) {
@@ -245,5 +269,6 @@ function serializeSettings(settings: any) {
     exchangeShippingCost: Number(settings.exchangeShippingCost),
     codTaxPercent: Number(settings.codTaxPercent ?? 4),
     codDeliveryCharge: Number(settings.codDeliveryCharge ?? 280),
+    courierOperationsSettings: normalizeCourierOperationsSettings(settings.courierOperationsSettings),
   };
 }

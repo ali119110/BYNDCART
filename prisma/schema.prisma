@@ -233,6 +233,9 @@ model StoreSettings {
   whatsappNumber        String?
   returnAddress         String?
   policies              Json?
+  // Merchant-level courier automation, label, WhatsApp message and shipper-profile preferences.
+  // Kept independent from any single courier so the same setup can be reused across providers.
+  courierOperationsSettings Json?
   refundExecutionMode   String       @default("MANUAL") // SHOPIFY_API or MANUAL
   exchangeReplacementTiming String   @default("AFTER_INSPECTION") // AFTER_APPROVAL or AFTER_INSPECTION
   fraudFlagReturnCount    Int         @default(5)
@@ -335,6 +338,8 @@ model ShipmentTrack {
   exchangeRequestId  String?
   destinationCity    String?
   codAmount          Decimal?      @db.Decimal(12, 2)
+  // Shared merchant shipper profile selected when the booking was created.
+  shipperProfileIndex Int?
   loadsheetId        String?
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt

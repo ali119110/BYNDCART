@@ -3,6 +3,7 @@ import { useLoaderData } from "react-router";
 import prisma from "../db.server";
 import { requireTenantContext } from "../services/tenant.server";
 import { generateCode128Svg } from "../utils/barcode";
+import { normalizeCourierOperationsSettings } from "../services/settings.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { shopifyStoreId } = await requireTenantContext(request);
@@ -45,26 +46,38 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
   }
 
-  // Pre-generate SVG barcodes for each shipment
+  // Read one merchant-level label/profile configuration, shared by every courier.
   const labels = shipments.map((s) => {
     const barcodeSvg = generateCode128Svg(s.trackingNumber, 55, 2);
     const storeSettings = s.shopifyStore?.storeSettings || {};
+    const operations = normalizeCourierOperationsSettings(storeSettings.courierOperationsSettings);
+    const selectedProfileIndex = Number.isInteger(s.shipperProfileIndex)
+      && Number(s.shipperProfileIndex) >= 0
+      && Number(s.shipperProfileIndex) < operations.shipperProfiles.length
+      ? Number(s.shipperProfileIndex)
+      : operations.defaultShipperProfileIndex;
+    const shipper = operations.shipperProfiles[selectedProfileIndex] || operations.shipperProfiles[0];
+    const storeDomain = s.shopifyStore?.shop?.replace(".myshopify.com", "") || "";
+    const storeName = shipper?.name || (storeSettings.storeLogoUrl ? "Store" : storeDomain.toUpperCase() || "STORE");
     return {
       id: s.id,
       orderNumber: s.orderNumber,
       trackingNumber: s.trackingNumber,
       courier: s.courier,
-      destinationCity: s.destinationCity || "Karachi",
+      destinationCity: s.destinationCity || "—",
       codAmount: Number(s.codAmount || 0),
       createdAt: new Date(s.createdAt).toLocaleDateString("en-PK", {
         year: "numeric",
         month: "short",
         day: "numeric",
       }),
-      storeName: storeSettings.storeLogoUrl ? "Store" : (s.shopifyStore?.shop?.replace(".myshopify.com", "").toUpperCase() || "STORE"),
-      storeLogoUrl: storeSettings.storeLogoUrl,
-      supportPhone: storeSettings.whatsappNumber || storeSettings.supportEmail || "Support",
-      returnAddress: storeSettings.returnAddress || "Merchant Warehouse",
+      storeName,
+      storeLogoUrl: operations.labelLogoUrl || storeSettings.storeLogoUrl || null,
+      supportPhone: shipper?.phone || storeSettings.whatsappNumber || storeSettings.supportEmail || "Support",
+      returnAddress: shipper?.address || storeSettings.returnAddress || "Merchant Warehouse",
+      shipperCity: shipper?.city || "",
+      labelWebsite: operations.labelWebsite || storeDomain,
+      labelSize: operations.labelSize,
       barcodeSvg,
     };
   });
@@ -81,7 +94,7 @@ export default function AwbPrintPage() {
       <div className="no-print" style={{ maxWidth: "800px", margin: "0 auto 20px", display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", padding: "14px 20px", borderRadius: "8px", border: "1px solid #e5e7eb" }}>
         <div>
           <h2 style={{ margin: 0, fontSize: "16px", fontWeight: 700 }}>Airway Bills ({labels.length} Label{labels.length === 1 ? "" : "s"})</h2>
-          <p style={{ margin: 0, fontSize: "12px", color: "#6b7280" }}>Standard 4×6 inch carrier format for thermal label printers or A4 paper.</p>
+          <p style={{ margin: 0, fontSize: "12px", color: "#6b7280" }}>Print format: {labels[0]?.labelSize === "A4_3" ? "A4 — 3 labels per page" : labels[0]?.labelSize === "A4_4" ? "A4 — 4 labels per page" : "Thermal — 4 × 6 inches"}. Change this in Settings → Label settings.</p>
         </div>
         <div style={{ display: "flex", gap: "10px" }}>
           <button
@@ -108,9 +121,9 @@ export default function AwbPrintPage() {
       )}
 
       {/* Printable Labels Container */}
-      <div className="awb-container" style={{ maxWidth: "4in", margin: "0 auto" }}>
+      <div className={`awb-container awb-container--${(labels[0]?.labelSize || "THERMAL_4X6").toLowerCase()}`} style={{ maxWidth: labels[0]?.labelSize === "A4_3" ? "8.1in" : "4in", margin: "0 auto" }}>
         {labels.map((item) => (
-          <div key={item.id} className="awb-card" style={{ width: "3.85in", minHeight: "5.8in", margin: "0 auto 30px", background: "#fff", border: "2px solid #000", padding: "12px", boxSizing: "border-box", fontFamily: "sans-serif", fontSize: "11px", color: "#000", position: "relative" }}>
+          <div key={item.id} className={`awb-card awb-card--${item.labelSize.toLowerCase()}`} style={{ width: item.labelSize === "A4_3" ? "7.8in" : "3.85in", minHeight: item.labelSize === "A4_3" ? "3.55in" : "5.8in", margin: "0 auto 12px", background: "#fff", border: "2px solid #000", padding: item.labelSize === "A4_3" ? "7px" : "12px", boxSizing: "border-box", fontFamily: "sans-serif", fontSize: item.labelSize === "A4_3" ? "9px" : "11px", color: "#000", position: "relative", pageBreakInside: "avoid" }}>
             
             {/* Header: Courier & Store */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "2px solid #000", paddingBottom: "8px" }}>
@@ -125,6 +138,7 @@ export default function AwbPrintPage() {
                   <strong style={{ fontSize: "14px" }}>{item.storeName}</strong>
                 )}
                 <div style={{ fontSize: "9px", color: "#444" }}>Date: {item.createdAt}</div>
+                {item.labelWebsite && <div style={{ fontSize: "8px", color: "#444", maxWidth: "150px", overflowWrap: "anywhere" }}>{item.labelWebsite}</div>}
               </div>
             </div>
 
@@ -162,6 +176,7 @@ export default function AwbPrintPage() {
                 <strong style={{ textTransform: "uppercase", fontSize: "9px", borderBottom: "1px solid #ccc", display: "block", marginBottom: "3px" }}>Shipper / Return To:</strong>
                 <div>{item.storeName}</div>
                 <div style={{ color: "#333", fontSize: "9px" }}>{item.returnAddress}</div>
+                {item.shipperCity && <div>{item.shipperCity}</div>}
                 <div style={{ marginTop: "3px" }}>Contact: {item.supportPhone}</div>
               </div>
               <div>
@@ -175,7 +190,7 @@ export default function AwbPrintPage() {
             {/* Footer / Instructions */}
             <div style={{ paddingTop: "8px", fontSize: "8px", color: "#555", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span>Do not deliver if flyer seal is tampered.</span>
-              <span>BYNDCART Logistics</span>
+              <span>{item.labelWebsite || "BYNDCART Logistics"}</span>
             </div>
           </div>
         ))}
@@ -198,11 +213,44 @@ export default function AwbPrintPage() {
           }
           .awb-card {
             margin: 0 auto !important;
-            page-break-after: always !important;
+            page-break-after: auto !important;
+            page-break-inside: avoid !important;
             border: 2px solid #000 !important;
           }
+          .awb-card--a4_3 {
+            width: 7.8in !important;
+            height: 3.55in !important;
+            min-height: 3.55in !important;
+            max-height: 3.55in !important;
+            margin-bottom: 0.08in !important;
+          }
+          .awb-card--a4_4 {
+            width: 3.85in !important;
+            height: 5.55in !important;
+            min-height: 5.55in !important;
+            max-height: 5.55in !important;
+            margin-bottom: 0 !important;
+          }
+          .awb-container--a4_3 {
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 0.08in !important;
+            max-width: 8.1in !important;
+          }
+          .awb-container--a4_4 {
+            display: grid !important;
+            grid-template-columns: repeat(2, 3.85in) !important;
+            grid-auto-rows: 5.55in !important;
+            gap: 0.1in !important;
+            max-width: 8.1in !important;
+          }
+          .awb-card--thermal_4x6 {
+            page-break-after: always !important;
+            width: 3.85in !important;
+            min-height: 5.8in !important;
+          }
           @page {
-            size: 4in 6in;
+            size: ${labels[0]?.labelSize === "THERMAL_4X6" ? "4in 6in" : "A4 portrait"};
             margin: 0.1in;
           }
         }

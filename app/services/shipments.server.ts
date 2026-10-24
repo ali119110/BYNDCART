@@ -8,6 +8,8 @@ import {
   StandardShipmentStatus,
 } from "./courier.server";
 import { triggerLifecycleNotification } from "./notifications.server";
+import { getCourierOperationsSettings } from "./settings.server";
+import { getShopifyAdminClient } from "./shopifySync.server";
 
 export interface RegisterShipmentInput {
   shopifyStoreId: string;
@@ -257,6 +259,13 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
     },
   });
 
+  try {
+    const { ensureCourierTrackingScheduled } = await import("../worker.server");
+    await ensureCourierTrackingScheduled(input.shopifyStoreId);
+  } catch (trackingScheduleError) {
+    console.warn("[Shipment Service] Shipment was saved, but automatic tracking could not be queued:", trackingScheduleError);
+  }
+
   // FedEx and DHL return Base64 label documents. Keep bytes server-side and expose only
   // the authenticated /app/shipments-label URL; do not store large data URIs in labelUrl.
   if (labelResult?.labelContentBase64) {
@@ -362,6 +371,90 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
 /**
  * Syncs and updates tracking events for an existing shipment. Prevents duplicate webhook event logging.
  */
+async function syncShopifyFulfillmentEvent(
+  shopifyStoreId: string,
+  shopifyOrderId: string,
+  trackingNumber: string,
+  shipmentType: string,
+  normalizedStatus: string,
+  occurredAt: Date,
+): Promise<void> {
+  // Returns are inbound pickups, not customer-facing Shopify fulfillments.
+  if (shipmentType === "RETURN") return;
+
+  const statusMap: Record<string, string> = {
+    IN_TRANSIT: "IN_TRANSIT",
+    OUT_FOR_DELIVERY: "OUT_FOR_DELIVERY",
+    DELIVERED: "DELIVERED",
+    FAILED: "FAILURE",
+    CANCELLED: "CANCELLED",
+  };
+  const shopifyStatus = statusMap[normalizedStatus.toUpperCase()];
+  if (!shopifyStatus) return;
+
+  try {
+    const admin = await getShopifyAdminClient(shopifyStoreId);
+    if (!admin) return;
+
+    const orderResponse = await admin.graphql(`#graphql
+      query BYNDCARTFulfillmentTracking($orderId: ID!) {
+        order(id: $orderId) {
+          fulfillments(first: 20) {
+            nodes {
+              id
+              trackingInfo {
+                number
+              }
+            }
+          }
+        }
+      }`, { variables: { orderId: shopifyOrderId } });
+    const orderPayload = await orderResponse.json();
+    const fulfillments = orderPayload?.data?.order?.fulfillments?.nodes || [];
+    const normalizedTracking = trackingNumber.trim().toLowerCase();
+    const fulfillment = fulfillments.find((item: any) =>
+      (item.trackingInfo || []).some((tracking: any) =>
+        String(tracking?.number || "").trim().toLowerCase() === normalizedTracking
+      )
+    );
+    if (!fulfillment?.id) {
+      // An order may not have a Shopify fulfillment (for example, an inbound return).
+      return;
+    }
+
+    const eventResponse = await admin.graphql(`#graphql
+      mutation BYNDCARTCreateFulfillmentEvent($fulfillmentEvent: FulfillmentEventInput!) {
+        fulfillmentEventCreate(fulfillmentEvent: $fulfillmentEvent) {
+          fulfillmentEvent { id status message }
+          userErrors { field message }
+        }
+      }`, {
+        variables: {
+          fulfillmentEvent: {
+            fulfillmentId: fulfillment.id,
+            status: shopifyStatus,
+            happenedAt: occurredAt.toISOString(),
+            message: `Courier tracking update: ${normalizedStatus.replace(/_/g, " ")}`,
+          },
+        },
+      });
+    const eventPayload = await eventResponse.json();
+    const userErrors = eventPayload?.data?.fulfillmentEventCreate?.userErrors || [];
+    if (userErrors.length) {
+      console.warn(
+        `[Shipment Service] Shopify fulfillment event not recorded for ${trackingNumber}:`,
+        userErrors.map((item: any) => item.message).join("; "),
+      );
+    }
+  } catch (error) {
+    // Tracking in BYNDCART must continue if Shopify rejects the event or the new scope is not yet granted.
+    console.warn(
+      `[Shipment Service] Shopify fulfillment status sync skipped for ${trackingNumber}:`,
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
 export async function syncShipmentTrackingStatus(trackingNumber: string, shopifyStoreId?: string) {
   const shipment = await prisma.shipmentTrack.findFirst({
     where: { trackingNumber, ...(shopifyStoreId ? { shopifyStoreId } : {}) },
@@ -381,6 +474,9 @@ export async function syncShipmentTrackingStatus(trackingNumber: string, shopify
   const normalizedStatus = carrierNormalizedStatus === "UNKNOWN"
     ? shipment.status as StandardShipmentStatus
     : carrierNormalizedStatus;
+  const previousStatus = String(shipment.status || "").toUpperCase();
+  const shipmentStatusChanged = carrierNormalizedStatus !== "UNKNOWN"
+    && String(normalizedStatus).toUpperCase() !== previousStatus;
 
   // Keep the last known useful state when the carrier returns an unrecognized status.
   const updatedShipment = await prisma.shipmentTrack.update({
@@ -405,6 +501,69 @@ export async function syncShipmentTrackingStatus(trackingNumber: string, shopify
         rawPayload: trackingInfo.rawPayload || null,
       },
     });
+  }
+
+  // Send the confirmed carrier status to the matching Shopify fulfillment, when available.
+  // Only create an event on a state transition to avoid duplicate Shopify timeline entries.
+  if (shipmentStatusChanged) {
+    await syncShopifyFulfillmentEvent(
+      shipment.shopifyStoreId,
+      shipment.shopifyOrderId,
+      trackingNumber,
+      shipment.type,
+      String(normalizedStatus),
+      new Date(),
+    );
+  }
+
+  // Send a single WhatsApp update per confirmed status transition, using merchant-level
+  // template settings shared by all courier integrations. This is non-blocking for tracking.
+  if (shipmentStatusChanged) {
+    try {
+      const courierSettings = await getCourierOperationsSettings(shipment.shopifyStoreId);
+      if (courierSettings.sendDeliveryUpdates) {
+        const order = await prisma.order.findFirst({
+          where: {
+            shopifyStoreId: shipment.shopifyStoreId,
+            shopifyOrderId: shipment.shopifyOrderId,
+          },
+          select: { customerName: true, customerPhone: true, customerEmail: true, totalPrice: true },
+        });
+        if (order?.customerPhone) {
+          const trackingUrl = (() => {
+            const normalizedCourier = String(shipment.courier || "").toUpperCase();
+            if (normalizedCourier.includes("POSTEX")) return `https://postex.pk/tracking?cn=${encodeURIComponent(trackingNumber)}`;
+            if (normalizedCourier.includes("LEOPARD")) return `https://www.leopardscourier.com/tracking?track_number=${encodeURIComponent(trackingNumber)}`;
+            if (normalizedCourier.includes("TCS")) return `https://www.tcsexpress.com/tracking?consignment=${encodeURIComponent(trackingNumber)}`;
+            if (normalizedCourier.includes("TRAX")) return `https://trax.pk/tracking?cn=${encodeURIComponent(trackingNumber)}`;
+            return `/apps/track?tracking=${encodeURIComponent(trackingNumber)}`;
+          })();
+          const amount = Number(shipment.codAmount ?? order.totalPrice ?? 0);
+          await triggerLifecycleNotification({
+            shopifyStoreId: shipment.shopifyStoreId,
+            eventType: "TRACKING_UPDATE",
+            channel: "WHATSAPP",
+            entityId: `${trackingNumber}:${normalizedStatus}`,
+            recipientPhone: order.customerPhone,
+            recipientEmail: order.customerEmail || "",
+            variables: {
+              customer_name: order.customerName || "Customer",
+              customer_phone: order.customerPhone,
+              order_number: shipment.orderNumber,
+              order_amount: Number.isFinite(amount) ? amount.toLocaleString("en-PK") : "0",
+              cod_amount: Number.isFinite(amount) ? amount.toLocaleString("en-PK") : "0",
+              courier_name: adapter.displayName,
+              carrier: adapter.displayName,
+              tracking_number: trackingNumber,
+              tracking_url: trackingUrl,
+              status: normalizedStatus,
+            },
+          });
+        }
+      }
+    } catch (notificationError) {
+      console.warn(`[Shipment Service] Tracking notification failed for ${trackingNumber}:`, notificationError);
+    }
   }
 
   // Automated Exchange Delivery Transition:
