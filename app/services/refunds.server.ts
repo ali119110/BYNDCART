@@ -42,23 +42,45 @@ export async function createRefundRecord(input: {
   notes?: string;
   confirmed?: boolean;
 }) {
-  if (!Number.isFinite(input.amount) || input.amount < 0) {
-    throw new Error("Refund amount must be zero or greater.");
+  if (!Number.isFinite(input.amount) || input.amount <= 0) {
+    throw new Error("Refund amount must be greater than zero.");
   }
-  if (!input.returnRequestId && !input.exchangeRequestId) {
-    throw new Error("A refund must be linked to a return or an exchange.");
+  if (Boolean(input.returnRequestId) === Boolean(input.exchangeRequestId)) {
+    throw new Error("A refund must be linked to exactly one return or exchange request.");
   }
 
   if (input.returnRequestId) {
+    const linkedRequest = await prisma.returnRequest.findFirst({
+      where: { id: input.returnRequestId, shopifyStoreId: input.shopifyStoreId },
+      select: { id: true },
+    });
+    if (!linkedRequest) throw new Error("Return request not found for this store.");
+
     const existing = await prisma.refundRecord.findFirst({
       where: {
         shopifyStoreId: input.shopifyStoreId,
         returnRequestId: input.returnRequestId,
-        method: input.method,
         status: { not: "CANCELLED" },
       },
     });
-    if (existing) throw new Error("An open refund already exists for this return and method.");
+    if (existing) throw new Error("A refund record already exists for this return. Update the existing record instead of creating a second payout.");
+  }
+
+  if (input.exchangeRequestId) {
+    const linkedRequest = await prisma.exchangeRequest.findFirst({
+      where: { id: input.exchangeRequestId, shopifyStoreId: input.shopifyStoreId },
+      select: { id: true },
+    });
+    if (!linkedRequest) throw new Error("Exchange request not found for this store.");
+
+    const existing = await prisma.refundRecord.findFirst({
+      where: {
+        shopifyStoreId: input.shopifyStoreId,
+        exchangeRequestId: input.exchangeRequestId,
+        status: { not: "CANCELLED" },
+      },
+    });
+    if (existing) throw new Error("A refund record already exists for this exchange. Update the existing record instead of creating a second payout.");
   }
 
   const confirmed = Boolean(input.confirmed);
