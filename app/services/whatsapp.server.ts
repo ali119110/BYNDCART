@@ -411,41 +411,48 @@ export async function exchangeMetaEmbeddedSignupCode(
     throw new Error(tokenData?.error?.message || "Failed to exchange authorization code with Meta.");
   }
 
-  const userAccessToken = tokenData.access_token;
+  const userAccessToken = String(tokenData.access_token);
 
-  // 2. Discover merchant's shared WhatsApp Business Accounts
-  const debugUrl = `https://graph.facebook.com/v21.0/debug_token?input_token=${userAccessToken}&access_token=${appId}|${appSecret}`;
+  // 2. Inspect the token and validate that Embedded Signup granted WhatsApp management access.
+  const debugUrl = new URL("https://graph.facebook.com/v21.0/debug_token");
+  debugUrl.searchParams.set("input_token", userAccessToken);
+  debugUrl.searchParams.set("access_token", `${appId}|${appSecret}`);
   const debugRes = await fetch(debugUrl);
   const debugData = await debugRes.json();
-
-  const granularScopes = debugData?.data?.granular_scopes || [];
-  const wabaScope = granularScopes.find((s: any) => s.scope === "whatsapp_business_management");
-  const targetWabaId = wabaScope?.target_ids?.[0];
-
-  let phoneNumberId = "";
-  let displayPhoneNumber = "";
-  let verifiedName = "";
-  let qualityRating = "GREEN";
-
-  if (targetWabaId) {
-    // 3. Query phone numbers under this WABA
-    const phoneUrl = `https://graph.facebook.com/v21.0/${targetWabaId}/phone_numbers?access_token=${userAccessToken}`;
-    const phoneRes = await fetch(phoneUrl);
-    const phoneData = await phoneRes.json();
-
-    if (phoneData?.data?.length > 0) {
-      const primaryPhone = phoneData.data[0];
-      phoneNumberId = primaryPhone.id;
-      displayPhoneNumber = primaryPhone.display_phone_number || "";
-      verifiedName = primaryPhone.verified_name || "";
-      qualityRating = primaryPhone.quality_rating || "GREEN";
-    }
+  if (!debugRes.ok || debugData?.error || debugData?.data?.is_valid === false) {
+    throw new Error(debugData?.error?.message || "Meta returned an invalid WhatsApp access token. Reconnect and approve the requested permissions.");
   }
 
-  // 4. Save credentials and seed default templates
+  const granularScopes = Array.isArray(debugData?.data?.granular_scopes) ? debugData.data.granular_scopes : [];
+  const hasManagementScope = granularScopes.some((scope: any) => scope?.scope === "whatsapp_business_management");
+  const wabaScope = granularScopes.find((scope: any) => scope?.scope === "whatsapp_business_management");
+  const targetWabaId = wabaScope?.target_ids?.[0];
+  if (!hasManagementScope || !targetWabaId) {
+    throw new Error("Meta did not grant WhatsApp Business Account management access. Confirm BYNDCART's Embedded Signup configuration and the merchant's permissions, then reconnect.");
+  }
+
+  // 3. Discover a real phone number under the exact WABA returned by Embedded Signup.
+  const phoneUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(String(targetWabaId))}/phone_numbers`);
+  phoneUrl.searchParams.set("access_token", userAccessToken);
+  const phoneRes = await fetch(phoneUrl);
+  const phoneData = await phoneRes.json();
+  if (!phoneRes.ok || phoneData?.error) {
+    throw new Error(phoneData?.error?.message || "Meta could not list phone numbers for the connected WhatsApp Business Account.");
+  }
+  const primaryPhone = Array.isArray(phoneData?.data) ? phoneData.data[0] : null;
+  const phoneNumberId = String(primaryPhone?.id || "").trim();
+  const displayPhoneNumber = String(primaryPhone?.display_phone_number || "").trim();
+  const verifiedName = String(primaryPhone?.verified_name || "").trim();
+  const qualityRating = String(primaryPhone?.quality_rating || "GREEN");
+  if (!phoneNumberId) {
+    throw new Error("Meta connected the WhatsApp Business Account but returned no phone number ID. Finish registering a WhatsApp phone number in Meta Business Manager, then reconnect.");
+  }
+
+  // 4. Save only a verified, usable connection. The save helper seeds BYNDCART's
+  // local default templates; Meta-hosted templates still require Meta approval.
   const saved = await saveWhatsAppConfig(shopifyStoreId, {
-    phoneNumberId: phoneNumberId || undefined,
-    wabaId: targetWabaId || undefined,
+    phoneNumberId,
+    wabaId: String(targetWabaId),
     accessToken: userAccessToken,
     displayPhoneNumber: displayPhoneNumber || undefined,
     verifiedName: verifiedName || undefined,
