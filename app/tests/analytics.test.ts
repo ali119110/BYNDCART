@@ -143,14 +143,14 @@ test("Analytics Service - Get Store Financial Metrics in PKR", async () => {
   assert.strictEqual(analytics.summary.totalRefunded, 12000, "only confirmed PKR refund records contribute to the PKR payout KPI");
   assert.strictEqual(analytics.summary.returnRequestShare, 71.4);
   assert.strictEqual(analytics.summary.exchangeRequestShare, 28.6);
-  assert.strictEqual(analytics.summary.soldUnits, 60);
+  assert.strictEqual(analytics.summary.orderedUnits, 60);
   assert.strictEqual(analytics.summary.receivedReturnUnits, 6);
   assert.strictEqual(analytics.summary.unitReturnRate, 10, "unit rate uses warehouse-confirmed received/inspected units from the selected order cohort");
   assert.strictEqual(analytics.summary.confirmedRefundsByCurrency.find((row: any) => row.currency === "USD")?.amount, 20);
   assert.strictEqual(analytics.summary.revenueFromExchanges, 1500);
   assert.strictEqual(analytics.topReturnedProducts[0].title, "Embroidered Kurti");
   assert.strictEqual(analytics.topReturnedProducts[0].sku, "SKU-EMB-01");
-  assert.strictEqual(analytics.topReturnedProducts[0].soldUnits, 60);
+  assert.strictEqual(analytics.topReturnedProducts[0].orderedUnits, 60);
   assert.strictEqual(analytics.topReturnedProducts[0].receivedUnits, 6);
   assert.strictEqual(analytics.topReturnedProducts[0].requestedUnits, 6);
   assert.strictEqual(analytics.topReturnedProducts[0].unitReturnRate, 10, "product unit return rate uses cohort-matched sold and warehouse-confirmed units");
