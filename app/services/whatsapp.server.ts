@@ -386,7 +386,7 @@ export async function disconnectWhatsApp(shopifyStoreId: string) {
 
 /**
  * Meta Embedded Signup OAuth Code Exchange
- * Exchanges authorization code from Meta Embedded Signup popup for permanent access token
+ * Exchanges authorization code, validates the WABA and phone, and subscribes the provider app
  * and discovers the merchant's WhatsApp Business Account & Phone Number details.
  */
 export async function exchangeMetaEmbeddedSignupCode(
@@ -411,41 +411,73 @@ export async function exchangeMetaEmbeddedSignupCode(
     throw new Error(tokenData?.error?.message || "Failed to exchange authorization code with Meta.");
   }
 
-  const userAccessToken = tokenData.access_token;
-
-  // 2. Discover merchant's shared WhatsApp Business Accounts
-  const debugUrl = `https://graph.facebook.com/v21.0/debug_token?input_token=${userAccessToken}&access_token=${appId}|${appSecret}`;
-  const debugRes = await fetch(debugUrl);
-  const debugData = await debugRes.json();
-
-  const granularScopes = debugData?.data?.granular_scopes || [];
-  const wabaScope = granularScopes.find((s: any) => s.scope === "whatsapp_business_management");
-  const targetWabaId = wabaScope?.target_ids?.[0];
-
-  let phoneNumberId = "";
-  let displayPhoneNumber = "";
-  let verifiedName = "";
-  let qualityRating = "GREEN";
-
-  if (targetWabaId) {
-    // 3. Query phone numbers under this WABA
-    const phoneUrl = `https://graph.facebook.com/v21.0/${targetWabaId}/phone_numbers?access_token=${userAccessToken}`;
-    const phoneRes = await fetch(phoneUrl);
-    const phoneData = await phoneRes.json();
-
-    if (phoneData?.data?.length > 0) {
-      const primaryPhone = phoneData.data[0];
-      phoneNumberId = primaryPhone.id;
-      displayPhoneNumber = primaryPhone.display_phone_number || "";
-      verifiedName = primaryPhone.verified_name || "";
-      qualityRating = primaryPhone.quality_rating || "GREEN";
+  // Exchange the one-time signup code. Prefer a long-lived user token when Meta
+  // grants it; if this exchange is unavailable for this app's Embedded Signup token,
+  // keep the valid code-exchange token and let API verification expose expiry/permission errors.
+  let userAccessToken = String(tokenData.access_token);
+  const longLivedUrl = new URL("https://graph.facebook.com/v21.0/oauth/access_token");
+  longLivedUrl.searchParams.set("grant_type", "fb_exchange_token");
+  longLivedUrl.searchParams.set("client_id", appId);
+  longLivedUrl.searchParams.set("client_secret", appSecret);
+  longLivedUrl.searchParams.set("fb_exchange_token", userAccessToken);
+  try {
+    const longLivedRes = await fetch(longLivedUrl);
+    const longLivedData = await longLivedRes.json().catch(() => ({}));
+    if (longLivedRes.ok && longLivedData?.access_token) {
+      userAccessToken = String(longLivedData.access_token);
     }
+  } catch {
+    // Use the original successful code-exchange token; the first live API validation below
+    // still has to succeed before the account is marked connected.
   }
 
-  // 4. Save credentials and seed default templates
+  // 2. Validate the granted token and discover the merchant's WABA.
+  const debugUrl = new URL("https://graph.facebook.com/v21.0/debug_token");
+  debugUrl.searchParams.set("input_token", userAccessToken);
+  debugUrl.searchParams.set("access_token", `${appId}|${appSecret}`);
+  const debugRes = await fetch(debugUrl);
+  const debugData = await debugRes.json().catch(() => ({}));
+  if (!debugRes.ok || debugData?.error || debugData?.data?.is_valid === false) {
+    throw new Error(debugData?.error?.message || "Meta did not validate the WhatsApp Embedded Signup token.");
+  }
+
+  const granularScopes = debugData?.data?.granular_scopes || [];
+  const wabaScope = granularScopes.find((scope: any) => scope.scope === "whatsapp_business_management");
+  const targetWabaId = String(wabaScope?.target_ids?.[0] || "").trim();
+  if (!targetWabaId) {
+    throw new Error("Meta did not grant WhatsApp Business Account access. Reconnect and approve WhatsApp Business Management permission.");
+  }
+
+  const phoneUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(targetWabaId)}/phone_numbers`);
+  const phoneRes = await fetch(phoneUrl, { headers: { Authorization: `Bearer ${userAccessToken}`, Accept: "application/json" } });
+  const phoneData = await phoneRes.json().catch(() => ({}));
+  if (!phoneRes.ok || !Array.isArray(phoneData?.data) || phoneData.data.length === 0) {
+    throw new Error(phoneData?.error?.message || "Meta did not return a usable phone number for this WhatsApp Business Account.");
+  }
+
+  const primaryPhone = phoneData.data[0];
+  const phoneNumberId = String(primaryPhone?.id || "").trim();
+  if (!phoneNumberId) throw new Error("Meta returned a phone number without a Phone Number ID.");
+
+  // Subscribe the provider app to this merchant's WABA for webhook notifications.
+  const subscribeUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(targetWabaId)}/subscribed_apps`);
+  const subscribeRes = await fetch(subscribeUrl, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${userAccessToken}`, Accept: "application/json" },
+  });
+  const subscribeData = await subscribeRes.json().catch(() => ({}));
+  if (!subscribeRes.ok || subscribeData?.success !== true) {
+    throw new Error(subscribeData?.error?.message || "Meta could not subscribe BYNDCART to this WABA. Check webhook configuration and granted permissions.");
+  }
+
+  // 3. Save credentials only after Meta verified the token, WABA, phone and subscription.
+  const displayPhoneNumber = String(primaryPhone.display_phone_number || "");
+  const verifiedName = String(primaryPhone.verified_name || "");
+  const qualityRating = String(primaryPhone.quality_rating || "UNKNOWN");
+
   const saved = await saveWhatsAppConfig(shopifyStoreId, {
-    phoneNumberId: phoneNumberId || undefined,
-    wabaId: targetWabaId || undefined,
+    phoneNumberId,
+    wabaId: targetWabaId,
     accessToken: userAccessToken,
     displayPhoneNumber: displayPhoneNumber || undefined,
     verifiedName: verifiedName || undefined,
