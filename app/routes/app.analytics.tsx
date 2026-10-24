@@ -310,3 +310,5 @@ export default function Analytics() {
         </section>
       </main>
     </div>
+  );
+}
