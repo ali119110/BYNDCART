@@ -42,8 +42,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const allowedKeys = new Set(adapter.fields.map((field) => field.key));
     postedCredentials = Object.fromEntries(Object.entries(postedCredentials).filter(([key, value]) => allowedKeys.has(key) && value.trim().length > 0));
-    const existing = (await getStoreCourierConfigs(shopifyStoreId)).find((item) => item.providerName === providerName);
+    const [existing, savedCredentials] = await Promise.all([
+      getStoreCourierConfigs(shopifyStoreId).then((configs) => configs.find((item) => item.providerName === providerName)),
+      getDecryptedCourierCredentials(shopifyStoreId, providerName, true),
+    ]);
     const configuredKeys = new Set(existing?.configuredFieldKeys || []);
+    const savedFields = (savedCredentials?.credentials && typeof savedCredentials.credentials === "object"
+      ? savedCredentials.credentials
+      : savedCredentials || {}) as Record<string, unknown>;
+    const credentialsChanged = Object.entries(postedCredentials).some(
+      ([key, value]) => String(savedFields[key] ?? "").trim() !== value.trim(),
+    );
+    // Saving an unchanged credential form must not undo a successful API verification.
+    // Any actual credential change resets verification so the new values must be tested.
+    const retainVerifiedState = Boolean(existing?.enabled && existing?.isLive && !credentialsChanged);
     const missingRequired = adapter.fields.find((field) => field.required && !postedCredentials[field.key] && !configuredKeys.has(field.key));
     if (missingRequired) {
       return { success: false, error: `Enter ${missingRequired.label} for ${adapter.displayName}.`, intent, providerName };
@@ -56,12 +68,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       await saveMerchantCourierConfig(shopifyStoreId, providerName, {
         credentials: postedCredentials,
         accountNumber: postedCredentials.accountNumber,
-        enabled: false,
-        isLive: false,
+        enabled: retainVerifiedState,
+        isLive: retainVerifiedState,
       });
       return {
         success: true,
-        message: `${adapter.displayName} production credentials saved securely. Verify them to enable this courier for customer bookings.`,
+        message: retainVerifiedState
+          ? `${adapter.displayName} credentials saved. The existing connection verification remains active.`
+          : credentialsChanged
+            ? `${adapter.displayName} credentials changed and saved. Verify them again to enable booking.`
+            : `${adapter.displayName} production credentials saved securely. Verify them to enable this courier for customer bookings.`,
         intent,
         providerName,
       };
