@@ -16,6 +16,7 @@ import {
 } from "../services/loadsheet.server";
 import { getDecryptedCourierCredentials, getMerchantCourierBookingOptions } from "../services/courier.server";
 import { isValidPakistaniMobile, MAJOR_PAKISTANI_CITIES } from "../services/pakistanLogistics";
+import { getCourierOperationsSettings } from "../services/settings.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { shopifyStoreId, admin } = await requireTenantContext(request);
@@ -32,10 +33,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   // Check which couriers have active credentials - pass credentials details for pickup address
-  const [postexCreds, leopardsCreds, tcsCreds] = await Promise.all([
+  const [postexCreds, leopardsCreds, tcsCreds, courierOperationsSettings] = await Promise.all([
     getDecryptedCourierCredentials(shopifyStoreId, "POSTEX"),
     getDecryptedCourierCredentials(shopifyStoreId, "LEOPARDS"),
     getDecryptedCourierCredentials(shopifyStoreId, "TCS"),
+    getCourierOperationsSettings(shopifyStoreId),
   ]);
 
   // Build configured couriers list with pickup addresses from their credentials
@@ -88,6 +90,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     unfulfilledOrders,
     bookingLoadError,
     configuredCouriers,
+    courierOperationsSettings,
     unassignedShipments,
     pastLoadsheets,
   };
@@ -263,7 +266,7 @@ function matchCarrierOption(value: string | undefined, options: string[]): strin
 
 
 export default function BookingsPage() {
-  const { unfulfilledOrders, bookingLoadError, configuredCouriers, unassignedShipments, pastLoadsheets } = useLoaderData<typeof loader>();
+  const { unfulfilledOrders, bookingLoadError, configuredCouriers, courierOperationsSettings, unassignedShipments, pastLoadsheets } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
@@ -278,6 +281,13 @@ export default function BookingsPage() {
   // Default to first configured courier
   const defaultCourierKey = configuredCouriers[0]?.key || "RIDER";
   const [selectedCourierKey, setSelectedCourierKey] = useState(defaultCourierKey);
+  const [selectedShipperProfileIndex, setSelectedShipperProfileIndex] = useState(
+    courierOperationsSettings.defaultShipperProfileIndex ?? 0,
+  );
+  const activeShipperProfile =
+    courierOperationsSettings.shipperProfiles[selectedShipperProfileIndex]
+    || courierOperationsSettings.shipperProfiles[0]
+    || { name: "", phone: "", city: "", address: "" };
   const activeCourier = configuredCouriers.find((c) => c.key === selectedCourierKey) || configuredCouriers[0];
 
   useEffect(() => {
@@ -917,13 +927,21 @@ export default function BookingsPage() {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "16px", flex: 1 }}>
               <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: 0 }}>
                 <span style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Shipper Profile</span>
-                <input
+                <select
                   aria-label="Shipper Profile"
-                  readOnly
-                  value={activeCourier ? `FEAR | ${[activeCourier.pickupAddress, activeCourier.pickupCity].filter(Boolean).join(", ")}` : ""}
-                  placeholder="Configure a courier account"
+                  value={String(selectedShipperProfileIndex)}
+                  onChange={(event) => setSelectedShipperProfileIndex(Number(event.target.value))}
                   style={{ height: "36px", width: "100%", boxSizing: "border-box", padding: "0 10px", border: "1px solid #cbd5e1", borderRadius: "5px", background: "#fff", color: "#0f172a", fontSize: "13px" }}
-                />
+                >
+                  {courierOperationsSettings.shipperProfiles.map((profile, index) => (
+                    <option key={index} value={String(index)}>
+                      {profile.name || `Shipper profile #${index + 1}`}{profile.city ? ` | ${profile.city}` : ""}
+                    </option>
+                  ))}
+                </select>
+                                <span style={{ fontSize: "11px", color: "#64748b", lineHeight: 1.35 }}>
+                  {[activeShipperProfile.phone, activeShipperProfile.address].filter(Boolean).join(" · ") || "Manage sender details in Settings → Shipper profiles"}
+                </span>
               </label>
               <label style={{ display: "flex", flexDirection: "column", gap: "5px", minWidth: 0 }}>
                 <span style={{ fontSize: "11px", fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>Pickup Location</span>
