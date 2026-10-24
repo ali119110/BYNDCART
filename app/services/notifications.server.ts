@@ -7,6 +7,8 @@ export interface SendEmailInput {
   to: string;
   subject: string;
   html: string;
+  /** Merchant's Shopify contact email for replies; never used to impersonate the sender. */
+  replyTo?: string;
 }
 
 const RESEND_API_URL = "https://api.resend.com/emails";
@@ -35,6 +37,7 @@ export async function sendEmail(input: SendEmailInput) {
         to: input.to,
         subject: input.subject,
         html: input.html,
+        ...(input.replyTo && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input.replyTo) ? { reply_to: input.replyTo } : {}),
       }),
     });
 
@@ -287,6 +290,38 @@ export async function triggerLifecycleNotification(input: TriggerNotificationInp
 }
 
 /**
+ * Resolve the merchant's Shopify contact email as Reply-To, falling back to their
+ * configured notification/support address. Sending still uses BYNDCART's verified sender.
+ */
+async function getMerchantReplyToEmail(shopifyStoreId: string): Promise<string | undefined> {
+  let settings: any = null;
+  try {
+    settings = await getSettings(shopifyStoreId);
+  } catch {
+    // Continue with Shopify Admin data if settings have not been created yet.
+  }
+
+  try {
+    const { getShopifyAdminClient } = await import("./shopifySync.server");
+    const admin = await getShopifyAdminClient(shopifyStoreId);
+    if (admin) {
+      const response = await admin.graphql(`#graphql
+        query getMerchantNotificationReplyTo {
+          shop { email }
+        }`);
+      const payload = await response.json();
+      const email = String(payload?.data?.shop?.email || "").trim();
+      if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return email;
+    }
+  } catch (error) {
+    console.warn("[Notifications] Could not resolve Shopify contact email for reply-to.");
+  }
+
+  const fallback = String(settings?.notificationEmail || settings?.supportEmail || "").trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fallback) ? fallback : undefined;
+}
+
+/**
  * Processes a notification background job.
  */
 export async function processNotificationJob(payload: {
@@ -382,10 +417,12 @@ export async function processNotificationJob(payload: {
     let sendResult: { success: boolean; error?: string } = { success: false };
 
     if (channel === "EMAIL") {
+      const replyTo = await getMerchantReplyToEmail(shopifyStoreId);
       sendResult = await sendEmail({
         to: recipient,
         subject: renderedSubject,
         html: renderedBody,
+        replyTo,
       });
     } else if (channel === "WHATSAPP") {
       sendResult = await dispatchWhatsAppNotification({
