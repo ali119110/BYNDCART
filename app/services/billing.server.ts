@@ -74,12 +74,10 @@ export async function createAppSubscription(
   // Handling Free plan selection directly
   if (planCode === "FREE") {
     // If cancelling paid sub
-    if (existingSub.shopifySubscriptionId && adminContext) {
-      try {
-        await cancelAppSubscription(shopifyStoreId, adminContext);
-      } catch (err) {
-        console.warn(`[Billing Service] Warning during cancel while downgrading:`, err);
-      }
+    if (existingSub.shopifySubscriptionId && existingSub.status === "ACTIVE") {
+      // Never switch local feature access to Free while Shopify still has an active paid charge.
+      // A cancellation failure is surfaced and the current plan remains authoritative.
+      await cancelAppSubscription(shopifyStoreId, adminContext);
     }
 
     const updated = await prisma.billingSubscription.upsert({
