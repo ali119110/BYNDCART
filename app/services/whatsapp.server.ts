@@ -40,7 +40,7 @@ export function formatPhoneForMeta(rawPhone: string): string {
   return cleaned;
 }
 
-export const META_GRAPH_API_VERSION = /^v\d+\\.\d+$/.test(process.env.META_GRAPH_API_VERSION || "")
+export const META_GRAPH_API_VERSION = /^v\d+\.\d+$/.test(process.env.META_GRAPH_API_VERSION || "")
   ? String(process.env.META_GRAPH_API_VERSION)
   : "v26.0";
 
