@@ -34,9 +34,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const exchangeMap = new Map(exchanges.map((exchange: any) => [exchange.id, exchange]));
   const shipments = storedShipments.map((shipment: any) => {
     const exchange = shipment.exchangeRequestId ? exchangeMap.get(shipment.exchangeRequestId) : null;
+    const normalizeOrderNumber = (value: unknown) => String(value || "").trim().replace(/^#/, "").toUpperCase();
+    const shipmentOrderKey = normalizeOrderNumber(shipment.orderNumber);
     const isInboundExchange = shipment.type === "EXCHANGE"
       && Boolean(exchange)
-      && shipment.orderNumber === (exchange as any).orderNumber;
+      && shipmentOrderKey === normalizeOrderNumber((exchange as any).orderNumber);
     const flowLabel = shipment.type === "RETURN"
       ? "Inbound return"
       : shipment.type === "EXCHANGE"
