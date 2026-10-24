@@ -69,7 +69,7 @@ export function CodPaymentCheck({
   const [hasNext, setHasNext] = useState(false);
   const [batch, setBatch] = useState(0);
   const [pendingTotal, setPendingTotal] = useState<number | null>(null);
-  const [status, setStatus] = useState("Verify the first 20 fulfilled orders that Shopify shows as unpaid, or verify all to reconcile courier remittances automatically.");
+  const [status, setStatus] = useState("Verify all pending fulfilled orders. After reviewing matches and discrepancies, use one action to reconcile every safely matched order.");
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
 
@@ -80,6 +80,7 @@ export function CodPaymentCheck({
   const [paidIds, setPaidIds] = useState<string[]>([]);
   const [autoRunning, setAutoRunning] = useState(false);
   const [reconciling, setReconciling] = useState(false);
+  const [reconcileProgress, setReconcileProgress] = useState<{ completed: number; total: number } | null>(null);
   const [autoReconcileOnVerify, setAutoReconcileOnVerify] = useState(false);
 
   const stopAuto = useRef(false);
@@ -134,7 +135,7 @@ export function CodPaymentCheck({
 
   async function verify(append: boolean) {
     setError("");
-    setStatus(append ? `Verifying batch ${batch + 1}…` : "Verifying the first 20 orders…");
+    setStatus(append ? `Loading more orders (${rows.length} already loaded)…` : "Verifying all pending fulfilled orders…");
     const data = await submitVerify(append ? cursor : null, append ? "append" : "replace");
     applyBatch(data, append);
 
@@ -184,7 +185,7 @@ export function CodPaymentCheck({
         if (stopAuto.current) break;
 
         page += 1;
-        setStatus(`Verifying batch ${page}…`);
+        setStatus(`Verifying orders… ${loaded} loaded so far.`);
         data = await submitVerify(next, "append");
         if (!data.ok) {
           setError(data.message || `Batch ${page} failed.`);
@@ -199,7 +200,7 @@ export function CodPaymentCheck({
         setCursor(next);
         setHasNext(more);
         setBatch(page);
-        setStatus(`Batch ${page} verified. ${loaded} orders loaded.`);
+        setStatus(`${loaded} orders verified so far.`);
 
         if (autoReconcileOnVerify && data.ok && data.results?.length) {
           const safeIds = data.results.filter(isSafe).map((r) => r.orderId);
@@ -210,7 +211,7 @@ export function CodPaymentCheck({
       if (stopAuto.current) {
         setStatus(`Verification stopped. ${loaded} orders loaded.`);
       } else {
-        setStatus(`All ${loaded} pending fulfilled orders verified against couriers.`);
+        setStatus(`Finished checking ${loaded} pending fulfilled orders against courier records.`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Auto-verification stopped.");
@@ -244,13 +245,16 @@ export function CodPaymentCheck({
     setError("");
     setReconciling(true);
     let markedCount = 0;
+    setReconcileProgress({ completed: 0, total: count });
 
     try {
       for (let index = 0; index < orderIds.length; index += 20) {
         const chunk = orderIds.slice(index, index + 20);
+        setStatus(`Reconciling orders… ${Math.min(index, count)} of ${count} processed.`);
         const data = await submitMark(chunk);
         const marked = data.marked || [];
         markedCount += marked.length;
+        setReconcileProgress({ completed: Math.min(index + chunk.length, count), total: count });
 
         if (marked.length) {
           setPaidIds((current) => [...new Set([...current, ...marked.map((row) => row.orderId)])]);
@@ -267,11 +271,12 @@ export function CodPaymentCheck({
         }
       }
 
-      setStatus(`Successfully reconciled ${markedCount} of ${orderIds.length} orders into Shopify & database ledger.`);
+      setStatus(`Reconciliation finished: ${markedCount} of ${orderIds.length} orders marked paid in Shopify and written to the settlement ledger.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Auto-reconciliation encountered an issue.");
     } finally {
       setReconciling(false);
+      setReconcileProgress(null);
     }
   }
 
@@ -401,27 +406,9 @@ export function CodPaymentCheck({
           type="button"
           className="bc-btn primary"
           disabled={busy}
-          onClick={() => verify(false)}
-        >
-          Verify first 20
-        </button>
-
-        <button
-          type="button"
-          className="bc-btn"
-          disabled={busy || !hasNext}
-          onClick={() => verify(true)}
-        >
-          Verify next 20
-        </button>
-
-        <button
-          type="button"
-          className="bc-btn"
-          disabled={reconciling}
           onClick={autoVerify}
         >
-          {autoRunning ? "Stop verification" : "Verify all"}
+          {autoRunning ? "Stop verification" : "Verify all orders"}
         </button>
 
         <button
@@ -429,10 +416,13 @@ export function CodPaymentCheck({
           className="bc-btn primary"
           disabled={busy || safeVisibleUnreconciled.length === 0}
           onClick={() => executeReconciliation(safeVisibleUnreconciled.map((r) => r.orderId))}
+          aria-live="polite"
         >
-          {courierFilter === "ALL"
-            ? `Auto-reconcile matched (${safeVisibleUnreconciled.length})`
-            : `Auto-reconcile ${courierFilter === "POSTEX" ? "PostEx" : "Leopards"} (${safeVisibleUnreconciled.length})`}
+          {reconciling
+            ? `Reconciling ${reconcileProgress?.completed || 0}/${reconcileProgress?.total || safeVisibleUnreconciled.length}…`
+            : courierFilter === "ALL"
+              ? `Reconcile all matched (${safeVisibleUnreconciled.length})`
+              : `Reconcile all ${courierFilter === "POSTEX" ? "PostEx" : "Leopards"} matched (${safeVisibleUnreconciled.length})`}
         </button>
 
         {selected.length > 0 && (
