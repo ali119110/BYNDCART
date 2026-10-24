@@ -713,8 +713,8 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
 
     // The supplied Leopards eCom API (v2) documents bookPacket only. It does not publish a
     // separate reverse-pickup endpoint. Returns use that same endpoint with the customer as
-    // shipper and the merchant warehouse as consignee. Confirm this mapping in Leopards staging
-    // before customer returns go live.
+    // shipper and the merchant warehouse as consignee. Verify this account-specific return
+    // behavior against the merchant's approved Leopards contract before enabling customer returns.
     const senderCityName = reverse ? customerCity : warehouseCity;
     const receiverCityName = reverse ? warehouseCity : customerCity;
     let cities: LeopardsCity[];
