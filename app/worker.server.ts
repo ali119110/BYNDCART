@@ -66,6 +66,15 @@ export async function ensureCourierTrackingScheduled(shopifyStoreId: string) {
   const settings = await getCourierOperationsSettings(shopifyStoreId);
   if (!settings.autoCourierTracking) return;
 
+  const activeShipment = await prisma.shipmentTrack.findFirst({
+    where: {
+      shopifyStoreId,
+      status: { notIn: ["DELIVERED", "CANCELLED", "FAILED"] },
+    },
+    select: { id: true },
+  });
+  if (!activeShipment) return;
+
   const existingJob = await prisma.backgroundJob.findFirst({
     where: {
       shopifyStoreId,
