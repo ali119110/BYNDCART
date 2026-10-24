@@ -210,7 +210,7 @@ export default function Shipments() {
         <div className="bc-header-copy">
           <p className="bc-eyebrow">LOGISTICS</p>
           <h1>Shipments</h1>
-          <p>View carrier-created tracking numbers, refresh live courier statuses, download documents, and request cancellation.</p>
+          <p>Track inbound customer returns and exchange pickups alongside outbound replacement and forward deliveries.</p>
         </div>
       </header>
 
@@ -298,11 +298,11 @@ export default function Shipments() {
                 <tr>
                   <th>Shipment</th>
                   <th>Order</th>
-                  <th>Type</th>
+                  <th>Direction / type</th>
                   <th>Courier</th>
                   <th>Tracking</th>
                   <th>Status</th>
-                  <th>Label</th>
+                  <th>Carrier document</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -311,7 +311,14 @@ export default function Shipments() {
                   <tr key={shipment.id}>
                     <td><code>{shipment.id.slice(0, 8)}</code></td>
                     <td>{shipment.orderNumber}</td>
-                    <td><span className="bc-badge">{shipment.type}</span></td>
+                    <td>
+                      <span className={`bc-badge ${shipment.type === "RETURN" ? "warn" : "ok"}`}>
+                        {shipment.type === "RETURN" ? "Inbound return" : shipment.type === "EXCHANGE" ? "Outbound replacement" : "Outbound delivery"}
+                      </span>
+                      <div className="bc-muted" style={{ fontSize: "11px", marginTop: "4px" }}>
+                        {shipment.type === "RETURN" ? "Customer → merchant" : "Merchant → customer"}
+                      </div>
+                    </td>
                     <td>{shipment.courier}</td>
                     <td><code>{shipment.trackingNumber}</code></td>
                     <td>
@@ -321,12 +328,11 @@ export default function Shipments() {
                     </td>
                     <td>
                       <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-                        <a className="bc-text-link" href={`/app/awb?ids=${shipment.id}`} target="_blank" rel="noopener noreferrer">Print AWB</a>
                         {shipment.labelUrl ? (
                           <a className="bc-text-link" href={shipment.labelUrl} target="_blank" rel="noopener noreferrer">Carrier label</a>
                         ) : shipment.courier === "POSTEX" ? (
                           <a className="bc-text-link" href={`/app/shipments-label?trackingNumber=${encodeURIComponent(shipment.trackingNumber)}`}>Download invoice</a>
-                        ) : null}
+                        ) : <span className="bc-muted">No carrier document</span>}
                       </div>
                     </td>
                     <td>
