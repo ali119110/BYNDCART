@@ -469,7 +469,7 @@ export default function Notifications() {
           response_type: "code",
           override_default_response_type: true,
           extras: {
-            setup: {},
+            setup: { solutionID: metaSolutionId },
             featureType: "",
             sessionInfoVersion: "2",
           },
