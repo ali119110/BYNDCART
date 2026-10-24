@@ -495,6 +495,54 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
   const orderSnapshot = await prisma.order.findFirst({ where: { shopifyStoreId, shopifyOrderId: exchangeRequest.shopifyOrderId } });
   if (!orderSnapshot) throw new Error("Original Shopify order snapshot is missing; refresh/sync the order before creating a replacement.");
   const originalLines = Array.isArray(orderSnapshot.lineItems) ? orderSnapshot.lineItems as any[] : [];
+
+  // Re-read the original Shopify order at replacement creation time. Draft orders
+  // created without customerId/address fields can become generic "Customer" orders,
+  // which loses the checkout recipient for outbound replacement shipments.
+  let originalCustomerOrder: any = null;
+  try {
+    const customerResponse = await client.graphql(
+      `#graphql
+      query getOriginalExchangeCustomer($id: ID!) {
+        order(id: $id) {
+          id
+          email
+          phone
+          customer { id }
+          shippingAddress {
+            firstName lastName name address1 address2 city province country zip phone company
+          }
+          billingAddress {
+            firstName lastName name address1 address2 city province country zip phone company
+          }
+        }
+      }`,
+      { variables: { id: exchangeRequest.shopifyOrderId } },
+    );
+    const customerPayload = await customerResponse.json();
+    if (Array.isArray(customerPayload?.errors) && customerPayload.errors.length) {
+      console.warn("[ShopifySync] Could not load original exchange customer address:", customerPayload.errors.map((e: any) => e.message).join("; "));
+    } else {
+      originalCustomerOrder = customerPayload?.data?.order || null;
+    }
+  } catch (error) {
+    console.warn("[ShopifySync] Could not load original exchange customer address:", error instanceof Error ? error.message : error);
+  }
+
+  const normalizeDraftAddress = (value: any) => {
+    if (!value || typeof value !== "object") return undefined;
+    const keys = ["firstName", "lastName", "address1", "address2", "city", "province", "country", "zip", "phone", "company"];
+    const address = Object.fromEntries(keys
+      .map((key) => [key, value[key]])
+      .filter(([, fieldValue]) => fieldValue !== undefined && fieldValue !== null && String(fieldValue).trim() !== ""));
+    return Object.keys(address).length ? address : undefined;
+  };
+  const fallbackShippingAddress = (orderSnapshot as any).shippingAddress || undefined;
+  const fallbackBillingAddress = (orderSnapshot as any).billingAddress || undefined;
+  const replacementShippingAddress = normalizeDraftAddress(originalCustomerOrder?.shippingAddress)
+    || normalizeDraftAddress(fallbackShippingAddress);
+  const replacementBillingAddress = normalizeDraftAddress(originalCustomerOrder?.billingAddress)
+    || normalizeDraftAddress(fallbackBillingAddress);
   const replacementVariantIds = [...new Set(exchangeRequest.items.map((item: any) => item.replacementVariantId))];
   const variants = await prisma.productCache.findMany({ where: { shopifyStoreId, shopifyVariantId: { in: replacementVariantIds } } });
   const variantById = new Map(variants.map((variant: any) => [variant.shopifyVariantId, variant]));
@@ -532,8 +580,20 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
     });
     return { success: true, replacementOrderId: alreadyCreatedOrderId, replacementOrderNumber: alreadyCreatedOrderNumber, idempotent: true, netDifference, settlement, originalReturnError };
   }
+  const replacementEmail = String(originalCustomerOrder?.email || exchangeRequest.customerEmail || (orderSnapshot as any).customerEmail || "").trim();
+  const replacementPhone = String(
+    originalCustomerOrder?.phone
+      || originalCustomerOrder?.shippingAddress?.phone
+      || replacementShippingAddress?.phone
+      || (orderSnapshot as any).customerPhone
+      || "",
+  ).trim();
   const input: any = {
-    email: exchangeRequest.customerEmail || undefined,
+    ...(originalCustomerOrder?.customer?.id ? { customerId: originalCustomerOrder.customer.id } : {}),
+    ...(replacementEmail ? { email: replacementEmail } : {}),
+    ...(replacementPhone ? { phone: replacementPhone } : {}),
+    ...(replacementShippingAddress ? { shippingAddress: replacementShippingAddress } : {}),
+    ...(replacementBillingAddress ? { billingAddress: replacementBillingAddress } : {}),
     note: `BYNDCART exchange replacement for original order ${exchangeRequest.orderNumber} (request ${exchangeRequest.id}). Net difference: ${netDifference.toFixed(2)} ${orderSnapshot.currency}. A positive balance remains unpaid until collected by the merchant.`,
     tags: [REPLACEMENT_ORDER_TAG],
     lineItems,
