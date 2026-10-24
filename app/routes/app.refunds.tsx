@@ -203,7 +203,7 @@ export async function action({ request }: ActionFunctionArgs) {
         }) : Promise.resolve({ status: "SKIPPED", reason: "No checkout phone number" }),
       ];
       const results = await Promise.all(delivery);
-      const failed = results.filter((result: any) => !["SENT", "SKIPPED", "IDEMPOTENT_SKIP", undefined].includes(result.status));
+      const failed = results.filter((result: any) => !["SENT", "SKIPPED", "IDEMPOTENT_SKIP", "QUEUED", undefined].includes(result.status));
       return {
         ok: true,
         intent,
