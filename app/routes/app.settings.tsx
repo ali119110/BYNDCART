@@ -450,17 +450,21 @@ export default function Settings() {
         <section className="bco-section" aria-labelledby="bco-ai-title">
           <div className="bco-heading">
             <span className="bco-icon" aria-hidden="true">✧</span>
-            <div><h2 id="bco-ai-title">AI assistant &amp; order checks</h2><p>Shared rules for customer history and repeat-order review across the courier workspace.</p></div>
+            <div>
+              <h2 id="bco-ai-title">AI assistant &amp; order checks</h2>
+              <p>Shared rules for customer history and repeat-order review across the courier workspace.</p>
+              <span className="bco-help" style={{ display: "inline-block", marginTop: "5px", fontWeight: 700 }}>{aiFeaturesAvailable ? "Available on your paid plan" : "Available on Paid Plans"}</span>
+            </div>
           </div>
           <div className="bco-body">
             <div className="bco-toggle-list">
               <label className="bco-toggle">
-                <input type="checkbox" name="fraudCheckEnabled" defaultChecked={Boolean(settings.courierOperationsSettings?.fraudCheckEnabled)} />
+                <input type="checkbox" name="fraudCheckEnabled" disabled={!aiFeaturesAvailable} defaultChecked={aiFeaturesAvailable && Boolean(settings.courierOperationsSettings?.fraudCheckEnabled)} />
                 <span className="bco-switch" aria-hidden="true" />
                 <span className="bco-toggle-copy"><span className="bco-toggle-title">Fraud / trust check</span><span className="bco-help">Use delivery history from BYNDCART shipment records to identify trusted customers.</span></span>
               </label>
               <label className="bco-toggle">
-                <input type="checkbox" name="duplicateCheckEnabled" defaultChecked={Boolean(settings.courierOperationsSettings?.duplicateCheckEnabled)} />
+                <input type="checkbox" name="duplicateCheckEnabled" disabled={!aiFeaturesAvailable} defaultChecked={aiFeaturesAvailable && Boolean(settings.courierOperationsSettings?.duplicateCheckEnabled)} />
                 <span className="bco-switch" aria-hidden="true" />
                 <span className="bco-toggle-copy"><span className="bco-toggle-title">Duplicate order check</span><span className="bco-help">Flag multiple orders from the same phone number within the selected time window.</span></span>
               </label>
@@ -468,7 +472,7 @@ export default function Settings() {
             <div className="bco-grid">
               <div className="bco-field">
                 <label htmlFor="fraudTagDefinition">Trust tag rule</label>
-                <select id="fraudTagDefinition" name="fraudTagDefinition" defaultValue={settings.courierOperationsSettings?.fraudTagDefinition || DEFAULT_COURIER_OPERATIONS_SETTINGS.fraudTagDefinition}>
+                <select id="fraudTagDefinition" name="fraudTagDefinition" disabled={!aiFeaturesAvailable} defaultValue={settings.courierOperationsSettings?.fraudTagDefinition || DEFAULT_COURIER_OPERATIONS_SETTINGS.fraudTagDefinition}>
                   <option value="courier: Trusted - if customer delivery ratio > 85%">courier: Trusted — delivery ratio above 85%</option>
                   <option value="courier: Trusted - if customer delivery ratio > 90%">courier: Trusted — delivery ratio above 90%</option>
                   <option value="courier: Review - low delivery ratio">courier: Review — low delivery ratio</option>
@@ -477,7 +481,7 @@ export default function Settings() {
               </div>
               <div className="bco-field">
                 <label htmlFor="duplicateCheckDurationMinutes">Duplicate time window</label>
-                <select id="duplicateCheckDurationMinutes" name="duplicateCheckDurationMinutes" defaultValue={String(settings.courierOperationsSettings?.duplicateCheckDurationMinutes || 30)}>
+                <select id="duplicateCheckDurationMinutes" name="duplicateCheckDurationMinutes" disabled={!aiFeaturesAvailable} defaultValue={String(settings.courierOperationsSettings?.duplicateCheckDurationMinutes || 30)}>
                   <option value="15">15 minutes</option>
                   <option value="30">30 minutes</option>
                   <option value="60">1 hour</option>
@@ -487,7 +491,11 @@ export default function Settings() {
                 <span className="bco-help">Orders with the same customer phone inside this period can be flagged.</span>
               </div>
             </div>
-            <div className="bco-note">These controls are store-wide, not tied to a particular courier. Checks use available BYNDCART order and shipment history; the merchant's selected rule determines the tag behavior.</div>
+            <div className="bco-note">
+              {aiFeaturesAvailable
+                ? "These controls are store-wide, not tied to a particular courier. Checks use available BYNDCART order and shipment history; the merchant's selected rule determines the tag behavior."
+                : <>Upgrade your plan to enable shared customer trust and duplicate-order checks. <Link to="/app/billing" style={{ color: "#2563eb", fontWeight: 700 }}>View plans</Link>.</>}
+            </div>
           </div>
         </section>
 
