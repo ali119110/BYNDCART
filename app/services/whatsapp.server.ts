@@ -40,6 +40,10 @@ export function formatPhoneForMeta(rawPhone: string): string {
   return cleaned;
 }
 
+export const META_GRAPH_API_VERSION = /^v\\d+\\.\\d+$/.test(process.env.META_GRAPH_API_VERSION || "")
+  ? String(process.env.META_GRAPH_API_VERSION)
+  : "v26.0";
+
 type MetaUtilityTemplateDefinition = { name: string; body: string; variables: string[] };
 
 const META_UTILITY_TEMPLATES: Record<string, MetaUtilityTemplateDefinition> = {
@@ -80,7 +84,7 @@ function metaTemplateParameters(eventType: string, variables: Record<string, any
 export async function ensureMetaUtilityTemplates(wabaId: string, accessToken: string) {
   if (!wabaId.trim() || !accessToken.trim()) throw new Error("A verified WABA ID and access token are required to set up WhatsApp templates.");
   const result = { created: 0, pending: 0, approved: 0, failed: 0, errors: [] as string[] };
-  const listUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(wabaId)}/message_templates`);
+  const listUrl = new URL(`https://graph.facebook.com/${META_GRAPH_API_VERSION}/${encodeURIComponent(wabaId)}/message_templates`);
   listUrl.searchParams.set("fields", "id,name,status,language,category");
   listUrl.searchParams.set("limit", "100");
   const listResponse = await fetch(listUrl, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
@@ -107,7 +111,7 @@ export async function ensureMetaUtilityTemplates(wabaId: string, accessToken: st
       else { result.failed += 1; result.errors.push(`${definition.name}: Meta status ${status || "unknown"}`); }
       continue;
     }
-    const url = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(wabaId)}/message_templates`);
+    const url = new URL(`https://graph.facebook.com/${META_GRAPH_API_VERSION}/${encodeURIComponent(wabaId)}/message_templates`);
     const response = await fetch(url, {
       method: "POST",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" },
@@ -167,7 +171,7 @@ export class MetaWhatsAppCloudAdapter implements IWhatsAppAdapter {
       };
     }
 
-    const url = `https://graph.facebook.com/v21.0/${phoneId}/messages`;
+    const url = `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${phoneId}/messages`;
 
     let payload: any;
 
@@ -467,6 +471,7 @@ export async function disconnectWhatsApp(shopifyStoreId: string) {
 export async function exchangeMetaEmbeddedSignupCode(
   shopifyStoreId: string,
   code: string,
+  embeddedSignup: { wabaId: string; phoneNumberId: string },
   metaAppId?: string,
   metaAppSecret?: string
 ) {
@@ -478,7 +483,7 @@ export async function exchangeMetaEmbeddedSignupCode(
   }
 
   // 1. Exchange code for access token
-  const tokenUrl = `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&code=${encodeURIComponent(code)}`;
+  const tokenUrl = `https://graph.facebook.com/${META_GRAPH_API_VERSION}/oauth/access_token?client_id=${appId}&client_secret=${appSecret}&code=${encodeURIComponent(code)}`;
   const tokenRes = await fetch(tokenUrl);
   const tokenData = await tokenRes.json();
 
@@ -490,7 +495,7 @@ export async function exchangeMetaEmbeddedSignupCode(
   // grants it; if this exchange is unavailable for this app's Embedded Signup token,
   // keep the valid code-exchange token and let API verification expose expiry/permission errors.
   let userAccessToken = String(tokenData.access_token);
-  const longLivedUrl = new URL("https://graph.facebook.com/v21.0/oauth/access_token");
+  const longLivedUrl = new URL("https://graph.facebook.com/${META_GRAPH_API_VERSION}/oauth/access_token");
   longLivedUrl.searchParams.set("grant_type", "fb_exchange_token");
   longLivedUrl.searchParams.set("client_id", appId);
   longLivedUrl.searchParams.set("client_secret", appSecret);
@@ -506,8 +511,16 @@ export async function exchangeMetaEmbeddedSignupCode(
     // still has to succeed before the account is marked connected.
   }
 
-  // 2. Validate the granted token and discover the merchant's WABA.
-  const debugUrl = new URL("https://graph.facebook.com/v21.0/debug_token");
+  // Embedded Signup v4 sends the selected WABA and phone-number IDs through the
+  // WA_EMBEDDED_SIGNUP FINISH postMessage event. Do not infer the WABA from granular
+  // token scopes: a provider/user may have access to multiple business accounts.
+  const targetWabaId = String(embeddedSignup?.wabaId || "").trim();
+  const phoneNumberId = String(embeddedSignup?.phoneNumberId || "").trim();
+  if (!/^\\d+$/.test(targetWabaId) || !/^\\d+$/.test(phoneNumberId)) {
+    throw new Error("Meta Embedded Signup v4 did not return valid WABA and phone-number IDs. Reconnect and finish the WhatsApp setup flow.");
+  }
+
+  const debugUrl = new URL(`https://graph.facebook.com/${META_GRAPH_API_VERSION}/debug_token`);
   debugUrl.searchParams.set("input_token", userAccessToken);
   debugUrl.searchParams.set("access_token", `${appId}|${appSecret}`);
   const debugRes = await fetch(debugUrl);
@@ -516,36 +529,36 @@ export async function exchangeMetaEmbeddedSignupCode(
     throw new Error(debugData?.error?.message || "Meta did not validate the WhatsApp Embedded Signup token.");
   }
 
-  const granularScopes = debugData?.data?.granular_scopes || [];
-  const wabaScope = granularScopes.find((scope: any) => scope.scope === "whatsapp_business_management");
-  const targetWabaId = String(wabaScope?.target_ids?.[0] || "").trim();
-  if (!targetWabaId) {
-    throw new Error("Meta did not grant WhatsApp Business Account access. Reconnect and approve WhatsApp Business Management permission.");
-  }
-
-  const phoneUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(targetWabaId)}/phone_numbers`);
+  const phoneUrl = new URL(`https://graph.facebook.com/${META_GRAPH_API_VERSION}/${encodeURIComponent(phoneNumberId)}`);
+  phoneUrl.searchParams.set("fields", "id,display_phone_number,verified_name,quality_rating");
   const phoneRes = await fetch(phoneUrl, { headers: { Authorization: `Bearer ${userAccessToken}`, Accept: "application/json" } });
-  const phoneData = await phoneRes.json().catch(() => ({}));
-  if (!phoneRes.ok || !Array.isArray(phoneData?.data) || phoneData.data.length === 0) {
-    throw new Error(phoneData?.error?.message || "Meta did not return a usable phone number for this WhatsApp Business Account.");
+  const primaryPhone = await phoneRes.json().catch(() => ({}));
+  if (!phoneRes.ok || primaryPhone?.error || String(primaryPhone?.id || "") !== phoneNumberId) {
+    throw new Error(primaryPhone?.error?.message || "Meta could not verify the Phone Number ID returned by Embedded Signup v4.");
   }
 
-  const primaryPhone = phoneData.data[0];
-  const phoneNumberId = String(primaryPhone?.id || "").trim();
-  if (!phoneNumberId) throw new Error("Meta returned a phone number without a Phone Number ID.");
+  const linkedNumbersUrl = new URL(`https://graph.facebook.com/${META_GRAPH_API_VERSION}/${encodeURIComponent(targetWabaId)}/phone_numbers`);
+  const linkedNumbersResponse = await fetch(linkedNumbersUrl, {
+    headers: { Authorization: `Bearer ${userAccessToken}`, Accept: "application/json" },
+  });
+  const linkedNumbers = await linkedNumbersResponse.json().catch(() => ({}));
+  if (!linkedNumbersResponse.ok || !Array.isArray(linkedNumbers?.data)
+    || !linkedNumbers.data.some((item: any) => String(item?.id || "") === phoneNumberId)) {
+    throw new Error(linkedNumbers?.error?.message || "The selected phone number is not linked to the WABA returned by Embedded Signup v4.");
+  }
 
-  // Subscribe the provider app to this merchant's WABA for webhook notifications.
-  const subscribeUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(targetWabaId)}/subscribed_apps`);
+  // Subscribe the provider app to this merchant's WABA so webhook events can arrive.
+  const subscribeUrl = new URL(`https://graph.facebook.com/${META_GRAPH_API_VERSION}/${encodeURIComponent(targetWabaId)}/subscribed_apps`);
   const subscribeRes = await fetch(subscribeUrl, {
     method: "POST",
     headers: { Authorization: `Bearer ${userAccessToken}`, Accept: "application/json" },
   });
   const subscribeData = await subscribeRes.json().catch(() => ({}));
   if (!subscribeRes.ok || subscribeData?.success !== true) {
-    throw new Error(subscribeData?.error?.message || "Meta could not subscribe BYNDCART to this WABA. Check webhook configuration and granted permissions.");
+    throw new Error(subscribeData?.error?.message || "Meta could not subscribe BYNDCART to this WABA. Check Tech Provider permissions and webhook configuration.");
   }
 
-  // 3. Save credentials only after Meta verified the token, WABA, phone and subscription.
+  // 3. Save credentials only after Meta verified the v4-selected WABA, phone and token.
   const displayPhoneNumber = String(primaryPhone.display_phone_number || "");
   const verifiedName = String(primaryPhone.verified_name || "");
   const qualityRating = String(primaryPhone.quality_rating || "UNKNOWN");
