@@ -158,18 +158,20 @@ export async function loader({ request }: LoaderFunctionArgs) {
         orderBy: { createdAt: "desc" },
         include: { items: true },
       }),
-      // Live queues deliberately ignore the historical date filter.
-      prisma.returnRequest.count({ where: { shopifyStoreId, status: "PENDING" } }),
-      prisma.exchangeRequest.count({ where: { shopifyStoreId, status: "PENDING" } }),
-      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: { in: ["IN_TRANSIT", "OUT_FOR_DELIVERY"] } } }),
+      // Live queues deliberately ignore the historical date filter. Grouping related
+      // states reduces the dashboard's concurrent database round-trips.
+      prisma.shipmentTrack.groupBy({
+        by: ["status"],
+        where: { shopifyStoreId },
+        _count: { _all: true },
+      }),
       prisma.warehouseIntake.count({ where: { shopifyStoreId, status: "RECEIVED" } }),
-      prisma.refundRecord.count({ where: { shopifyStoreId, status: "PENDING" } }),
-      prisma.refundRecord.aggregate({
-        where: { shopifyStoreId, status: "PENDING", currency: "PKR" },
+      prisma.refundRecord.groupBy({
+        by: ["status", "currency"],
+        where: { shopifyStoreId },
+        _count: { _all: true },
         _sum: { amount: true },
       }),
-      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "FAILED" } }),
-      prisma.shipmentTrack.count({ where: { shopifyStoreId, status: "LABEL_CREATED" } }),
       prisma.shipmentTrack.count({
         where: {
           shopifyStoreId,
@@ -177,12 +179,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
           updatedAt: { lt: staleBefore },
         },
       }),
-      prisma.codSettlement.count({ where: { shopifyStoreId, status: { in: unsettledCodStatuses } } }),
-      prisma.codSettlement.aggregate({
-        where: { shopifyStoreId, status: { in: unsettledCodStatuses } },
+      prisma.codSettlement.groupBy({
+        by: ["status"],
+        where: { shopifyStoreId },
+        _count: { _all: true },
         _sum: { expectedAmount: true },
       }),
-      prisma.codSettlement.count({ where: { shopifyStoreId, status: "DISPUTED" } }),
       prisma.backgroundJob.count({ where: { shopifyStoreId, status: "FAILED" } }),
       prisma.webhookEvent.count({ where: { shopifyStoreId, processed: false } }),
       prisma.returnRequest.groupBy({
@@ -212,24 +214,35 @@ export async function loader({ request }: LoaderFunctionArgs) {
       returnIntake,
       recentReturnsDb,
       recentExchangesDb,
-      pendingReturns,
-      pendingExchanges,
-      inTransit,
+      shipmentStatusRaw,
       awaitingInspection,
-      pendingRefunds,
-      pendingRefundAmountPkrAgg,
-      failedShipments,
-      bookedParcels,
+      refundFinancialRaw,
       staleShipments,
-      unreconciledCodCount,
-      unreconciledCodAgg,
-      disputedCod,
+      codSnapshotRaw,
       failedJobs,
       unprocessedWebhooks,
       returnLifecycleRaw,
       exchangeLifecycleRaw,
       courierSnapshotRaw,
     ] = rows;
+
+    const countForStatus = (entries: { status: string; _count: { _all: number } }[], status: string) =>
+      entries.find((entry) => entry.status === status)?._count._all ?? 0;
+    const pendingReturns = countForStatus(returnLifecycleRaw, "PENDING");
+    const pendingExchanges = countForStatus(exchangeLifecycleRaw, "PENDING");
+    const inTransit = countForStatus(shipmentStatusRaw, "IN_TRANSIT") + countForStatus(shipmentStatusRaw, "OUT_FOR_DELIVERY");
+    const failedShipments = countForStatus(shipmentStatusRaw, "FAILED");
+    const bookedParcels = countForStatus(shipmentStatusRaw, "LABEL_CREATED");
+    const pendingRefunds = refundFinancialRaw
+      .filter((entry) => entry.status === "PENDING")
+      .reduce((sum, entry) => sum + entry._count._all, 0);
+    const pendingRefundAmountPkr = refundFinancialRaw
+      .filter((entry) => entry.status === "PENDING" && entry.currency === "PKR")
+      .reduce((sum, entry) => sum + Number(entry._sum.amount ?? 0), 0);
+    const unreconciledCodRows = codSnapshotRaw.filter((entry) => unsettledCodStatuses.includes(entry.status));
+    const unreconciledCodCount = unreconciledCodRows.reduce((sum, entry) => sum + entry._count._all, 0);
+    const unreconciledCodAmount = unreconciledCodRows.reduce((sum, entry) => sum + Number(entry._sum.expectedAmount ?? 0), 0);
+    const disputedCod = countForStatus(codSnapshotRaw, "DISPUTED");
 
     const summarizeLifecycle = (entries: typeof returnLifecycleRaw) =>
       entries
@@ -303,12 +316,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
         inTransit,
         awaitingInspection,
         pendingRefunds,
-        pendingRefundAmountPkr: Number(pendingRefundAmountPkrAgg._sum.amount ?? 0),
+        pendingRefundAmountPkr,
         failedShipments,
         bookedParcels,
         staleShipments,
         unreconciledCodCount,
-        unreconciledCodAmount: Number(unreconciledCodAgg._sum.expectedAmount ?? 0),
+        unreconciledCodAmount,
         disputedCod,
       },
       recentReturns: recentReturnsDb.map((r) => ({
