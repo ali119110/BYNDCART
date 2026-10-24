@@ -40,7 +40,7 @@ export function formatPhoneForMeta(rawPhone: string): string {
   return cleaned;
 }
 
-export const META_GRAPH_API_VERSION = /^v\\d+\\.\\d+$/.test(process.env.META_GRAPH_API_VERSION || "")
+export const META_GRAPH_API_VERSION = /^v\d+\\.\d+$/.test(process.env.META_GRAPH_API_VERSION || "")
   ? String(process.env.META_GRAPH_API_VERSION)
   : "v26.0";
 
@@ -516,7 +516,7 @@ export async function exchangeMetaEmbeddedSignupCode(
   // token scopes: a provider/user may have access to multiple business accounts.
   const targetWabaId = String(embeddedSignup?.wabaId || "").trim();
   const phoneNumberId = String(embeddedSignup?.phoneNumberId || "").trim();
-  if (!/^\\d+$/.test(targetWabaId) || !/^\\d+$/.test(phoneNumberId)) {
+  if (!/^\d+$/.test(targetWabaId) || !/^\d+$/.test(phoneNumberId)) {
     throw new Error("Meta Embedded Signup v4 did not return valid WABA and phone-number IDs. Reconnect and finish the WhatsApp setup flow.");
   }
 
