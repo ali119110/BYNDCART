@@ -291,7 +291,7 @@ export default function BookingsPage() {
   const [activeTab, setActiveTab] = useState<"BOOK" | "LOADSHEET">("BOOK");
 
   // Default to first configured courier
-  const defaultCourierKey = configuredCouriers[0]?.key || "RIDER";
+  const defaultCourierKey = configuredCouriers.find((courier) => courier.ready)?.key || "RIDER";
   const [selectedCourierKey, setSelectedCourierKey] = useState(defaultCourierKey);
   const [selectedShipperProfileIndex, setSelectedShipperProfileIndex] = useState(
     courierOperationsSettings.defaultShipperProfileIndex ?? 0,
