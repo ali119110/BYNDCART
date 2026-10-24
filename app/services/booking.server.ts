@@ -530,7 +530,10 @@ export async function fulfillOrderInShopify(
       }
     }
 
-    if (String(order.displayFulfillmentStatus || "").toUpperCase() === "FULFILLED" && !matchingFulfillments.length) {
+    if (String(order.displayFulfillmentStatus || "").toUpperCase() === "FULFILLED") {
+      if (matchingFulfillments.length) {
+        return { success: true, fulfillmentId: matchingFulfillments[0]?.id };
+      }
       return {
         success: false,
         error: "Shopify already marks this order fulfilled with different or missing tracking information. No duplicate fulfillment was created; verify the order in Shopify before retrying.",
@@ -626,6 +629,14 @@ export async function fulfillOrderInShopify(
           success: false,
           fulfillmentId: createdFulfillmentIds[0],
           error: "Shopify returned no fulfillment ID. The courier booking may exist, but Shopify fulfillment was not confirmed.",
+        };
+      }
+      const fulfillmentStatus = String(result.fulfillment.status || "").toUpperCase();
+      if (["ERROR", "FAILURE", "CANCELLED"].includes(fulfillmentStatus)) {
+        return {
+          success: false,
+          fulfillmentId: createdFulfillmentIds[0],
+          error: `Shopify returned fulfillment status ${fulfillmentStatus} instead of confirming success.`,
         };
       }
       createdFulfillmentIds.push(String(result.fulfillment.id));
