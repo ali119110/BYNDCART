@@ -738,6 +738,8 @@ export async function getStoreShipments(shopifyStoreId: string, options: GetShip
     labelUrl: s.labelUrl,
     date: s.createdAt.toISOString().split("T")[0],
     eventsCount: s.events?.length || 0,
+    exchangeRequestId: (s as any).exchangeRequestId || null,
+    returnRequestId: (s as any).returnRequestId || null,
   }));
 
   Object.assign(mapped, {
