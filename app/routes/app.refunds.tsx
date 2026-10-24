@@ -219,6 +219,7 @@ export async function action({ request }: ActionFunctionArgs) {
       shopifyStoreId,
       method,
       amount,
+      currency: String(form.get("currency") || "PKR"),
       reference: String(form.get("reference") || "") || undefined,
       reason: String(form.get("reason") || "") || undefined,
     };
@@ -251,8 +252,10 @@ function badgeClass(status: string) {
 }
 
 export default function RefundsPage() {
-  const { refunds, evidence } = useLoaderData<typeof loader>();
+  const { refunds, evidence, refundableRequests } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
+  const [selectedRequest, setSelectedRequest] = useState<any | null>(null);
+  const [expandedRefundId, setExpandedRefundId] = useState<string | null>(null);
 
   return (
     <div className="bc-page">
@@ -264,45 +267,115 @@ export default function RefundsPage() {
         </div>
       </header>
       {actionData?.message && <div className={actionData.ok ? "bc-note ok" : "bc-note bad"}>{actionData.message}</div>}
-      <div className="bc-split">
-        <Form method="post" className="bc-form">
-          <h2 className="bc-title">Record a refund</h2>
-          <input type="hidden" name="intent" value="CREATE_REFUND" />
-          <label>Return id<input name="returnRequestId" placeholder="Optional if an exchange id is set" /></label>
-          <label>Exchange id<input name="exchangeRequestId" placeholder="Converts only from the exchange action below" /></label>
-          <label>Method
-            <select name="method" defaultValue="BANK_TRANSFER">
-              {REFUND_METHODS.map((method) => <option key={method} value={method}>{method.replaceAll("_", " ")}</option>)}
-            </select>
-          </label>
-          <label>Amount (PKR)<input name="amount" type="number" min="0" step="0.01" required /></label>
-          <label>Reference<input name="reference" placeholder="Bank, wallet, or Shopify reference" /></label>
-          <label>Reason<input name="reason" /></label>
-          <label><span>Merchant has confirmed this payment</span><select name="confirmed" defaultValue="no"><option value="no">No, keep pending</option><option value="yes">Yes, I confirmed it</option></select></label>
-          <button type="submit">Save refund</button>
-        </Form>
-        <Form method="post" className="bc-form">
-          <h2 className="bc-title">Convert exchange to refund</h2>
-          <input type="hidden" name="intent" value="CONVERT_EXCHANGE" />
-          <label>Exchange id<input name="exchangeRequestId" required /></label>
-          <label>Method
-            <select name="method" defaultValue="STORE_CREDIT">
-              {REFUND_METHODS.map((method) => <option key={method} value={method}>{method.replaceAll("_", " ")}</option>)}
-            </select>
-          </label>
-          <label>Amount (PKR)<input name="amount" type="number" min="0" step="0.01" required /></label>
-          <label>Reference<input name="reference" /></label>
-          <button type="submit">Convert exchange</button>
-        </Form>
-      </div>
-      <Form method="post" encType="multipart/form-data" className="bc-form">
-        <h2 className="bc-title">Attach evidence</h2>
-        <input type="hidden" name="intent" value="ATTACH_EVIDENCE" />
-        <label>Return id<input name="returnRequestId" required /></label>
-        <label>Photo or video, up to 1.5 MB<input name="file" type="file" accept="image/jpeg,image/png,image/webp,video/mp4" /></label>
-        <label>Or HTTPS URL<input name="sourceUrl" placeholder="https://..." /></label>
-        <button type="submit">Save evidence</button>
-      </Form>
+      <section className="bc-card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
+          <div>
+            <h2 className="bc-title">Requests awaiting refund decision</h2>
+            <p className="bc-muted">Open an approved return or eligible exchange to review what the customer submitted. Creating a refund record does not transfer money.</p>
+          </div>
+          <span className="bc-badge">{refundableRequests.length} requests</span>
+        </div>
+        <div className="bc-table-wrap" style={{ marginTop: 14 }}>
+          <table className="bc-table">
+            <thead><tr><th>Order</th><th>Customer</th><th>Request</th><th>Status</th><th>Customer note</th><th>Action</th></tr></thead>
+            <tbody>
+              {refundableRequests.length === 0 && <tr><td colSpan={6}>No eligible return or exchange requests are waiting for a refund record.</td></tr>}
+              {refundableRequests.map((request: any) => (
+                <tr key={`${request.requestType}:${request.id}`}>
+                  <td><strong>{request.orderNumber}</strong></td>
+                  <td>
+                    <strong>{request.customerName || request.order?.customerName || "Customer"}</strong>
+                    <div className="bc-muted">{request.customerEmail || request.order?.customerEmail || "No email on file"}</div>
+                  </td>
+                  <td>{request.requestType === "RETURN" ? "Return" : "Exchange"}</td>
+                  <td><span className={badgeClass(request.status)}>{request.status}</span></td>
+                  <td style={{ maxWidth: 260, overflowWrap: "anywhere" }}>{request.customerNote || request.reason || "No customer note"}</td>
+                  <td><button type="button" className="bc-btn primary" onClick={() => setSelectedRequest(request)}>Give refund</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {selectedRequest && (
+        <div
+          role="presentation"
+          onClick={() => setSelectedRequest(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(15,23,42,.55)", zIndex: 1000, padding: 16, display: "flex", alignItems: "center", justifyContent: "center" }}
+        >
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="refund-request-details-title"
+            onClick={(event) => event.stopPropagation()}
+            className="bc-card"
+            style={{ width: "min(100%, 760px)", maxHeight: "90vh", overflowY: "auto", boxSizing: "border-box" }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+              <div>
+                <p className="bc-eyebrow">CUSTOMER SUBMISSION</p>
+                <h2 id="refund-request-details-title" className="bc-title">{selectedRequest.requestType === "RETURN" ? "Return" : "Exchange"} · {selectedRequest.orderNumber}</h2>
+                <p className="bc-muted">{selectedRequest.customerName || selectedRequest.order?.customerName || "Customer"} · {selectedRequest.customerEmail || selectedRequest.order?.customerEmail || "No email"}</p>
+              </div>
+              <button type="button" className="bc-btn" onClick={() => setSelectedRequest(null)}>Close</button>
+            </div>
+            <div className="bc-grid" style={{ gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", marginTop: 16 }}>
+              <article className="bc-card" style={{ boxShadow: "none" }}><span className="bc-kpi-label">Request status</span><p className="bc-metric">{selectedRequest.status}</p></article>
+              <article className="bc-card" style={{ boxShadow: "none" }}><span className="bc-kpi-label">Customer phone</span><p className="bc-subtitle">{selectedRequest.order?.customerPhone || "Not provided"}</p></article>
+              <article className="bc-card" style={{ boxShadow: "none" }}><span className="bc-kpi-label">Customer reason</span><p className="bc-subtitle">{selectedRequest.reason || "Not specified"}</p></article>
+            </div>
+            <div style={{ marginTop: 16 }}>
+              <h3 className="bc-subtitle">Customer's note</h3>
+              <p className="bc-muted" style={{ whiteSpace: "pre-wrap" }}>{selectedRequest.customerNote || "No additional note submitted."}</p>
+              <h3 className="bc-subtitle" style={{ marginTop: 18 }}>Submitted items</h3>
+              {(selectedRequest.items || []).length ? (
+                <div className="bc-table-wrap">
+                  <table className="bc-table">
+                    <thead><tr><th>Item</th><th>Quantity</th><th>Reason / note</th></tr></thead>
+                    <tbody>
+                      {selectedRequest.items.map((item: any) => (
+                        <tr key={item.id}>
+                          <td>{item.originalTitle || item.title || item.replacementTitle || item.productTitle || "Item"}</td>
+                          <td>{item.originalQuantity || item.quantity || 1}</td>
+                          <td>{item.reasonNote || item.customerNote || item.reason || "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : <p className="bc-muted">No line-item details were included with this request.</p>}
+            </div>
+            <Form method="post" className="bc-form" style={{ marginTop: 18 }} onSubmit={() => setSelectedRequest(null)}>
+              <h3 className="bc-title">Create pending refund</h3>
+              <p className="bc-muted">Confirm the correct amount and method before sending money. The refund will stay pending until payment proof is recorded.</p>
+              <input type="hidden" name="intent" value="CREATE_REFUND" />
+              <input type="hidden" name="returnRequestId" value={selectedRequest.requestType === "RETURN" ? selectedRequest.id : ""} />
+              <input type="hidden" name="exchangeRequestId" value={selectedRequest.requestType === "EXCHANGE" ? selectedRequest.id : ""} />
+              <input type="hidden" name="currency" value={selectedRequest.order?.currency || "PKR"} />
+              <label>Refund method
+                <select name="method" defaultValue="BANK_TRANSFER" required>
+                  {REFUND_METHODS.map((method) => <option key={method} value={method}>{method.replaceAll("_", " ")}</option>)}
+                </select>
+              </label>
+              <label>Refund amount ({selectedRequest.order?.currency || "PKR"})
+                <input name="amount" type="number" min="0.01" step="0.01" defaultValue={selectedRequest.refundAmount ? Number(selectedRequest.refundAmount) : ""} required />
+              </label>
+              <label>Payment/reference note
+                <input name="reference" placeholder="Leave blank until payment is sent" />
+              </label>
+              <label>Internal reason
+                <input name="reason" defaultValue={`Refund for ${selectedRequest.requestType.toLowerCase()} request ${selectedRequest.orderNumber}`} />
+              </label>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button type="submit" className="bc-btn primary">Create pending refund</button>
+                <button type="button" className="bc-btn" onClick={() => setSelectedRequest(null)}>Cancel</button>
+              </div>
+            </Form>
+          </section>
+        </div>
+      )}
+
       <div className="bc-table-wrap">
         <table className="bc-table">
           <thead>
