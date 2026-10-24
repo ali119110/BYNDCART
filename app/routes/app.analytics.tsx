@@ -34,7 +34,7 @@ export async function loader({ request }: Route.LoaderArgs) {
           totalRequests: 0,
           returnRequestShare: 0,
           exchangeRequestShare: 0,
-          soldUnits: 0,
+          orderedUnits: 0,
           receivedReturnUnits: 0,
           unitReturnRate: null,
           totalRefunded: 0,
@@ -159,16 +159,16 @@ export default function Analytics() {
           <p className="bc-muted">{dataAvailable ? summary.totalExchanges + " of " + summary.totalRequests + " requests · request mix" : "Unavailable"}</p>
         </article>
         <article className="bc-kpi-card bc-kpi-returns">
-          <span className="bc-kpi-label">Warehouse-confirmed unit return rate</span>
+          <span className="bc-kpi-label">Warehouse-confirmed return ratio</span>
           <p className="bc-kpi-value">{!dataAvailable ? "—" : summary.unitReturnRate === null ? "N/A" : summary.unitReturnRate + "%"}</p>
           <p className="bc-muted">
             {!dataAvailable
               ? "Sales and return data unavailable"
               : summary.unitReturnRate === null
                 ? "No valid sold-unit denominator in the selected order cohort"
-                : summary.receivedReturnUnits.toLocaleString("en-PK") + " received/inspected units ÷ " + summary.soldUnits.toLocaleString("en-PK") + " sold units"}
+                : summary.receivedReturnUnits.toLocaleString("en-PK") + " received/inspected units ÷ " + summary.orderedUnits.toLocaleString("en-PK") + " ordered units"}
           </p>
-          <p className="bc-muted">Based on orders placed in the selected period; returns may be received later.</p>
+          <p className="bc-muted">Based on non-cancelled orders placed in the selected period; returns may be received later. Unfulfilled orders may still be in the denominator.</p>
         </article>
         <article className="bc-kpi-card">
           <span className="bc-kpi-label">Confirmed refunds (PKR)</span>
@@ -295,7 +295,7 @@ export default function Analytics() {
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: "8px", fontSize: "11px", color: "#6b7280" }}>
                     <span>{p.receivedUnits} received / inspected</span>
-                    <span>{p.soldUnits} sold · {p.requestedUnits} requested</span>
+                    <span>{p.orderedUnits} ordered · {p.requestedUnits} requested</span>
                   </div>
                   <div style={{ width: "100%", height: "6px", background: "#e1e3e5", borderRadius: "3px" }}>
                     <div
