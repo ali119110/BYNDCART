@@ -860,7 +860,28 @@ export default function Notifications() {
       {/* TAB 2: EMAIL NOTIFICATIONS (EXISTING CORE EMAIL SYSTEM)        */}
       {/* ============================================================== */}
       {activeTab === "email" && (
-        <section className="bc-card">
+        <div className="bc-stack">
+          <section className={`bc-note ${emailProviderConfigured ? "ok" : "bad"}`} role={emailProviderConfigured ? "status" : "alert"}>
+            <strong>{emailProviderConfigured ? "Email provider API key detected" : "Email delivery is not configured"}</strong>
+            <p style={{ margin: "5px 0 0" }}>
+              {emailProviderConfigured
+                ? `From: ${emailFromAddress}. Reply-to: ${merchantReplyTo || "not configured; replies will go to the verified sender"}.`
+                : "Add RESEND_API_KEY and a NOTIFICATIONS_FROM_EMAIL sender that is verified with Resend to enable delivery. BYNDCART will not pretend an email was sent if the provider rejects it."}
+            </p>
+            <p style={{ margin: "5px 0 0" }}>Shopify's native order-confirmation email remains controlled by Shopify. BYNDCART lifecycle emails use the configured verified sender and set the merchant's notification/support email as Reply-To; an arbitrary unverified merchant address cannot safely be used as the From address.</p>
+          </section>
+          <section className="bc-card">
+            <h2 className="bc-title">Test email delivery</h2>
+            <p className="bc-muted">Send a real test through the configured email provider and check its response in the notification logs.</p>
+            <fetcher.Form method="post" className="bc-actions">
+              <input type="hidden" name="actionType" value="sendTestEmail" />
+              <input type="email" name="recipient" required placeholder="Test recipient email" style={{ flex: "1 1 260px", minWidth: 0 }} />
+              <button type="submit" className="bc-btn primary" disabled={isSubmitting || !emailProviderConfigured}>
+                {isSubmitting ? "Sending test…" : "Send test email"}
+              </button>
+            </fetcher.Form>
+          </section>
+          <section className="bc-card">
           <h2 className="bc-title">Email templates</h2>
           <p className="bc-muted">Choose an event, then edit the subject and body for that message.</p>
 
@@ -945,7 +966,8 @@ export default function Notifications() {
               )}
             </div>
           </div>
-        </section>
+          </section>
+        </div>
       )}
 
       {/* ============================================================== */}
