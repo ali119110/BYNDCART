@@ -8,6 +8,7 @@ import {
   upsertNotificationTemplate,
   getNotificationLogs,
   processNotificationJob,
+  sendEmail,
   NotificationEventType,
 } from "../services/notifications.server";
 import {
@@ -43,6 +44,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig,
       metaAppId: process.env.META_APP_ID || process.env.WHATSAPP_APP_ID || "",
       metaConfigId: process.env.META_CONFIG_ID || "",
+      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY),
       logs: logs.map((l) => ({
         ...l,
         createdAt: l.createdAt.toISOString(),
@@ -60,6 +62,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig: null,
       metaAppId: "",
       metaConfigId: "",
+      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY),
       logs: [],
       loadError:
         "Notification settings could not be loaded. Details: " +
@@ -92,6 +95,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     } catch (err: any) {
       return { success: false, error: err.message };
     }
+  }
+
+  if (actionType === "sendTestEmail") {
+    const recipient = String(formData.get("testEmail") || "").trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
+      return { success: false, error: "Enter a valid email address for the test.", intent: "sendTestEmail" };
+    }
+    const result = await sendEmail({
+      to: recipient,
+      subject: "BYNDCART email delivery test",
+      html: "<p>This is a test email from BYNDCART. If you received it, the configured transactional email provider can deliver messages to this address.</p>",
+    });
+    return result.success
+      ? { success: true, message: "Test email accepted by the configured email provider. Check the inbox and spam folder.", intent: "sendTestEmail" }
+      : { success: false, error: result.error || "The email provider could not send the test message.", intent: "sendTestEmail" };
   }
 
   // 2. Toggle template enabled/disabled
@@ -128,7 +146,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     try {
       await exchangeMetaEmbeddedSignupCode(store.id, code);
-      return { success: true, message: "WhatsApp Business connected successfully! Default templates installed." };
+      return { success: true, message: "WhatsApp Business account connected and its phone number verified. BYNDCART's local notification templates are available; outbound template messages still require approved Meta templates and the platform's production partner permissions." };
     } catch (err: any) {
       return { success: false, error: err.message || "Failed to link Meta WhatsApp account." };
     }
@@ -256,6 +274,7 @@ export default function Notifications() {
     emailTemplates,
     waTemplates,
     whatsappConfig,
+    emailProviderConfigured,
     metaAppId,
     metaConfigId,
     logs,
@@ -846,6 +865,24 @@ export default function Notifications() {
         <section className="bc-card">
           <h2 className="bc-title">Email templates</h2>
           <p className="bc-muted">Choose an event, then edit the subject and body for that message.</p>
+          <div className={`bc-note ${emailProviderConfigured ? "ok" : "bad"}`} role={emailProviderConfigured ? "status" : "alert"}>
+            {emailProviderConfigured
+              ? "Transactional email provider key is configured. Use the test below to verify delivery."
+              : "Transactional email is not configured on the server. Set RESEND_API_KEY and a verified NOTIFICATIONS_FROM_EMAIL before email notifications can be delivered."}
+          </div>
+          <section style={{border:"1px solid var(--bc-line)",borderRadius:12,padding:16,margin:"16px 0 22px",background:"var(--bc-surface)"}}>
+            <h3 style={{marginTop:0}}>Test email delivery</h3>
+            <p className="bc-muted">Replies to customer notifications use the merchant email saved in Settings. The sending address must be a verified address/domain; BYNDCART will not spoof an unverified merchant address. Shopify's own order-confirmation email remains sent by Shopify.</p>
+            <fetcher.Form method="post" style={{display:"flex",alignItems:"end",gap:10,flexWrap:"wrap"}}>
+              <input type="hidden" name="actionType" value="sendTestEmail" />
+              <label style={{flex:"1 1 280px",margin:0}}>Send test to
+                <input type="email" name="testEmail" autoComplete="email" placeholder="you@example.com" required />
+              </label>
+              <button type="submit" className="bc-btn primary" disabled={isSubmitting || !emailProviderConfigured}>
+                {isSubmitting && (fetcher.formData?.get("actionType") === "sendTestEmail") ? "Sending test…" : "Send test email"}
+              </button>
+            </fetcher.Form>
+          </section>
 
           <div style={{ display: "grid", gridTemplateColumns: "250px 1fr", gap: "20px", marginTop: "12px" }}>
             {/* Event Selector List */}
