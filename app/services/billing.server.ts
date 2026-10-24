@@ -125,7 +125,7 @@ export async function createAppSubscription(
 
   // Shopify is the source of truth for paid subscriptions. Never invent a subscription ID
   // or confirmation URL when the Admin API fails; that would show a paid plan without a charge.
-  const admin = await getShopifyAdminClient(store.shop, adminContext);
+  const admin = await getShopifyAdminClient(shopifyStoreId, adminContext);
   if (!admin || typeof admin.graphql !== "function") {
     throw new Error("Shopify Billing is unavailable for this installation. Reopen the embedded app and retry.");
   }
@@ -241,7 +241,7 @@ export async function cancelAppSubscription(shopifyStoreId: string, adminContext
         where: { id: shopifyStoreId },
       });
       if (store) {
-        const admin = await getShopifyAdminClient(store.shop, adminContext);
+        const admin = await getShopifyAdminClient(shopifyStoreId, adminContext);
         const response = await admin.graphql(
           `#graphql
           mutation AppSubscriptionCancel($id: ID!) {
@@ -308,7 +308,7 @@ export async function syncSubscriptionState(shopifyStoreId: string, adminContext
   if (!store) return null;
 
   try {
-    const admin = await getShopifyAdminClient(store.shop, adminContext);
+    const admin = await getShopifyAdminClient(shopifyStoreId, adminContext);
     const response = await admin.graphql(
       `#graphql
       query GetActiveSubscriptions {
