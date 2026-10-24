@@ -326,7 +326,6 @@ export default function Notifications() {
   }, [selectedEmailEvent, currentEmailTemplate]);
 
   // WhatsApp manual modal & editing state
-  const [showManualModal, setShowManualModal] = useState(false);
   const [editingWaEvent, setEditingWaEvent] = useState<string | null>(null);
   const [waEditingBody, setWaEditingBody] = useState("");
   const [waEditingEnabled, setWaEditingEnabled] = useState(true);
@@ -426,7 +425,6 @@ export default function Notifications() {
 
     if (!metaAppId || !metaConfigId) {
       alert("Meta App ID and Embedded Signup Config ID must be configured on the server. This setup cannot be completed with only a phone number.");
-      setShowManualModal(true);
       return;
     }
 
@@ -615,14 +613,6 @@ export default function Notifications() {
                     {!metaAppId || !metaConfigId ? "Meta setup required" : metaSdkReady ? "Connect WhatsApp" : "Loading Meta…"}
                   </button>
 
-                  <button
-                    type="button"
-                    className="bc-btn"
-                    onClick={() => setShowManualModal(true)}
-                    style={{ padding: "10px 18px", fontSize: "14px" }}
-                  >
-                    Connect with API Credentials
-                  </button>
                 </div>
 
                 <p style={{ fontSize: "12px", color: "#94a3b8", marginTop: "14px" }}>
@@ -660,87 +650,6 @@ export default function Notifications() {
                     <button type="button" className="bc-btn" onClick={() => setShowTestModal(false)}>Cancel</button>
                     <button type="submit" className="bc-btn primary" disabled={isSubmitting}>
                       {isSubmitting ? "Sending..." : "Send Test"}
-                    </button>
-                  </div>
-                </fetcher.Form>
-              </div>
-            </div>
-          )}
-
-          {/* Manual Credentials Modal */}
-          {showManualModal && (
-            <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "16px" }}>
-              <div style={{ background: "#fff", borderRadius: "10px", maxWidth: "520px", width: "100%", padding: "24px", boxShadow: "0 10px 25px rgba(0,0,0,0.1)", maxHeight: "90vh", overflowY: "auto" }}>
-                <h3 style={{ margin: "0 0 6px 0", fontSize: "18px" }}>Connect WhatsApp Cloud API Credentials</h3>
-                <p className="bc-muted" style={{ fontSize: "13px", marginBottom: "18px" }}>
-                  Paste your Meta Phone Number ID, WhatsApp Business Account ID (WABA), and System User Token from Meta Business Manager.
-                </p>
-
-                <fetcher.Form method="post" onSubmit={() => setShowManualModal(false)} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                  <input type="hidden" name="actionType" value="saveWhatsAppConfig" />
-
-                  <div>
-                    <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px" }}>Phone Number ID *</label>
-                    <input
-                      type="text"
-                      name="phoneNumberId"
-                      placeholder="e.g. 109876543210987"
-                      defaultValue={whatsappConfig?.phoneNumberId || ""}
-                      style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: "6px" }}
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px" }}>WABA ID (WhatsApp Business Account ID)</label>
-                    <input
-                      type="text"
-                      name="wabaId"
-                      placeholder="e.g. 987654321098765"
-                      defaultValue={whatsappConfig?.wabaId || ""}
-                      style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: "6px" }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px" }}>Permanent Access Token *</label>
-                    <input
-                      type="password"
-                      name="accessToken"
-                      placeholder="EAAG..."
-                      defaultValue={whatsappConfig?.rawAccessToken || ""}
-                      style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: "6px" }}
-                      required
-                    />
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                    <div>
-                      <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px" }}>Display Phone Number</label>
-                      <input
-                        type="text"
-                        name="displayPhoneNumber"
-                        placeholder="e.g. +92 300 1234567"
-                        defaultValue={whatsappConfig?.displayPhoneNumber || ""}
-                        style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: "6px" }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px" }}>Verified Name</label>
-                      <input
-                        type="text"
-                        name="verifiedName"
-                        placeholder="e.g. Brand Name"
-                        defaultValue={whatsappConfig?.verifiedName || ""}
-                        style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: "6px" }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "14px" }}>
-                    <button type="button" className="bc-btn" onClick={() => setShowManualModal(false)}>Cancel</button>
-                    <button type="submit" className="bc-btn primary" disabled={isSubmitting}>
-                      {isSubmitting ? "Connecting..." : "Save & Connect"}
                     </button>
                   </div>
                 </fetcher.Form>
