@@ -138,7 +138,8 @@ export async function action({ request }: ActionFunctionArgs) {
         });
       }
 
-      await confirmRefundRecord(refundId, shopifyStoreId);
+      const paymentReference = String(form.get("reference") || "").trim();
+      await confirmRefundRecord(refundId, shopifyStoreId, paymentReference || undefined);
       const customerEmail = String((requestRecord as any).customerEmail || order?.customerEmail || "").trim();
       const customerName = String((requestRecord as any).customerName || order?.customerName || "Customer").trim();
       const customerPhone = String(order?.customerPhone || "").trim();
@@ -147,7 +148,8 @@ export async function action({ request }: ActionFunctionArgs) {
         order_number: requestRecord.orderNumber,
         refund_amount: Number(refund.amount).toFixed(2),
         refund_method: refund.method.replaceAll("_", " "),
-        refund_reference: refund.reference || "",
+        refund_currency: refund.currency,
+        refund_reference: paymentReference || refund.reference || "",
       };
       const notices = await Promise.all([
         customerEmail ? triggerLifecycleNotification({
