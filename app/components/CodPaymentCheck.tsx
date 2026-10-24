@@ -69,7 +69,7 @@ export function CodPaymentCheck({
   const [hasNext, setHasNext] = useState(false);
   const [batch, setBatch] = useState(0);
   const [pendingTotal, setPendingTotal] = useState<number | null>(null);
-  const [status, setStatus] = useState("Verify the first 20 fulfilled orders that Shopify shows as unpaid, or verify all to reconcile courier remittances automatically.");
+  const [status, setStatus] = useState("Use Verify & reconcile all to check every matching page and reconcile all safely matched settlements in one operation.");
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
 
@@ -134,7 +134,7 @@ export function CodPaymentCheck({
 
   async function verify(append: boolean) {
     setError("");
-    setStatus(append ? `Verifying batch ${batch + 1}…` : "Verifying the first 20 orders…");
+    setStatus(append ? `Verifying batch ${batch + 1}…` : "Verifying orders…");
     const data = await submitVerify(append ? cursor : null, append ? "append" : "replace");
     applyBatch(data, append);
 
@@ -156,7 +156,7 @@ export function CodPaymentCheck({
     return data;
   }
 
-  async function autoVerify() {
+  async function autoVerify(reconcileAll = false) {
     if (autoRunning) {
       stopAuto.current = true;
       return;
@@ -169,12 +169,13 @@ export function CodPaymentCheck({
       let data = await submitVerify(null, "replace");
       applyBatch(data, false);
       let loaded = data.results?.length || 0;
+      const allVerifiedRows: CodVerificationResult[] = [...(data.results || [])];
       let page = 1;
       let next = data.nextCursor || null;
       let more = data.hasNextPage === true;
       setStatus(`Batch 1 verified. ${loaded} orders loaded.`);
 
-      if (autoReconcileOnVerify && data.ok && data.results?.length) {
+      if (!reconcileAll && autoReconcileOnVerify && data.ok && data.results?.length) {
         const safeIds = data.results.filter(isSafe).map((r) => r.orderId);
         if (safeIds.length > 0) await executeReconciliation(safeIds, false);
       }
@@ -201,14 +202,23 @@ export function CodPaymentCheck({
         setBatch(page);
         setStatus(`Batch ${page} verified. ${loaded} orders loaded.`);
 
-        if (autoReconcileOnVerify && data.ok && data.results?.length) {
+        allVerifiedRows.push(...(data.results || []));
+        if (!reconcileAll && autoReconcileOnVerify && data.ok && data.results?.length) {
           const safeIds = data.results.filter(isSafe).map((r) => r.orderId);
           if (safeIds.length > 0) await executeReconciliation(safeIds, false);
         }
       }
 
       if (stopAuto.current) {
-        setStatus(`Verification stopped. ${loaded} orders loaded.`);
+        setStatus(`Verification stopped. ${loaded} orders loaded. No full reconciliation was started.`);
+      } else if (reconcileAll) {
+        const safeIds = Array.from(new Set(allVerifiedRows.filter(isSafe).map((item) => item.orderId)));
+        if (!safeIds.length) {
+          setStatus(`Checked all ${loaded} orders. No order currently meets the strict delivered, payment-received and amount-matched checks for automatic reconciliation.`);
+        } else {
+          setStatus(`Checked all ${loaded} orders. Reconciling ${safeIds.length} safely matched orders in one operation…`);
+          await executeReconciliation(safeIds, false);
+        }
       } else {
         setStatus(`All ${loaded} pending fulfilled orders verified against couriers.`);
       }
@@ -243,31 +253,17 @@ export function CodPaymentCheck({
 
     setError("");
     setReconciling(true);
-    let markedCount = 0;
-
     try {
-      for (let index = 0; index < orderIds.length; index += 20) {
-        const chunk = orderIds.slice(index, index + 20);
-        const data = await submitMark(chunk);
-        const marked = data.marked || [];
-        markedCount += marked.length;
-
-        if (marked.length) {
-          setPaidIds((current) => [...new Set([...current, ...marked.map((row) => row.orderId)])]);
-          setSelected((current) => current.filter((id) => !marked.some((row) => row.orderId === id)));
-        }
-
-        if (!data.ok) {
-          setError(data.message || "Some orders could not be marked paid in Shopify.");
-          break;
-        }
-
-        if (index + 20 < orderIds.length) {
-          await new Promise((resolve) => setTimeout(resolve, 800));
-        }
+      // One server action handles the entire safely selected set. The server records
+      // individual successes/failures so a partial failure does not hide completed work.
+      const data = await submitMark(orderIds);
+      const marked = data.marked || [];
+      if (marked.length) {
+        setPaidIds((current) => [...new Set([...current, ...marked.map((row) => row.orderId)])]);
+        setSelected((current) => current.filter((id) => !marked.some((row) => row.orderId === id)));
       }
-
-      setStatus(`Successfully reconciled ${markedCount} of ${orderIds.length} orders into Shopify & database ledger.`);
+      if (!data.ok) setError(data.message || "Some orders could not be marked paid in Shopify.");
+      setStatus(data.message || `Successfully reconciled ${marked.length} of ${orderIds.length} orders into Shopify and the settlement ledger.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Auto-reconciliation encountered an issue.");
     } finally {
@@ -418,10 +414,19 @@ export function CodPaymentCheck({
         <button
           type="button"
           className="bc-btn"
-          disabled={reconciling}
-          onClick={autoVerify}
+          disabled={busy}
+          onClick={() => autoVerify(false)}
         >
           {autoRunning ? "Stop verification" : "Verify all"}
+        </button>
+
+        <button
+          type="button"
+          className="bc-btn primary"
+          disabled={busy}
+          onClick={() => autoVerify(true)}
+        >
+          {autoRunning ? "Checking all orders…" : reconciling ? "Reconciling all orders…" : "Verify & reconcile all"}
         </button>
 
         <button
