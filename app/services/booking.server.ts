@@ -168,11 +168,6 @@ const FULFILLMENT_ORDERS_QUERY = `#graphql
           trackingInfo {
             number
           }
-          fulfillmentOrders(first: 50) {
-            nodes {
-              id
-            }
-          }
         }
       }
       fulfillmentOrders(first: 100) {
@@ -185,6 +180,14 @@ const FULFILLMENT_ORDERS_QUERY = `#graphql
           assignedLocation {
             location {
               id
+            }
+          }
+          fulfillments(first: 100) {
+            nodes {
+              id
+              trackingInfo {
+                number
+              }
             }
           }
         }
@@ -523,10 +526,19 @@ export async function fulfillOrderInShopify(
         String(tracking?.number || "").trim() === String(trackingNumber).trim()
       )
     );
-    const alreadySyncedFulfillmentIds = new Set<string>();
-    for (const fulfillment of matchingFulfillments) {
-      for (const fulfillmentOrder of fulfillment.fulfillmentOrders?.nodes || []) {
-        if (fulfillmentOrder?.id) alreadySyncedFulfillmentIds.add(String(fulfillmentOrder.id));
+
+    const allFulfillmentOrders = Array.isArray(order.fulfillmentOrders?.nodes) ? order.fulfillmentOrders.nodes : [];
+    const targetTracking = String(trackingNumber).trim();
+    const alreadySyncedFulfillmentOrderIds = new Set<string>();
+    for (const fulfillmentOrder of allFulfillmentOrders) {
+      const existingFulfillmentForTracking = (fulfillmentOrder.fulfillments?.nodes || []).some((fulfillment: any) =>
+        Array.isArray(fulfillment.trackingInfo)
+        && fulfillment.trackingInfo.some((tracking: any) =>
+          String(tracking?.number || "").trim() === targetTracking
+        )
+      );
+      if (existingFulfillmentForTracking && fulfillmentOrder?.id) {
+        alreadySyncedFulfillmentOrderIds.add(String(fulfillmentOrder.id));
       }
     }
 
@@ -540,7 +552,6 @@ export async function fulfillOrderInShopify(
       };
     }
 
-    const allFulfillmentOrders = Array.isArray(order.fulfillmentOrders?.nodes) ? order.fulfillmentOrders.nodes : [];
     const eligibleFulfillmentOrders = allFulfillmentOrders.filter((fulfillmentOrder: any) => {
       const status = String(fulfillmentOrder?.status || "").toUpperCase();
       const supportedActions = Array.isArray(fulfillmentOrder?.supportedActions)
@@ -548,7 +559,7 @@ export async function fulfillOrderInShopify(
         : [];
       return ["OPEN", "IN_PROGRESS"].includes(status)
         && supportedActions.includes("CREATE_FULFILLMENT")
-        && !alreadySyncedFulfillmentIds.has(String(fulfillmentOrder.id));
+        && !alreadySyncedFulfillmentOrderIds.has(String(fulfillmentOrder.id));
     });
 
     // One Shopify fulfillment can include multiple fulfillment orders only when they
