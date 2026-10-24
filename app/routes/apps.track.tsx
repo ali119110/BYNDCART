@@ -13,27 +13,25 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 async function handleTrackingRequest(request: Request) {
-  let shop: string | null = null;
+  let proxyShop: string | null = null;
 
-  // Try App Proxy authentication first
+  // A tracking page must resolve its own merchant from Shopify App Proxy authentication
+  // or the signed ?shop parameter. Never fall back to one globally configured shop: that
+  // can accidentally display the wrong merchant's branding or shipment data on multi-tenant installs.
   try {
-    await authenticate.public.appProxy(request);
+    const proxyAuth = await authenticate.public.appProxy(request);
+    proxyShop = normalizeShopDomain(
+      (proxyAuth as any)?.session?.shop
+      || (proxyAuth as any)?.shop
+      || null,
+    );
   } catch {
-    // Allows direct storefront or standalone preview
+    // Standalone/direct previews can use the explicit shop parameter below.
   }
 
   const url = new URL(request.url);
-  shop = normalizeShopDomain(url.searchParams.get("shop"));
-
-  if (!shop) {
-    // If shop parameter is missing, try looking up the primary configured shop
-    try {
-      const { configuredShopDomain } = await import("../services/shopifyAdmin.server");
-      shop = configuredShopDomain();
-    } catch {
-      // Ignored
-    }
-  }
+  const explicitShop = normalizeShopDomain(url.searchParams.get("shop"));
+  const shop = proxyShop || explicitShop;
 
   if (!shop) {
     return new Response("Store domain parameter is required to track order.", {
