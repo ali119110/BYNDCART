@@ -28,10 +28,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   try {
-    const [emailTemplates, waTemplates, whatsappConfig, logs] = await Promise.all([
+    const whatsappConfig = await getWhatsAppConfig(store.id);
+    if (whatsappConfig?.enabled && whatsappConfig.phoneNumberId && whatsappConfig.accessToken) {
+      // Repair any missing default rows on later logins without overwriting merchant edits.
+      await seedDefaultWhatsAppTemplates(store.id);
+    }
+    const [emailTemplates, waTemplates, logs] = await Promise.all([
       getStoreNotificationTemplates(store.id, "EMAIL"),
       getStoreNotificationTemplates(store.id, "WHATSAPP"),
-      getWhatsAppConfig(store.id),
       getNotificationLogs(store.id, 40),
     ]);
 
@@ -43,6 +47,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig,
       metaAppId: process.env.META_APP_ID || process.env.WHATSAPP_APP_ID || "",
       metaConfigId: process.env.META_CONFIG_ID || "",
+      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY),
+      emailFromConfigured: Boolean(process.env.NOTIFICATIONS_FROM_EMAIL),
       logs: logs.map((l) => ({
         ...l,
         createdAt: l.createdAt.toISOString(),
@@ -60,6 +66,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig: null,
       metaAppId: "",
       metaConfigId: "",
+      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY),
+      emailFromConfigured: Boolean(process.env.NOTIFICATIONS_FROM_EMAIL),
       logs: [],
       loadError:
         "Notification settings could not be loaded. Details: " +
@@ -258,6 +266,8 @@ export default function Notifications() {
     whatsappConfig,
     metaAppId,
     metaConfigId,
+    emailProviderConfigured,
+    emailFromConfigured,
     logs,
     loadError,
   } = useLoaderData<typeof loader>();
@@ -300,6 +310,8 @@ export default function Notifications() {
 
   const [testPhone, setTestPhone] = useState("");
   const [showTestModal, setShowTestModal] = useState(false);
+  const [metaSdkReady, setMetaSdkReady] = useState(false);
+  const [metaSignupError, setMetaSignupError] = useState("");
 
   const isWaConnected = Boolean(
     whatsappConfig?.enabled && whatsappConfig?.phoneNumberId && whatsappConfig?.accessToken
@@ -319,18 +331,57 @@ export default function Notifications() {
     setWaEditingBody((prev) => `${prev} {{${varName}}}`);
   };
 
+  React.useEffect(() => {
+    if (!metaAppId || typeof window === "undefined") return;
+    const browserWindow = window as any;
+    let disposed = false;
+
+    const initializeFacebookSdk = () => {
+      if (!browserWindow.FB) return;
+      browserWindow.FB.init({
+        appId: metaAppId,
+        cookie: true,
+        xfbml: false,
+        version: "v21.0",
+      });
+      if (!disposed) setMetaSdkReady(true);
+    };
+
+    if (browserWindow.FB) {
+      initializeFacebookSdk();
+      return () => { disposed = true; };
+    }
+
+    browserWindow.fbAsyncInit = initializeFacebookSdk;
+    let script = document.getElementById("facebook-jssdk") as HTMLScriptElement | null;
+    if (!script) {
+      script = document.createElement("script");
+      script.id = "facebook-jssdk";
+      script.src = "https://connect.facebook.net/en_US/sdk.js";
+      script.async = true;
+      script.defer = true;
+      script.onerror = () => {
+        if (!disposed) setMetaSignupError("Meta's login SDK could not load. Check your Content Security Policy and allow connect.facebook.net, then retry.");
+      };
+      document.head.appendChild(script);
+    }
+
+    return () => { disposed = true; };
+  }, [metaAppId]);
+
   // Launch Meta Embedded Signup Popup
   const launchMetaEmbeddedSignup = () => {
     if (typeof window === "undefined") return;
 
-    if (!metaAppId) {
-      alert("Meta App ID is not configured in server environment. Please use manual credentials entry.");
+    setMetaSignupError("");
+    if (!metaAppId || !metaConfigId) {
+      setMetaSignupError("Configure META_APP_ID and META_CONFIG_ID for your approved Meta WhatsApp Embedded Signup setup. You can use manual API credentials in the meantime.");
       setShowManualModal(true);
       return;
     }
 
     const fb = (window as any).FB;
-    if (fb) {
+    if (fb && metaSdkReady) {
       fb.login(
         (response: any) => {
           if (response.authResponse?.code) {
@@ -354,13 +405,19 @@ export default function Notifications() {
         }
       );
     } else {
-      // Fallback to manual setup modal if FB JS SDK is not loaded
-      setShowManualModal(true);
+      setMetaSignupError("Meta login is still loading. Wait a moment and click Connect WhatsApp again.");
     }
   };
 
   return (
     <div className="bc-page">
+      {metaSignupError && <div className="bc-note bad" role="alert">{metaSignupError}</div>}
+      {actionData?.message && <div className={`bc-note ${actionData.success ? "ok" : "bad"}`} role={actionData.success ? "status" : "alert"}>{actionData.message}</div>}
+      {activeTab === "email" && (!emailProviderConfigured || !emailFromConfigured) && (
+        <div className="bc-note warn" role="alert">
+          Email delivery needs production configuration: {!emailProviderConfigured ? "RESEND_API_KEY is missing. " : ""}{!emailFromConfigured ? "NOTIFICATIONS_FROM_EMAIL is missing; set it to a sender verified with your email provider." : ""}
+        </div>
+      )}
       <header className="bc-header">
         <div className="bc-header-copy">
           <p className="bc-eyebrow">CUSTOMER MESSAGING & ALERTS</p>
@@ -501,9 +558,10 @@ export default function Notifications() {
                     type="button"
                     className="bc-btn primary"
                     onClick={launchMetaEmbeddedSignup}
-                    style={{ padding: "10px 24px", fontSize: "14px" }}
+                    disabled={Boolean(metaAppId && metaConfigId && !metaSdkReady) || isSubmitting}
+                    style={{ padding: "10px 24px", fontSize: "14px", opacity: Boolean(metaAppId && metaConfigId && !metaSdkReady) ? 0.65 : 1 }}
                   >
-                    Connect WhatsApp
+                    {isSubmitting ? "Connecting…" : metaAppId && metaConfigId && !metaSdkReady ? "Loading Meta…" : "Connect WhatsApp"}
                   </button>
 
                   <button
