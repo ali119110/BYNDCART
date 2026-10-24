@@ -125,12 +125,18 @@ export async function createAppSubscription(
     };
   }
 
-  // Execute GraphQL appSubscriptionCreate
-  let confirmationUrl = `${returnUrl}?charge_id=mock_charge_${Date.now()}`;
+  // Test/dev fixtures may explicitly run without Shopify Admin context; never fabricate a
+  // subscription in production, because a fake ID would make Billing appear enabled without a charge.
+  const isTestFixture = process.env.NODE_ENV === "test" && !adminContext;
+  if (!isTestFixture && !adminContext) {
+    throw new Error("Shopify Admin authorization is unavailable. Reopen BYNDCART from Shopify Admin and try again.");
+  }
+
+  let confirmationUrl = isTestFixture ? `${returnUrl}?charge_id=test_fixture` : "";
   let graphqlSubId: string | null = null;
   let subStatus = "PENDING";
 
-  try {
+  if (!isTestFixture) {
     const admin = await getShopifyAdminClient(store.shop, adminContext);
     const response = await admin.graphql(
       `#graphql
@@ -167,29 +173,29 @@ export async function createAppSubscription(
     );
 
     const result = await response.json();
+    const topLevelErrors = Array.isArray(result?.errors) ? result.errors.map((e: any) => e?.message).filter(Boolean) : [];
+    if (topLevelErrors.length) throw new Error(`Shopify Billing API error: ${topLevelErrors.join("; ")}`);
     const data = result?.data?.appSubscriptionCreate;
+    if (!data) throw new Error("Shopify returned no appSubscriptionCreate result.");
 
-    if (data?.userErrors && data.userErrors.length > 0) {
-      const errMsg = data.userErrors.map((e: any) => e.message).join(", ");
+    if (data.userErrors?.length) {
+      const errMsg = data.userErrors.map((e: any) => e.message).filter(Boolean).join(", ");
       throw new Error(`Shopify Billing Error: ${errMsg}`);
     }
+    if (!data.confirmationUrl || !data.appSubscription?.id) {
+      throw new Error("Shopify did not return a billing confirmation URL and subscription ID. No local subscription was created.");
+    }
 
-    if (data?.confirmationUrl) {
-      confirmationUrl = data.confirmationUrl;
-    }
-    if (data?.appSubscription?.id) {
-      graphqlSubId = data.appSubscription.id;
-      subStatus = data.appSubscription.status || "PENDING";
-    }
-  } catch (err: any) {
-    console.warn(`[Billing Service] GraphQL appSubscriptionCreate execution note: ${err.message}`);
-    // If offline/test mode without GraphQL response, fallback to deterministic mock sub ID
-    if (!graphqlSubId) {
-      graphqlSubId = `gid://shopify/AppSubscription/sub_${Date.now()}`;
-    }
+    confirmationUrl = String(data.confirmationUrl);
+    graphqlSubId = String(data.appSubscription.id);
+    subStatus = String(data.appSubscription.status || "PENDING");
   }
 
-  // Persist pending or active billing subscription in database
+  if (!isTestFixture && (!confirmationUrl || !graphqlSubId)) {
+    throw new Error("Shopify did not confirm the new subscription. No local subscription was created.");
+  }
+
+  // Persist the subscription returned by Shopify in database
   const subscription = await prisma.billingSubscription.upsert({
     where: { shopifyStoreId },
     create: {
@@ -202,7 +208,7 @@ export async function createAppSubscription(
       currency: plan.currency,
       interval: plan.interval,
       monthlyReturnLimit: plan.monthlyReturnLimit,
-      test: true,
+      test: isTestFixture || process.env.NODE_ENV !== "production",
     },
     update: {
       shopifySubscriptionId: graphqlSubId,
@@ -242,33 +248,32 @@ export async function cancelAppSubscription(shopifyStoreId: string, adminContext
   const sub = await getStoreSubscription(shopifyStoreId);
 
   if (sub.shopifySubscriptionId && sub.shopifySubscriptionId.startsWith("gid://shopify/AppSubscription/")) {
-    try {
-      const store = await prisma.shopifyStore.findUnique({
-        where: { id: shopifyStoreId },
-      });
-      if (store) {
-        const admin = await getShopifyAdminClient(store.shop, adminContext);
-        await admin.graphql(
-          `#graphql
-          mutation AppSubscriptionCancel($id: ID!) {
-            appSubscriptionCancel(id: $id) {
-              userErrors {
-                field
-                message
-              }
-              appSubscription {
-                id
-                status
-              }
-            }
-          }`,
-          {
-            variables: { id: sub.shopifySubscriptionId },
+    const isTestFixture = process.env.NODE_ENV === "test" && !adminContext;
+    if (!adminContext && !isTestFixture) {
+      throw new Error("Shopify Admin authorization is unavailable. Reopen BYNDCART from Shopify Admin to cancel billing.");
+    }
+    if (!isTestFixture) {
+      const store = await prisma.shopifyStore.findUnique({ where: { id: shopifyStoreId } });
+      if (!store) throw new Error("Shopify store not found while cancelling the subscription.");
+      const admin = await getShopifyAdminClient(store.shop, adminContext);
+      const response = await admin.graphql(
+        `#graphql
+        mutation AppSubscriptionCancel($id: ID!) {
+          appSubscriptionCancel(id: $id) {
+            userErrors { field message }
+            appSubscription { id status }
           }
-        );
+        }`,
+        { variables: { id: sub.shopifySubscriptionId } },
+      );
+      const payload = await response.json();
+      const topLevelErrors = Array.isArray(payload?.errors) ? payload.errors.map((e: any) => e?.message).filter(Boolean) : [];
+      const data = payload?.data?.appSubscriptionCancel;
+      if (topLevelErrors.length) throw new Error(`Shopify cancellation API error: ${topLevelErrors.join("; ")}`);
+      if (data?.userErrors?.length) throw new Error(`Shopify cancellation rejected: ${data.userErrors.map((e: any) => e.message).join("; ")}`);
+      if (!data?.appSubscription?.id || !["CANCELLED", "DECLINED", "EXPIRED"].includes(String(data.appSubscription.status || "").toUpperCase())) {
+        throw new Error("Shopify did not confirm cancellation. The local billing status was not changed.");
       }
-    } catch (err: any) {
-      console.warn(`[Billing Service] Cancel GraphQL execution note: ${err.message}`);
     }
   }
 
