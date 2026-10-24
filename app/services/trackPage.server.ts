@@ -47,6 +47,34 @@ export async function lookupShipmentTracking(shopifyStoreId: string, query: Trac
     });
   }
 
+  if (shipment) {
+    // Tracking is tenant-scoped and contact-verified like the customer portal. A tracking
+    // number or order number alone is not sufficient to expose a customer's shipment history.
+    const suppliedIdentifier = String(query.phone || "").trim();
+    if (!suppliedIdentifier || !shipment.shopifyOrderId) return null;
+    const order = await prisma.order.findFirst({
+      where: { shopifyStoreId, shopifyOrderId: shipment.shopifyOrderId },
+      select: { customerEmail: true, customerPhone: true },
+    });
+    if (!order) return null;
+    const identifierLooksLikeEmail = suppliedIdentifier.includes("@");
+    let identifierMatches = false;
+    if (identifierLooksLikeEmail) {
+      identifierMatches = String(order.customerEmail || "").trim().toLowerCase() === suppliedIdentifier.toLowerCase();
+    } else {
+      const normalizePhone = (value: unknown) => {
+        let digits = String(value || "").replace(/\D/g, "");
+        if (digits.startsWith("0092")) digits = digits.slice(2);
+        if (digits.length === 11 && digits.startsWith("0")) digits = `92${digits.slice(1)}`;
+        return digits;
+      };
+      const suppliedPhone = normalizePhone(suppliedIdentifier);
+      identifierMatches = suppliedPhone.length >= 10
+        && normalizePhone(order.customerPhone) === suppliedPhone;
+    }
+    if (!identifierMatches) return null;
+  }
+
   if (shipment && shipment.trackingNumber) {
     // This merchant-level preference applies to all configured courier providers.
     let autoCourierTracking = true;
@@ -171,9 +199,15 @@ export async function renderTrackPageHtml(
       box-shadow: 0 1px 3px rgba(0,0,0,0.04);
     }
     .search-row {
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px;
-      flex-wrap: wrap;
+    }
+    .search-row .search-btn { min-height: 42px; }
+    @media (max-width: 620px) {
+      .search-row { grid-template-columns: minmax(0, 1fr); }
+      .track-card { padding: 18px; }
+      .track-shell { margin: 18px auto; }
     }
     .search-input {
       flex: 1 1 200px;
@@ -288,10 +322,12 @@ export async function renderTrackPageHtml(
 
     <div class="track-card">
       <form method="get" class="search-row">
-        <input class="search-input" name="order" value="${orderParam}" placeholder="Enter Order # (e.g. #1001)" />
-        <input class="search-input" name="tracking" value="${trackingParam}" placeholder="Or Courier Tracking (CN) #" />
+        <input class="search-input" name="order" value="${orderParam}" placeholder="Order number (e.g. #1001)" autocomplete="off" />
+        <input class="search-input" name="tracking" value="${trackingParam}" placeholder="Or courier tracking number" autocomplete="off" />
+        <input class="search-input" name="phone" value="${phoneParam}" placeholder="Checkout email or phone number" autocomplete="email" required />
         <button type="submit" class="search-btn">Track Order</button>
       </form>
+      <p style="margin:10px 0 0;color:var(--muted);font-size:12px">For your privacy, enter the email address or phone number used at checkout.</p>
     </div>
 
     ${shipment ? `
