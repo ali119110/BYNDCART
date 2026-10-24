@@ -2,14 +2,12 @@ import React from "react";
 import { Link, useLoaderData, useFetcher } from "react-router";
 import type { Route } from "./+types/app.settings";
 import { requireTenantContext } from "../utils/tenant.server";
+import { buildCustomerPortalUrl, getSettings, updateSettings } from "../services/settings.server";
 import {
-  buildCustomerPortalUrl,
-  getSettings,
-  updateSettings,
   DEFAULT_COURIER_OPERATIONS_SETTINGS,
   normalizeCourierOperationsSettings,
   type ShipperProfile,
-} from "../services/settings.server";
+} from "../utils/courierOperationsSettings";
 import { getReturnPolicyRule, saveReturnPolicyRule } from "../services/policyEngine.server";
 import { checkFeatureAccess } from "../services/planGate.server";
 
