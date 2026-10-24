@@ -286,6 +286,7 @@ export default function BookingsPage() {
   const isSubmitting = navigation.state !== "idle";
   const courierOptionsFetcher = useFetcher<CourierBookingOptionsResponse>();
   const singleBookingFetcher = useFetcher<any>();
+  const fulfillmentSyncFetcher = useFetcher<any>();
   const [uploadProgress, setUploadProgress] = useState<BookingUploadProgress | null>(null);
   const bulkBookingQueueRef = useRef<BulkBookingQueue | null>(null);
   const handledBookingResponseRef = useRef<unknown>(null);
@@ -645,6 +646,15 @@ export default function BookingsPage() {
           role={actionData.ok ? "status" : "alert"}
         >
           {actionData.message}
+        </div>
+      )}
+      {fulfillmentSyncFetcher.data?.intent === "SYNC_SHOPIFY_FULFILLMENT" && (fulfillmentSyncFetcher.data.message || fulfillmentSyncFetcher.data.error) && (
+        <div
+          className={`bc-note ${fulfillmentSyncFetcher.data.success ? "ok" : "bad"}`}
+          style={{ marginBottom: "12px" }}
+          role={fulfillmentSyncFetcher.data.success ? "status" : "alert"}
+        >
+          {fulfillmentSyncFetcher.data.message || fulfillmentSyncFetcher.data.error}
         </div>
       )}
 
@@ -1080,16 +1090,17 @@ export default function BookingsPage() {
               <colgroup>
                 <col style={{ width: "2.5%" }} />
                 <col style={{ width: "2.5%" }} />
-                <col style={{ width: "7.5%" }} />
-                <col style={{ width: "13.5%" }} />
-                <col style={{ width: "10%" }} />
-                <col style={{ width: "19%" }} />
-                <col style={{ width: "12.5%" }} />
                 <col style={{ width: "8%" }} />
-                <col style={{ width: "6.5%" }} />
+                <col style={{ width: "12%" }} />
+                <col style={{ width: "9%" }} />
+                <col style={{ width: "17%" }} />
                 <col style={{ width: "11%" }} />
-                <col style={{ width: "3.5%" }} />
-                <col style={{ width: "3.5%" }} />
+                <col style={{ width: "7%" }} />
+                <col style={{ width: "6%" }} />
+                <col style={{ width: "10%" }} />
+                <col style={{ width: "3%" }} />
+                <col style={{ width: "3%" }} />
+                <col style={{ width: "9%" }} />
               </colgroup>
               <thead>
                 <tr style={{ background: "#0f172a", color: "#ffffff", fontSize: "12px", fontWeight: 700, letterSpacing: "0.02em" }}>
@@ -1097,8 +1108,8 @@ export default function BookingsPage() {
                     <input
                       type="checkbox"
                       checked={
-                        paginatedOrders.length > 0 &&
-                        paginatedOrders.filter((o) => !o.alreadyBooked).every((o) => selectedOrderIds.includes(o.id))
+                        paginatedOrders.some((order) => !order.alreadyBooked) &&
+                        paginatedOrders.filter((order) => !order.alreadyBooked).every((order) => selectedOrderIds.includes(order.id))
                       }
                       onChange={toggleSelectAll}
                       style={{ accentColor: "#16a34a", cursor: "pointer", width: "15px", height: "15px" }}
@@ -1114,7 +1125,8 @@ export default function BookingsPage() {
                   <th style={{ padding: "8px 5px" }}>Weight (kg)</th>
                   <th style={{ padding: "8px 5px" }}>Service type</th>
                   <th style={{ padding: "8px 3px", textAlign: "center" }}></th>
-                  <th style={{ padding: "8px 3px", textAlign: "center" }}></th>
+                  <th style={{ padding: "8px 3px", textAlign: "center" }}>Ready</th>
+                  <th style={{ padding: "8px 5px" }}>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -1198,7 +1210,12 @@ export default function BookingsPage() {
                           </span>
                           {order.alreadyBooked && (
                             <div style={{ fontSize: "11px", color: "#166534", fontWeight: 600, marginTop: "2px" }}>
-                              Booked ({order.existingCourier})
+                              Booked ({order.existingCourier || "previously"})
+                            </div>
+                          )}
+                          {order.alreadyBooked && !order.existingShipmentId && (
+                            <div style={{ fontSize: "10px", color: "#92400e", marginTop: "2px" }}>
+                              Existing booking tag — review before rebooking
                             </div>
                           )}
                         </td>
@@ -1458,6 +1475,55 @@ export default function BookingsPage() {
                             >
                               ✖
                             </span>
+                          )}
+                        </td>
+
+                        {/* Safe retry for orders with a saved carrier booking but no Shopify fulfillment */}
+                        <td style={{ verticalAlign: "middle", padding: "4px 5px" }}>
+                          {order.alreadyBooked && order.existingShipmentId ? (
+                            <fulfillmentSyncFetcher.Form method="post" action="/app/shipments">
+                              <input type="hidden" name="intent" value="SYNC_SHOPIFY_FULFILLMENT" />
+                              <input type="hidden" name="shipmentId" value={order.existingShipmentId} />
+                              <button
+                                type="submit"
+                                disabled={fulfillmentSyncFetcher.state !== "idle"}
+                                title={`Sync Shopify fulfillment for ${order.name} using existing tracking ${order.existingTracking || ""}. This will not create another courier booking.`}
+                                aria-label={`Sync Shopify fulfillment for ${order.name}`}
+                                style={{
+                                  width: "100%",
+                                  minWidth: 0,
+                                  padding: "5px 4px",
+                                  border: "1px solid #2563eb",
+                                  borderRadius: "5px",
+                                  color: "#1d4ed8",
+                                  background: "#eff6ff",
+                                  fontSize: "10px",
+                                  lineHeight: 1.2,
+                                  fontWeight: 700,
+                                  cursor: fulfillmentSyncFetcher.state === "idle" ? "pointer" : "wait",
+                                  opacity: fulfillmentSyncFetcher.state === "idle" ? 1 : 0.65,
+                                }}
+                              >
+                                {fulfillmentSyncFetcher.state !== "idle"
+                                  && fulfillmentSyncFetcher.formData?.get("shipmentId") === order.existingShipmentId
+                                  ? "Syncing…"
+                                  : "Sync Shopify"}
+                              </button>
+                              {order.existingTracking && (
+                                <div style={{ marginTop: "3px", fontSize: "9px", color: "#475569", overflowWrap: "anywhere" }}>
+                                  CN: {order.existingTracking}
+                                </div>
+                              )}
+                            </fulfillmentSyncFetcher.Form>
+                          ) : order.alreadyBooked ? (
+                            <a
+                              href={`/app/shipments?search=${encodeURIComponent(order.name)}`}
+                              style={{ color: "#92400e", fontSize: "10px", fontWeight: 700, textDecoration: "underline" }}
+                            >
+                              Review
+                            </a>
+                          ) : (
+                            <span style={{ color: "#94a3b8" }}>—</span>
                           )}
                         </td>
                       </tr>
