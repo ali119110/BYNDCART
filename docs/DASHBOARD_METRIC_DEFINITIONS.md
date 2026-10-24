@@ -28,11 +28,12 @@ Date filters use an inclusive start and an exclusive end for custom calendar dat
 - **Unprocessed webhook events:** webhook event rows in `processed = false` for the current store.
 - **Sync/webhook health:** display stored `syncStatus`, `lastSyncAt`, `lastSyncError` existence, and `webhookStatus`; raw error details are deliberately not rendered to merchants on this dashboard.
 - **Lifecycle:** current status distribution for return and exchange requests. It has no event-history time dimension because the current models do not preserve a complete transition history.
-- **Product return units requested:** sum of `ReturnItem.quantity` in return requests excluding `CANCELLED` and `REJECTED`. This is requested quantity, not necessarily inspected/received quantity or a unit return rate.
+- **Warehouse-confirmed unit return rate:** warehouse-confirmed units (`ReturnItem.quantity` where item status is `RECEIVED` or `INSPECTED`, and parent return request is not cancelled/rejected) divided by units sold in the same `Order.shopifyCreatedAt` cohort. A return received after the selected order period still contributes to that period's cohort. The metric is unavailable if no sold-unit denominator exists. A complete order sync and accurate return-item status transitions are required.
+- **Product return units requested:** sum of `ReturnItem.quantity` in non-cancelled/rejected return requests created in the selected period. This is request volume, not necessarily physically received units.
 
 ## Known limitations / next data requirements
 
-- A true item return rate needs a trustworthy sales denominator and a clearly defined returned-unit numerator over a comparable order cohort. Request-share percentages are not called return rates.
+- The unit return rate is cohort-based; incomplete order sync, missing item status transitions, or duplicate intake/return records can skew it. Values over 100% should be investigated rather than silently capped. Request-share percentages remain separately labeled and are not called return rates.
 - Historical stage conversion and average time between stages require durable lifecycle events; current status alone cannot reconstruct past transitions reliably.
 - Carrier performance rates should only be presented when live tracking events and delivery statuses are genuinely available for the relevant carrier.
 - Store sessions, conversion rate, marketing ROAS, and traffic-based metrics require a validated Shopify analytics or analytics-platform source; they should not be inferred from BYNDCART return records.
