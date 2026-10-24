@@ -64,7 +64,15 @@ prisma.$queryRaw = (async (query: any) => {
     ];
   }
   return [
-    { line_item_id: "gid://shopify/LineItem/1", title: "Embroidered Kurti", return_count: BigInt(6) },
+    {
+      product_key: "SKU-EMB-01",
+      title: "Embroidered Kurti",
+      sku: "SKU-EMB-01",
+      sold_units: 60,
+      requested_units: 6,
+      received_units: 6,
+      unit_return_rate: 10,
+    },
   ];
 }) as any;
 
@@ -141,7 +149,11 @@ test("Analytics Service - Get Store Financial Metrics in PKR", async () => {
   assert.strictEqual(analytics.summary.confirmedRefundsByCurrency.find((row: any) => row.currency === "USD")?.amount, 20);
   assert.strictEqual(analytics.summary.revenueFromExchanges, 1500);
   assert.strictEqual(analytics.topReturnedProducts[0].title, "Embroidered Kurti");
-  assert.strictEqual(analytics.topReturnedProducts[0].requestedUnits, 6, "product trend should sum requested units rather than item rows");
+  assert.strictEqual(analytics.topReturnedProducts[0].sku, "SKU-EMB-01");
+  assert.strictEqual(analytics.topReturnedProducts[0].soldUnits, 60);
+  assert.strictEqual(analytics.topReturnedProducts[0].receivedUnits, 6);
+  assert.strictEqual(analytics.topReturnedProducts[0].requestedUnits, 6);
+  assert.strictEqual(analytics.topReturnedProducts[0].unitReturnRate, 10, "product unit return rate uses cohort-matched sold and warehouse-confirmed units");
 });
 
 test("Analytics Service - Export Financial Ledger CSV", async () => {
