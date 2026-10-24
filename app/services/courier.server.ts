@@ -682,21 +682,23 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
     const apiRoot = leopardsApiRoot(credentials);
     if (!apiKey || !apiPassword) return unconfirmedBooking(this.providerName, "Leopards requires both API key and API password for this store.");
 
-    const warehouseCity = credentialValue(credentials, "warehouseCity");
-    const warehouseAddress = credentialValue(credentials, "warehouseAddress");
-    const warehouseName = credentialValue(credentials, "warehouseContactName");
-    const warehousePhoneRaw = credentialValue(credentials, "warehousePhone");
-    const warehouseEmail = credentialValue(credentials, "warehouseEmail");
-    const weightGrams = Math.round(Number(input.weightKg ? Number(input.weightKg) * 1000 : credentialValue(credentials, "defaultWeightGrams")));
+    const reverse = direction === "RETURN";
+    const merchantProfile = reverse ? (input.destinationAddress || {}) : (input.originAddress || {});
+    const warehouseCity = String(merchantProfile.city || merchantProfile.cityName || credentialValue(credentials, "warehouseCity") || "").trim();
+    const warehouseAddress = String(merchantProfile.address1 || merchantProfile.address || credentialValue(credentials, "warehouseAddress") || "").trim();
+    const warehouseName = String(merchantProfile.name || merchantProfile.fullName || credentialValue(credentials, "warehouseContactName") || "").trim();
+    const warehousePhoneRaw = String(merchantProfile.phone || merchantProfile.phoneNumber || credentialValue(credentials, "warehousePhone") || "").trim();
+    const warehouseEmail = String(merchantProfile.email || merchantProfile.emailAddress || credentialValue(credentials, "warehouseEmail") || "").trim();
+    const weightGrams = Math.round(Number(input.weightKg ? Number(input.weightKg) * 1000 : 1000));
     if (!warehouseCity || !warehouseAddress || !warehouseName || !warehousePhoneRaw) {
-      return unconfirmedBooking(this.providerName, "Complete the Leopards warehouse city, address, contact name, and phone in Courier settings before booking.");
+      return unconfirmedBooking(this.providerName, "Complete sender name, phone, city, and address under Settings → Shipper profiles before booking with Leopards.");
     }
     if (!Number.isFinite(weightGrams) || weightGrams <= 0) {
-      return unconfirmedBooking(this.providerName, "Set a valid default return parcel weight in grams in Leopards Courier settings. The Leopards API requires weight in grams.");
+      return unconfirmedBooking(this.providerName, "Enter a valid parcel weight in the Booking table; Leopards requires weight in grams.");
     }
 
     const customerName = String(input.customerName || "").trim();
-    const customerEmail = String(input.customerEmail || "").trim();
+    const customerEmail = String(input.customerEmail || (reverse ? input.originAddress?.email : input.destinationAddress?.email) || "").trim();
     const customerCity = String(input.cityName || (direction === "RETURN" ? input.originAddress?.city : input.destinationAddress?.city) || "").trim();
     const customerAddress = String((direction === "RETURN" ? input.originAddress : input.destinationAddress)?.address1 || (direction === "RETURN" ? input.originAddress : input.destinationAddress)?.address || "").trim();
     let customerPhone = "";
@@ -715,7 +717,6 @@ export class LeopardsCourierAdapter implements ICourierAdapter {
     // separate reverse-pickup endpoint. Returns use that same endpoint with the customer as
     // shipper and the merchant warehouse as consignee. Confirm this mapping in Leopards staging
     // before customer returns go live.
-    const reverse = direction === "RETURN";
     const senderCityName = reverse ? customerCity : warehouseCity;
     const receiverCityName = reverse ? warehouseCity : customerCity;
     let cities: LeopardsCity[];
@@ -977,7 +978,9 @@ export class DHLCourierAdapter implements ICourierAdapter {
     const accountNumber = credentialValue(credentials, "accountNumber");
     if (!username || !password || !accountNumber) return unconfirmedBooking(this.providerName, "DHL API username, password, and shipper account number are required for this store.");
 
-    const merchantAddress = credentialAddress(credentials);
+    const merchantAddress = input.shipmentType === "RETURN"
+      ? { ...credentialAddress(credentials), ...(input.destinationAddress || {}) }
+      : { ...credentialAddress(credentials), ...(input.originAddress || {}) };
     let shipperDetails: any;
     let receiverDetails: any;
     try {
@@ -1237,7 +1240,9 @@ export class FedExCourierAdapter implements ICourierAdapter {
     try { token = await this.getAccessToken(credentials); }
     catch (error) { return unconfirmedBooking(this.providerName, error instanceof Error ? error.message : "FedEx OAuth failed."); }
     const accountNumber = credentialValue(credentials, "accountNumber");
-    const merchantAddress = credentialAddress(credentials);
+    const merchantAddress = input.shipmentType === "RETURN"
+      ? { ...credentialAddress(credentials), ...(input.destinationAddress || {}) }
+      : { ...credentialAddress(credentials), ...(input.originAddress || {}) };
     let shipper: any;
     let recipient: any;
     try {
@@ -1455,7 +1460,7 @@ export class TCSCourierAdapter implements ICourierAdapter {
     const userName = credentialValue(credentials, "userName");
     const password = credentialValue(credentials, "password");
     const costCenterCode = credentialValue(credentials, "costCenterCode");
-    const warehouseCity = credentialValue(credentials, "warehouseCity") || valueFrom(input.originAddress, "city", "cityName");
+    const warehouseCity = valueFrom(input.originAddress, "city", "cityName") || credentialValue(credentials, "warehouseCity");
     const customer = input.destinationAddress || {};
     const customerCity = valueFrom(input, "cityName") || valueFrom(customer, "city", "cityName");
     const consigneeName = valueFrom(customer, "name", "fullName", "contactName") || input.customerName || "";
@@ -1696,29 +1701,17 @@ export type CourierApiStatus = "live_booking" | "pending_vendor_docs" | "pending
 const COURIER_SETUP: Record<string, { instructions: string; apiStatus: CourierApiStatus; fields: CourierSetupField[] }> = {
   DHL: {
     apiStatus: "live_booking",
-    instructions: "Uses DHL Express MyDHL REST API with Basic Authentication and the store's shipper account. Supports label creation and tracking. The supplied REST contract does not document shipment cancellation, and cross-border customs bookings are blocked until validated customs line data is supplied.",
+    instructions: "Enter only your DHL API credentials and shipper account number here. Add sender name, phone, email, city, and address once in Settings → Shipper profiles. Use DHL test mode until production access has been approved.",
     fields: [
       { key: "environment", label: "API environment", placeholder: "Choose environment", required: true, type: "select", defaultValue: "test", options: [{ label: "Test", value: "test" }, { label: "Production", value: "production" }] },
       { key: "username", label: "MyDHL API username", placeholder: "DHL API username", required: true, secret: true },
       { key: "password", label: "MyDHL API password", placeholder: "DHL API password", required: true, secret: true },
       { key: "accountNumber", label: "DHL shipper account number", placeholder: "DHL Express account number", required: true, secret: true },
-      { key: "shipperName", label: "Merchant contact name", placeholder: "Warehouse contact name", required: true },
-      { key: "shipperPhone", label: "Merchant phone", placeholder: "International phone number", required: true, type: "tel" },
-      { key: "shipperEmail", label: "Merchant email", placeholder: "warehouse@example.com", required: false, type: "email" },
-      { key: "shipperAddress", label: "Merchant street address", placeholder: "Full warehouse address", required: true },
-      { key: "shipperCity", label: "Merchant city", placeholder: "City", required: true },
-      { key: "shipperPostalCode", label: "Merchant postal code", placeholder: "Postal code", required: false },
-      { key: "shipperCountryCode", label: "Merchant country code", placeholder: "Two-letter code, e.g. PK", required: true },
-      { key: "productCode", label: "DHL product code", placeholder: "Carrier-approved product code", required: true, defaultValue: "P" },
-      { key: "packageType", label: "DHL package type code", placeholder: "Carrier-approved package type", required: true, defaultValue: "2BP" },
-      { key: "defaultWeightKg", label: "Default weight (kg)", placeholder: "e.g. 1", required: true, type: "number", defaultValue: "1" },
-      { key: "incoterm", label: "Incoterm", placeholder: "e.g. DAP", required: true, defaultValue: "DAP" },
-      { key: "isCustomsDeclarable", label: "Customs-declarable shipment", placeholder: "Choose", required: true, type: "select", defaultValue: "false", options: [{ label: "No (domestic only)", value: "false" }, { label: "Yes (blocked until customs lines are supported)", value: "true" }] },
     ],
   },
   FEDEX: {
     apiStatus: "live_booking",
-    instructions: "Uses FedEx OAuth 2.0 plus Ship and Track APIs. Configure API key/secret, FedEx account number, merchant address, and the service type enabled on the account. Reverse requests use FedEx PRINT_RETURN_LABEL shipment services; perform account-specific UAT before live bookings.",
+    instructions: "Enter FedEx API credentials and account number only. Store sender/contact details centrally in Settings → Shipper profiles. Verify your selected account and shipment service with FedEx before production bookings.",
     fields: [
       { key: "environment", label: "API environment", placeholder: "Choose environment", required: true, type: "select", defaultValue: "sandbox", options: [{ label: "Sandbox", value: "sandbox" }, { label: "Production", value: "production" }] },
       { key: "grantType", label: "OAuth grant type", placeholder: "Choose grant type", required: true, type: "select", defaultValue: "client_credentials", options: [{ label: "Client credentials", value: "client_credentials" }, { label: "CSP credentials", value: "csp_credentials" }, { label: "Parent-child credentials", value: "client_pc_credentials" }] },
@@ -1727,56 +1720,34 @@ const COURIER_SETUP: Record<string, { instructions: string; apiStatus: CourierAp
       { key: "childId", label: "FedEx customer child key (optional)", placeholder: "Required by some grant types", required: false, secret: true },
       { key: "childSecret", label: "FedEx customer child secret (optional)", placeholder: "Required by some grant types", required: false, secret: true },
       { key: "accountNumber", label: "FedEx account number", placeholder: "FedEx shipper account number", required: true, secret: true },
-      { key: "shipperName", label: "Merchant contact name", placeholder: "Warehouse contact name", required: true },
-      { key: "shipperPhone", label: "Merchant phone", placeholder: "International phone number", required: true, type: "tel" },
-      { key: "shipperEmail", label: "Merchant email", placeholder: "warehouse@example.com", required: false, type: "email" },
-      { key: "shipperAddress", label: "Merchant street address", placeholder: "Full warehouse address", required: true },
-      { key: "shipperCity", label: "Merchant city", placeholder: "City", required: true },
-      { key: "shipperState", label: "Merchant state/province code", placeholder: "Required for some countries", required: false },
-      { key: "shipperPostalCode", label: "Merchant postal code", placeholder: "Postal code", required: false },
-      { key: "shipperCountryCode", label: "Merchant country code", placeholder: "Two-letter code, e.g. PK", required: true },
-      { key: "serviceType", label: "FedEx service type", placeholder: "Account-approved service code", required: true, defaultValue: "FEDEX_INTERNATIONAL_PRIORITY" },
-      { key: "packagingType", label: "FedEx packaging type", placeholder: "e.g. YOUR_PACKAGING", required: true, defaultValue: "YOUR_PACKAGING" },
-      { key: "pickupType", label: "Pickup type", placeholder: "Choose pickup type", required: true, type: "select", defaultValue: "DROPOFF_AT_FEDEX_LOCATION", options: [{ label: "Drop off at FedEx location", value: "DROPOFF_AT_FEDEX_LOCATION" }, { label: "Use scheduled pickup", value: "USE_SCHEDULED_PICKUP" }, { label: "Contact FedEx to schedule", value: "CONTACT_FEDEX_TO_SCHEDULE" }] },
-      { key: "defaultWeightKg", label: "Default weight (kg)", placeholder: "e.g. 1", required: true, type: "number", defaultValue: "1" },
     ],
   },
   TCS: {
     apiStatus: "live_booking",
-    instructions: "Uses the supplied TCS COD API. Client ID/subscription is checked through the Cities API; username/password/cost center are checked by booking/cancellation endpoints. Returns require a prior TCS consignment number. The supplied contract does not expose scan-event tracking or a label endpoint.",
+    instructions: "Enter TCS API access credentials only. Sender city, name, phone, email, and address are read from Settings → Shipper profiles. TCS validates booking credentials when a booking is attempted.",
     fields: [
       { key: "clientId", label: "TCS API Client ID", placeholder: "X-IBM-Client-Id", required: true, secret: true },
       { key: "userName", label: "TCS COD username", placeholder: "API username", required: true, secret: true },
       { key: "password", label: "TCS COD password", placeholder: "API password", required: true, secret: true },
       { key: "costCenterCode", label: "TCS cost center code", placeholder: "Assigned cost center code", required: true, secret: true },
-      { key: "warehouseCity", label: "Merchant origin city", placeholder: "e.g. Karachi", required: true },
-      { key: "defaultWeightKg", label: "Default parcel weight (kg)", placeholder: "e.g. 1", required: true, type: "number", defaultValue: "1" },
-      { key: "services", label: "TCS service code", placeholder: "Carrier-provided service code", required: true, defaultValue: "O" },
-      { key: "fragile", label: "Fragile parcel", placeholder: "Choose", required: true, type: "select", defaultValue: "No", options: [{ label: "No", value: "No" }, { label: "Yes", value: "Yes" }] },
     ],
   },
   POSTEX: {
     apiStatus: "live_booking",
-    instructions: "Uses the official PostEx Merchant API with this store's token header. create-order v3 maps returns to Reverse, forward parcels to Normal, and exchanges to Replacement; the create response may initially report UnBooked. Tracking, cancellation, invoice PDF and load-sheet PDF APIs are implemented. Complete merchant UAT before production rollout.",
+    instructions: "Enter the PostEx merchant API token. BYNDCART attempts to auto-resolve your registered pickup/store IDs. The two optional ID fields are only fallbacks if your account's address lookup cannot return them; do not enter warehouse contact or address details here.",
     fields: [
       { key: "apiToken", label: "Merchant API token", placeholder: "Paste the PostEx token", required: true, secret: true },
-      { key: "pickupAddressCode", label: "Pickup address code (optional)", placeholder: "PostEx pickup address code", required: false },
-      { key: "storeAddressCode", label: "Store address code (optional)", placeholder: "PostEx store address code", required: false },
+      { key: "pickupAddressCode", label: "Pickup address ID (optional fallback)", placeholder: "Only if auto-lookup cannot resolve it", required: false },
+      { key: "storeAddressCode", label: "Store address ID (optional fallback)", placeholder: "Only if auto-lookup cannot resolve it", required: false },
     ],
   },
   LEOPARDS: {
     apiStatus: "live_booking",
-    instructions: "Uses the official Leopards eCom Merchant API with api_key and api_password. Select the same environment as the key/password. Return booking requires a valid customer city plus merchant warehouse city/address/contact and default packet weight. City IDs are resolved from getAllCities at booking time.",
+    instructions: "Enter the Leopards API key and password only; choose the environment matching those credentials. Sender name, phone, email, city, and address are managed centrally in Settings → Shipper profiles.",
     fields: [
       { key: "environment", label: "API environment", placeholder: "Choose API environment", required: false, type: "select", defaultValue: "production", options: [{ label: "Production", value: "production" }, { label: "Staging / UAT", value: "staging" }] },
       { key: "apiKey", label: "Merchant API key", placeholder: "Leopards API key", required: true, secret: true },
       { key: "apiPassword", label: "Merchant API password", placeholder: "Leopards API password", required: true, secret: true },
-      { key: "warehouseCity", label: "Warehouse city", placeholder: "e.g. Karachi", required: true },
-      { key: "warehouseAddress", label: "Warehouse address", placeholder: "Full merchant warehouse address", required: true },
-      { key: "warehouseContactName", label: "Warehouse contact name", placeholder: "Name of warehouse contact", required: true },
-      { key: "warehousePhone", label: "Warehouse phone", placeholder: "03XXXXXXXXX", required: true, type: "tel" },
-      { key: "warehouseEmail", label: "Warehouse email", placeholder: "warehouse@store.com", required: true, type: "email" },
-      { key: "defaultWeightGrams", label: "Default parcel weight (grams)", placeholder: "e.g. 1000", required: true, type: "number" },
     ],
   },
 };

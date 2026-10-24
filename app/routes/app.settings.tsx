@@ -127,7 +127,11 @@ export async function action({ request }: Route.ActionArgs) {
   const shipperProfiles = [0, 1, 2].map((index) => ({
     name: String(formData.get(`shipperProfile${index}Name`) || "").trim(),
     phone: String(formData.get(`shipperProfile${index}Phone`) || "").trim(),
+    email: String(formData.get(`shipperProfile${index}Email`) || "").trim(),
     city: String(formData.get(`shipperProfile${index}City`) || "").trim(),
+    state: String(formData.get(`shipperProfile${index}State`) || "").trim(),
+    postalCode: String(formData.get(`shipperProfile${index}PostalCode`) || "").trim(),
+    countryCode: String(formData.get(`shipperProfile${index}CountryCode`) || "PK").trim().toUpperCase(),
     address: String(formData.get(`shipperProfile${index}Address`) || "").trim(),
   }));
   const courierOperationsSettings = normalizeCourierOperationsSettings({
@@ -257,6 +261,11 @@ export default function Settings() {
           </p>
         </div>
       </header>
+
+      <nav aria-label="Settings shortcuts" style={{ display: "flex", flexWrap: "wrap", gap: "8px", margin: "0 0 16px" }}>
+        <a href="#bco-courier-workspace" className="bc-btn" style={{ textDecoration: "none" }}>Courier &amp; booking settings</a>
+        <a href="#bco-shipper-title" className="bc-btn" style={{ textDecoration: "none" }}>Shipper profiles</a>
+      </nav>
 
       <section className="bc-card bc-portal-card bc-stack" aria-labelledby="bc-portal-title">
         <div className="bc-portal-heading">
@@ -409,7 +418,7 @@ export default function Settings() {
           @media (max-width: 760px) { .bco-grid, .bco-toggle-list, .bco-profile-grid { grid-template-columns: minmax(0, 1fr); } .bco-heading { padding: 14px; } .bco-body { padding: 14px; } }
         `}</style>
 
-        <div style={{ margin: "2px 0 14px" }}>
+        <div id="bco-courier-workspace" style={{ margin: "2px 0 14px", scrollMarginTop: "24px" }}>
           <p className="bc-eyebrow" style={{ marginBottom: "5px" }}>COURIER WORKSPACE</p>
           <h2 style={{ margin: 0, color: "#0f172a", fontSize: "20px", fontWeight: 800 }}>Courier &amp; label settings</h2>
           <p className="bc-muted" style={{ margin: "5px 0 0", maxWidth: "760px" }}>
@@ -564,6 +573,10 @@ export default function Settings() {
                       <input id={`shipperProfile${index}Phone`} name={`shipperProfile${index}Phone`} maxLength={40} defaultValue={profile.phone} placeholder="03XXXXXXXXX" />
                     </div>
                     <div className="bco-field">
+                      <label htmlFor={`shipperProfile${index}Email`}>Email (optional)</label>
+                      <input id={`shipperProfile${index}Email`} name={`shipperProfile${index}Email`} type="email" maxLength={200} defaultValue={profile.email} placeholder="dispatch@yourstore.com" />
+                    </div>
+                    <div className="bco-field">
                       <label htmlFor={`shipperProfile${index}City`}>City</label>
                       <input id={`shipperProfile${index}City`} name={`shipperProfile${index}City`} maxLength={100} defaultValue={profile.city} placeholder="Karachi" />
                     </div>
@@ -571,11 +584,23 @@ export default function Settings() {
                       <label htmlFor={`shipperProfile${index}Address`}>Address</label>
                       <input id={`shipperProfile${index}Address`} name={`shipperProfile${index}Address`} maxLength={500} defaultValue={profile.address} placeholder="Warehouse, street, area" />
                     </div>
+                    <div className="bco-field">
+                      <label htmlFor={`shipperProfile${index}State`}>State / Province (optional)</label>
+                      <input id={`shipperProfile${index}State`} name={`shipperProfile${index}State`} maxLength={100} defaultValue={profile.state} placeholder="Sindh" />
+                    </div>
+                    <div className="bco-field">
+                      <label htmlFor={`shipperProfile${index}PostalCode`}>Postal code (optional)</label>
+                      <input id={`shipperProfile${index}PostalCode`} name={`shipperProfile${index}PostalCode`} maxLength={24} defaultValue={profile.postalCode} placeholder="74000" />
+                    </div>
+                    <div className="bco-field">
+                      <label htmlFor={`shipperProfile${index}CountryCode`}>Country code</label>
+                      <input id={`shipperProfile${index}CountryCode`} name={`shipperProfile${index}CountryCode`} maxLength={2} minLength={2} pattern="[A-Za-z]{2}" defaultValue={profile.countryCode || "PK"} placeholder="PK" />
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
-            <div className="bco-note">Sender profiles and label settings are shared across couriers. Courier API pickup-address codes remain provider-specific because each carrier registers its own pickup locations.</div>
+            <div className="bco-note">Set sender contact and address details here once. Booking and supported courier APIs reuse this profile, so you do not need to enter warehouse details separately under each courier. Registered carrier IDs are resolved automatically when the carrier API allows it.</div>
             <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap", marginTop: "16px" }}>
               <button type="submit" className="bc-btn primary" disabled={isSaving}>
                 {isSaving ? "Saving settings…" : "Save Settings"}

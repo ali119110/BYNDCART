@@ -127,6 +127,7 @@ export async function action({ request }: ActionFunctionArgs) {
       const courier = String(form.get("courier") || "POSTEX");
       const customerName = String(form.get("customerName") || "");
       const customerPhone = String(form.get("customerPhone") || "");
+      const customerEmail = String(form.get("customerEmail") || "").trim();
       const customerAddress = String(form.get("customerAddress") || "");
       const cityName = String(form.get("cityName") || "");
       const codAmountPKR = Number(form.get("codAmountPKR") || 0);
@@ -153,6 +154,7 @@ export async function action({ request }: ActionFunctionArgs) {
         serviceType,
         customerName,
         customerPhone,
+        customerEmail,
         customerAddress,
         cityName,
         codAmountPKR,
@@ -465,6 +467,7 @@ export default function BookingsPage() {
         serviceType,
         customerName: edit.name !== undefined ? edit.name : order.customerName,
         customerPhone: edit.phone !== undefined ? edit.phone : order.customerPhone,
+        customerEmail: order.customerEmail || "",
         customerAddress: edit.address !== undefined ? edit.address : [order.address1, order.address2].filter(Boolean).join(", ").trim(),
         cityName,
         codAmountPKR: edit.cod !== undefined ? edit.cod : order.suggestedCod,
@@ -508,6 +511,7 @@ export default function BookingsPage() {
       serviceType: String(booking.serviceType || "Normal"),
       customerName: String(booking.customerName || ""),
       customerPhone: String(booking.customerPhone || ""),
+      customerEmail: String(booking.customerEmail || ""),
       customerAddress: String(booking.customerAddress || ""),
       cityName: String(booking.cityName || ""),
       codAmountPKR: String(booking.codAmountPKR),
@@ -955,15 +959,15 @@ export default function BookingsPage() {
                 <input
                   aria-label="Pickup Location"
                   readOnly
-                  value={activeCourier ? [activeCourier.pickupAddress, activeCourier.pickupCity].filter(Boolean).join(", ") : ""}
-                  placeholder="Not set — configure in Courier Settings"
+                  value={[activeShipperProfile.address, activeShipperProfile.city].filter(Boolean).join(", ")}
+                  placeholder="Set sender details in Settings → Shipper profiles"
                   style={{ height: "36px", width: "100%", boxSizing: "border-box", padding: "0 10px", border: "1px solid #cbd5e1", borderRadius: "5px", background: "#fff", color: "#0f172a", fontSize: "13px" }}
                 />
               </label>
             </div>
 
             {/* Back / Next Pagination */}
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", alignSelf: "flex-start", paddingTop: "19px", flex: "0 0 auto" }}>
               <button
                 type="button"
                 className="bc-btn"
