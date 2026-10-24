@@ -14,7 +14,7 @@ test("shared courier settings provide safe defaults for existing stores", () => 
   assert.equal(settings.duplicateCheckDurationMinutes, 30);
   assert.equal(settings.labelSize, "A4_3");
   assert.equal(settings.shipperProfiles.length, 3);
-  assert.deepEqual(settings.shipperProfiles[0], { name: "", phone: "", email: "", city: "", address: "" });
+  assert.deepEqual(settings.shipperProfiles[0], { name: "", phone: "", email: "", city: "", state: "", postalCode: "", countryCode: "PK", address: "" });
 });
 
 test("shared courier settings normalize saved profile and label options", () => {
@@ -30,8 +30,8 @@ test("shared courier settings normalize saved profile and label options", () => 
     labelSize: "THERMAL_4X6",
     defaultShipperProfileIndex: 1,
     shipperProfiles: [
-      { name: "FEAR", phone: "03703298156", email: "dispatch@fear.com.pk", city: "Karachi", address: "Row E, Block 4" },
-      { name: "Warehouse 2", phone: "03001234567", email: "", city: "Lahore", address: "Second Street" },
+      { name: "FEAR", phone: "03703298156", email: "dispatch@fear.com.pk", city: "Karachi", state: "Sindh", postalCode: "74000", countryCode: "PK", address: "Row E, Block 4" },
+      { name: "Warehouse 2", phone: "03001234567", email: "", city: "Lahore", state: "", postalCode: "", countryCode: "PK", address: "Second Street" },
     ],
   });
 
@@ -45,7 +45,9 @@ test("shared courier settings normalize saved profile and label options", () => 
   assert.equal(settings.shipperProfiles[0].name, "FEAR");
   assert.equal(settings.shipperProfiles[1].city, "Lahore");
   assert.equal(settings.shipperProfiles[0].email, "dispatch@fear.com.pk");
-  assert.deepEqual(settings.shipperProfiles[2], { name: "", phone: "", email: "", city: "", address: "" });
+  assert.equal(settings.shipperProfiles[0].countryCode, "PK");
+  assert.equal(settings.shipperProfiles[0].postalCode, "74000");
+  assert.deepEqual(settings.shipperProfiles[2], { name: "", phone: "", email: "", city: "", state: "", postalCode: "", countryCode: "PK", address: "" });
 });
 
 test("invalid shared courier preferences fall back instead of breaking booking", () => {
