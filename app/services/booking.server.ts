@@ -57,6 +57,7 @@ export interface SingleBookingInput {
   cityName: string;
   codAmountPKR: number;
   weightKg: number;
+  shipperProfileIndex?: number;
   remarks?: string;
   items?: Array<{ title: string; quantity: number; price?: number; sku?: string }>;
 }
