@@ -14,7 +14,7 @@ import {
   getUnassignedBookedShipments,
   listLoadsheets,
 } from "../services/loadsheet.server";
-import { getDecryptedCourierCredentials, getMerchantCourierBookingOptions } from "../services/courier.server";
+import { CourierRegistry, getStoreCourierConfigs, getMerchantCourierBookingOptions } from "../services/courier.server";
 import { isValidPakistaniMobile, MAJOR_PAKISTANI_CITIES } from "../services/pakistanLogistics";
 import { getCourierOperationsSettings } from "../services/settings.server";
 
@@ -32,52 +32,49 @@ export async function loader({ request }: LoaderFunctionArgs) {
       : "Unable to load current unfulfilled orders from Shopify. Reload the page and try again.";
   }
 
-  // Check which couriers have active credentials - pass credentials details for pickup address
-  const [postexCreds, leopardsCreds, tcsCreds, courierOperationsSettings] = await Promise.all([
-    getDecryptedCourierCredentials(shopifyStoreId, "POSTEX"),
-    getDecryptedCourierCredentials(shopifyStoreId, "LEOPARDS"),
-    getDecryptedCourierCredentials(shopifyStoreId, "TCS"),
+  // Build booking choices dynamically from this merchant's saved courier configurations.
+  // Only registered adapters with implemented booking integrations are eligible; saved-but-unverified
+  // credentials remain visible so merchants know to verify them, but cannot be used for booking.
+  const [storedCourierConfigs, courierOperationsSettings] = await Promise.all([
+    getStoreCourierConfigs(shopifyStoreId),
     getCourierOperationsSettings(shopifyStoreId),
   ]);
+  const configByProvider = new Map(
+    storedCourierConfigs.map((config) => [config.providerName.trim().toUpperCase(), config]),
+  );
 
-  // Build configured couriers list with pickup addresses from their credentials
   const configuredCouriers: Array<{
     key: string;
     label: string;
     pickupAddress: string;
     pickupCity: string;
-  }> = [];
+    ready: boolean;
+  }> = CourierRegistry.getRegisteredAdapters()
+    .filter((adapter) => adapter.isLive && adapter.apiStatus === "live_booking")
+    .flatMap((adapter) => {
+      const config = configByProvider.get(adapter.providerName.trim().toUpperCase());
+      if (!config?.hasToken) return [];
 
-  if (postexCreds?.apiToken || postexCreds?.credentials?.apiToken) {
-    configuredCouriers.push({
-      key: "POSTEX",
-      label: "PostEx",
-      pickupAddress: (postexCreds.credentials as any)?.warehouseAddress || (postexCreds as any)?.warehouseAddress || "",
-      pickupCity: (postexCreds.credentials as any)?.warehouseCity || (postexCreds as any)?.warehouseCity || "Karachi",
+      const requiredFields = adapter.fields.filter((field) => field.required);
+      if (!requiredFields.every((field) => config.configuredFieldKeys.includes(field.key))) return [];
+
+      const ready = Boolean(config.enabled && config.isLive);
+      return [{
+        key: adapter.providerName,
+        label: ready ? adapter.displayName : `${adapter.displayName} (verify credentials)`,
+        pickupAddress: "",
+        pickupCity: "",
+        ready,
+      }];
     });
-  }
-  if (leopardsCreds?.credentials?.apiKey || (leopardsCreds as any)?.apiKey) {
-    configuredCouriers.push({
-      key: "LEOPARDS",
-      label: "Leopards Courier",
-      pickupAddress: (leopardsCreds?.credentials as any)?.warehouseAddress || (leopardsCreds as any)?.warehouseAddress || "",
-      pickupCity: (leopardsCreds?.credentials as any)?.warehouseCity || (leopardsCreds as any)?.warehouseCity || "Karachi",
-    });
-  }
-  if (tcsCreds?.credentials?.clientId || (tcsCreds as any)?.clientId) {
-    configuredCouriers.push({
-      key: "TCS",
-      label: "TCS Express",
-      pickupAddress: (tcsCreds?.credentials as any)?.warehouseAddress || (tcsCreds as any)?.warehouseAddress || "",
-      pickupCity: (tcsCreds?.credentials as any)?.warehouseCity || (tcsCreds as any)?.warehouseCity || "Karachi",
-    });
-  }
-  // In-house rider is always available
+
+  // In-house rider is always available.
   configuredCouriers.push({
     key: "RIDER",
     label: "In-House Rider",
     pickupAddress: "",
     pickupCity: "",
+    ready: true,
   });
 
   // Load unassigned booked shipments waiting for rider loadsheet
@@ -294,7 +291,7 @@ export default function BookingsPage() {
   const [activeTab, setActiveTab] = useState<"BOOK" | "LOADSHEET">("BOOK");
 
   // Default to first configured courier
-  const defaultCourierKey = configuredCouriers[0]?.key || "RIDER";
+  const defaultCourierKey = configuredCouriers.find((courier) => courier.ready)?.key || "RIDER";
   const [selectedCourierKey, setSelectedCourierKey] = useState(defaultCourierKey);
   const [selectedShipperProfileIndex, setSelectedShipperProfileIndex] = useState(
     courierOperationsSettings.defaultShipperProfileIndex ?? 0,
