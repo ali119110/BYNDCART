@@ -14,25 +14,25 @@ export async function action({ request }: ActionFunctionArgs) {
 
 async function handleTrackingRequest(request: Request) {
   let shop: string | null = null;
+  let proxyAuthenticated = false;
 
-  // Try App Proxy authentication first
+  // Use the shop returned by verified Shopify App Proxy authentication. Never use a
+  // merchant-supplied query parameter to select the tenant on a production request.
   try {
-    await authenticate.public.appProxy(request);
+    const proxyContext = await authenticate.public.appProxy(request);
+    proxyAuthenticated = true;
+    shop = normalizeShopDomain(
+      (proxyContext as any)?.session?.shop
+        || (proxyContext as any)?.shop
+        || null,
+    );
   } catch {
-    // Allows direct storefront or standalone preview
+    // Direct access is only permitted in non-production development/preview sessions.
   }
 
   const url = new URL(request.url);
-  shop = normalizeShopDomain(url.searchParams.get("shop"));
-
-  if (!shop) {
-    // If shop parameter is missing, try looking up the primary configured shop
-    try {
-      const { configuredShopDomain } = await import("../services/shopifyAdmin.server");
-      shop = configuredShopDomain();
-    } catch {
-      // Ignored
-    }
+  if (!shop && process.env.NODE_ENV !== "production" && !proxyAuthenticated) {
+    shop = normalizeShopDomain(url.searchParams.get("shop"));
   }
 
   if (!shop) {
