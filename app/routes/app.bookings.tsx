@@ -743,14 +743,27 @@ export default function BookingsPage() {
           </div>
         )}
 
-        <button
-          type="button"
-          className="bc-btn"
-          style={{ marginLeft: "auto" }}
-          onClick={() => window.open("/app/awb", "_blank")}
-        >
-          Print Airway Bills
-        </button>
+        {(() => {
+          const printableShipmentIds = unfulfilledOrders
+            .filter((order) => order.alreadyBooked && order.existingShipmentId && !["CANCELLED", "FAILED"].includes(String(order.existingShipmentStatus || "").toUpperCase()))
+            .map((order) => order.existingShipmentId)
+            .filter((id): id is string => Boolean(id));
+          return printableShipmentIds.length > 0 ? (
+            <a
+              className="bc-btn"
+              href={`/app/awb?ids=${encodeURIComponent(printableShipmentIds.join(","))}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ marginLeft: "auto", textDecoration: "none", display: "inline-flex", alignItems: "center" }}
+            >
+              Print Airway Bills ({printableShipmentIds.length})
+            </a>
+          ) : (
+            <button type="button" className="bc-btn" disabled style={{ marginLeft: "auto", opacity: 0.55 }}>
+              Print Airway Bills (0)
+            </button>
+          );
+        })()}
       </div>
 
       {activeTab === "BOOK" && (
@@ -1224,6 +1237,11 @@ export default function BookingsPage() {
                               Existing booking tag — review before rebooking
                             </div>
                           )}
+                          {!order.alreadyBooked && order.existingShipmentStatus === "CANCELLED" && (
+                            <div style={{ fontSize: "10px", color: "#92400e", marginTop: "2px" }}>
+                              Previous label cancelled — safe to rebook
+                            </div>
+                          )}
                         </td>
 
                         {/* Customer name and email */}
@@ -1522,12 +1540,12 @@ export default function BookingsPage() {
                               )}
                             </fulfillmentSyncFetcher.Form>
                           ) : order.alreadyBooked ? (
-                            <a
-                              href={`/app/shipments?search=${encodeURIComponent(order.name)}`}
+                            <Link
+                              to={`/app/shipments?search=${encodeURIComponent(order.name)}&type=All&status=ALL`}
                               style={{ color: "#92400e", fontSize: "10px", fontWeight: 700, textDecoration: "underline" }}
                             >
-                              Review
-                            </a>
+                              Review shipment
+                            </Link>
                           ) : (
                             <span style={{ color: "#94a3b8" }}>—</span>
                           )}

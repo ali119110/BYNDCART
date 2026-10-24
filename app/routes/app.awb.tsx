@@ -6,7 +6,7 @@ import { generateCode128Svg } from "../utils/barcode";
 import { normalizeCourierOperationsSettings } from "../services/settings.server";
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const { shopifyStoreId } = await requireTenantContext(request);
+  const { shopifyStoreId, admin } = await requireTenantContext(request);
   const url = new URL(request.url);
 
   const idsParam = url.searchParams.get("ids");
@@ -46,6 +46,45 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
   }
 
+  // Fetch recipient data live from Shopify for the selected shipment orders.
+  // Shipment records only store the order ID, so a generated label must not substitute
+  // the order number for the actual recipient name/address.
+  const orderDetailsById = new Map<string, any>();
+  const shopifyOrderIds = Array.from(new Set(shipments.map((shipment) => String(shipment.shopifyOrderId || "")).filter(Boolean)));
+  if (admin && shopifyOrderIds.length) {
+    try {
+      const orderResponse = await admin.graphql(
+        `#graphql
+        query AirwayBillOrderDetails($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            ... on Order {
+              id
+              name
+              email
+              phone
+              customer { firstName lastName email phone }
+              shippingAddress { firstName lastName name address1 address2 city province country zip phone company }
+              lineItems(first: 100) {
+                nodes { title quantity sku }
+              }
+            }
+          }
+        }`,
+        { variables: { ids: shopifyOrderIds } },
+      );
+      const orderPayload = await orderResponse.json();
+      if (Array.isArray(orderPayload?.errors) && orderPayload.errors.length) {
+        console.warn("[AWB] Shopify customer detail lookup failed:", orderPayload.errors.map((entry: any) => entry.message).join("; "));
+      } else {
+        for (const order of Array.isArray(orderPayload?.data?.nodes) ? orderPayload.data.nodes : []) {
+          if (order?.id) orderDetailsById.set(String(order.id), order);
+        }
+      }
+    } catch (error) {
+      console.warn("[AWB] Shopify customer detail lookup failed:", error instanceof Error ? error.message : error);
+    }
+  }
+
   // Read one merchant-level label/profile configuration, shared by every courier.
   const labels = shipments.map((s) => {
     const barcodeSvg = generateCode128Svg(s.trackingNumber, 55, 2);
@@ -59,12 +98,37 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const shipper = operations.shipperProfiles[selectedProfileIndex] || operations.shipperProfiles[0];
     const storeDomain = s.shopifyStore?.shop?.replace(".myshopify.com", "") || "";
     const storeName = shipper?.name || (storeSettings.storeLogoUrl ? "Store" : storeDomain.toUpperCase() || "STORE");
+    const order = orderDetailsById.get(String(s.shopifyOrderId || "")) || {};
+    const customerAddress = order.shippingAddress || {};
+    const customerName = String(
+      customerAddress.name
+        || [customerAddress.firstName || order.customer?.firstName, customerAddress.lastName || order.customer?.lastName].filter(Boolean).join(" ")
+        || "Customer",
+    );
+    const customerPhone = String(customerAddress.phone || order.phone || order.customer?.phone || "");
+    const customerAddressLines = [
+      customerAddress.address1,
+      customerAddress.address2,
+      customerAddress.city,
+      customerAddress.province,
+      customerAddress.zip,
+      customerAddress.country,
+    ].filter(Boolean).map((value) => String(value).trim());
+    const customerAddressText = customerAddressLines.join(", ") || "Address unavailable — open the order in Shopify to confirm";
+    const merchantAddress = String(shipper?.address || storeSettings.returnAddress || "Merchant Warehouse");
+    const isInbound = String(s.type || "").toUpperCase() === "RETURN";
+    const orderItems = Array.isArray(order.lineItems?.nodes)
+      ? order.lineItems.nodes.map((item: any) => `${Number(item.quantity) || 1} × ${String(item.title || "Item")}`).join(", ")
+      : "";
     return {
       id: s.id,
       orderNumber: s.orderNumber,
       trackingNumber: s.trackingNumber,
       courier: s.courier,
-      destinationCity: s.destinationCity || "—",
+      shipmentDirection: isInbound
+        ? (s.exchangeRequestId ? "INBOUND EXCHANGE" : "INBOUND RETURN")
+        : (String(s.type || "").toUpperCase() === "EXCHANGE" ? "OUTBOUND EXCHANGE" : "OUTBOUND DELIVERY"),
+      destinationCity: isInbound ? (shipper?.city || "—") : (customerAddress.city || s.destinationCity || "—"),
       codAmount: Number(s.codAmount || 0),
       createdAt: new Date(s.createdAt).toLocaleDateString("en-PK", {
         year: "numeric",
@@ -74,8 +138,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
       storeName,
       storeLogoUrl: operations.labelLogoUrl || storeSettings.storeLogoUrl || null,
       supportPhone: shipper?.phone || storeSettings.whatsappNumber || storeSettings.supportEmail || "Support",
-      returnAddress: shipper?.address || storeSettings.returnAddress || "Merchant Warehouse",
-      shipperCity: shipper?.city || "",
+      returnAddress: isInbound ? customerAddressText : merchantAddress,
+      shipperCity: isInbound ? String(customerAddress.city || "") : (shipper?.city || ""),
+      shipperName: isInbound ? customerName : storeName,
+      shipperAddress: isInbound ? customerAddressText : merchantAddress,
+      shipperPhone: isInbound ? customerPhone : (shipper?.phone || ""),
+      consigneeName: isInbound ? storeName : customerName,
+      consigneeAddress: isInbound ? merchantAddress : customerAddressText,
+      consigneePhone: isInbound ? (shipper?.phone || "") : customerPhone,
+      orderItems,
       labelWebsite: operations.labelWebsite || storeDomain,
       labelSize: operations.labelSize,
       barcodeSvg,
@@ -129,7 +200,7 @@ export default function AwbPrintPage() {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "2px solid #000", paddingBottom: "8px" }}>
               <div>
                 <span style={{ fontSize: "18px", fontWeight: 900, letterSpacing: "1px" }}>{item.courier}</span>
-                <span style={{ display: "block", fontSize: "9px", fontWeight: 600, textTransform: "uppercase" }}>Overnight COD Express</span>
+                <span style={{ display: "block", fontSize: "9px", fontWeight: 600, textTransform: "uppercase" }}>{item.shipmentDirection}</span>
               </div>
               <div style={{ textAlign: "right" }}>
                 {item.storeLogoUrl ? (
@@ -174,16 +245,18 @@ export default function AwbPrintPage() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", borderBottom: "1.5px solid #000", paddingBottom: "8px", fontSize: "10px" }}>
               <div>
                 <strong style={{ textTransform: "uppercase", fontSize: "9px", borderBottom: "1px solid #ccc", display: "block", marginBottom: "3px" }}>Shipper / Return To:</strong>
-                <div>{item.storeName}</div>
-                <div style={{ color: "#333", fontSize: "9px" }}>{item.returnAddress}</div>
+                <div>{item.shipperName}</div>
+                <div style={{ color: "#333", fontSize: "9px" }}>{item.shipperAddress}</div>
                 {item.shipperCity && <div>{item.shipperCity}</div>}
-                <div style={{ marginTop: "3px" }}>Contact: {item.supportPhone}</div>
+                <div style={{ marginTop: "3px" }}>Contact: {item.shipperPhone || item.supportPhone}</div>
               </div>
               <div>
                 <strong style={{ textTransform: "uppercase", fontSize: "9px", borderBottom: "1px solid #ccc", display: "block", marginBottom: "3px" }}>Consignee / Deliver To:</strong>
-                <div style={{ fontWeight: 700 }}>Customer Order: {item.orderNumber}</div>
-                <div style={{ textTransform: "uppercase", fontWeight: 600 }}>{item.destinationCity}</div>
-                <div style={{ fontSize: "9px", color: "#444", marginTop: "3px" }}>Please verify flyer seal before delivery.</div>
+                <div style={{ fontWeight: 700 }}>{item.consigneeName}</div>
+                <div style={{ fontSize: "9px", color: "#444", marginTop: "3px" }}>{item.consigneeAddress}</div>
+                <div style={{ textTransform: "uppercase", fontWeight: 600, marginTop: "3px" }}>{item.destinationCity}</div>
+                {item.consigneePhone && <div style={{ marginTop: "3px" }}>Contact: {item.consigneePhone}</div>}
+                {item.orderItems && <div style={{ marginTop: "4px", fontSize: "9px" }}>Items: {item.orderItems}</div>}
               </div>
             </div>
 

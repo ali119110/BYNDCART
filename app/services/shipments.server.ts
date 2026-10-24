@@ -90,7 +90,9 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
           shopifyStoreId: input.shopifyStoreId,
           shopifyOrderId: input.orderId,
           type: shipmentType,
+          status: { notIn: ["FAILED", "CANCELLED"] },
         },
+        orderBy: { createdAt: "desc" },
       });
 
       if (existingShipment) {
@@ -736,6 +738,8 @@ export async function getStoreShipments(shopifyStoreId: string, options: GetShip
     status: s.status,
     location: s.location,
     labelUrl: s.labelUrl,
+    returnRequestId: s.returnRequestId || null,
+    exchangeRequestId: s.exchangeRequestId || null,
     date: s.createdAt.toISOString().split("T")[0],
     eventsCount: s.events?.length || 0,
   }));

@@ -72,7 +72,7 @@ export async function action({ request }: ActionFunctionArgs) {
         .split(",")
         .map((id) => id.trim())
         .filter(Boolean)
-        .slice(0, 20);
+        .slice(0, 100);
 
       if (!orderIds.length) {
         return { ok: false, intent: "MARK", message: "Select at least one settled order." };
@@ -208,7 +208,7 @@ export default function ReconciliationPage() {
   const currentSearch = searchParams.get("q") || "";
 
   return (
-    <div className="bc-page">
+    <div className="bc-page bc-reconciliation-page">
       <header className="bc-header">
         <div className="bc-header-copy">
           <p className="bc-eyebrow">PAYMENTS & RECONCILIATION</p>

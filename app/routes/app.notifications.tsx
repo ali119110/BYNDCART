@@ -8,6 +8,7 @@ import {
   upsertNotificationTemplate,
   getNotificationLogs,
   processNotificationJob,
+  sendEmail,
   NotificationEventType,
 } from "../services/notifications.server";
 import {
@@ -19,6 +20,7 @@ import {
   dispatchWhatsAppNotification,
 } from "../services/whatsapp.server";
 import prisma from "../db.server";
+import { getSettings } from "../services/settings.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -28,11 +30,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   try {
-    const [emailTemplates, waTemplates, whatsappConfig, logs] = await Promise.all([
+    const [emailTemplates, waTemplates, whatsappConfig, logs, storeSettings] = await Promise.all([
       getStoreNotificationTemplates(store.id, "EMAIL"),
       getStoreNotificationTemplates(store.id, "WHATSAPP"),
       getWhatsAppConfig(store.id),
       getNotificationLogs(store.id, 40),
+      getSettings(store.id).catch(() => null),
     ]);
 
     return {
@@ -43,6 +46,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig,
       metaAppId: process.env.META_APP_ID || process.env.WHATSAPP_APP_ID || "",
       metaConfigId: process.env.META_CONFIG_ID || "",
+      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY && process.env.NOTIFICATIONS_FROM_EMAIL),
+      emailFromAddress: process.env.NOTIFICATIONS_FROM_EMAIL || "Not configured",
+      merchantReplyTo: storeSettings?.notificationEmail || storeSettings?.supportEmail || "",
       logs: logs.map((l) => ({
         ...l,
         createdAt: l.createdAt.toISOString(),
@@ -60,6 +66,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig: null,
       metaAppId: "",
       metaConfigId: "",
+      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY && process.env.NOTIFICATIONS_FROM_EMAIL),
+      emailFromAddress: process.env.NOTIFICATIONS_FROM_EMAIL || "Not configured",
+      merchantReplyTo: "",
       logs: [],
       loadError:
         "Notification settings could not be loaded. Details: " +
@@ -121,16 +130,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   // 3. Connect Meta Embedded Signup (OAuth Code)
   if (actionType === "connectMetaEmbeddedSignup") {
-    const code = formData.get("code") as string;
-    if (!code) {
-      return { success: false, error: "Missing Meta authorization code." };
-    }
+    const code = String(formData.get("code") || "").trim();
+    const wabaId = String(formData.get("wabaId") || "").trim();
+    const phoneNumberId = String(formData.get("phoneNumberId") || "").trim();
+    if (!code) return { success: false, error: "Meta did not return an authorization code. Complete Embedded Signup and try again." };
 
     try {
-      await exchangeMetaEmbeddedSignupCode(store.id, code);
-      return { success: true, message: "WhatsApp Business connected successfully! Default templates installed." };
+      await exchangeMetaEmbeddedSignupCode(store.id, code, undefined, undefined, wabaId, phoneNumberId);
+      return { success: true, message: "This store's WhatsApp Business Account is connected. BYNDCART installed store-specific default templates. Send a test message and review Notifications → Logs before enabling automated sends." };
     } catch (err: any) {
-      return { success: false, error: err.message || "Failed to link Meta WhatsApp account." };
+      return { success: false, error: err.message || "Failed to link the selected Meta WhatsApp account." };
     }
   }
 
@@ -219,6 +228,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  if (actionType === "sendTestEmail") {
+    const recipient = String(formData.get("recipient") || "").trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
+      return { success: false, error: "Enter a valid test recipient email address." };
+    }
+    try {
+      const settings = await getSettings(store.id).catch(() => null);
+      const replyTo = String(settings?.notificationEmail || settings?.supportEmail || "").trim();
+      const result = await sendEmail({
+        to: recipient,
+        subject: "BYNDCART email delivery test",
+        html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto"><h2>Test email received</h2><p>Your BYNDCART notification email configuration can deliver messages to this address.</p><p>Store: ${session.shop}</p></div>`,
+        ...(replyTo && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(replyTo) ? { replyTo } : {}),
+      });
+      if (!result.success) return { success: false, error: result.error || "Email provider did not confirm delivery." };
+      return { success: true, message: `Test email accepted by the email provider for ${recipient}. Check inbox/spam. Provider message ID: ${result.messageId || "accepted"}.` };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : "Test email failed." };
+    }
+  }
+
   // 9. Retry Notification Log
   if (actionType === "retryLog") {
     const logId = formData.get("logId") as string;
@@ -258,6 +288,9 @@ export default function Notifications() {
     whatsappConfig,
     metaAppId,
     metaConfigId,
+    emailProviderConfigured,
+    emailFromAddress,
+    merchantReplyTo,
     logs,
     loadError,
   } = useLoaderData<typeof loader>();
@@ -293,13 +326,80 @@ export default function Notifications() {
   }, [selectedEmailEvent, currentEmailTemplate]);
 
   // WhatsApp manual modal & editing state
-  const [showManualModal, setShowManualModal] = useState(false);
   const [editingWaEvent, setEditingWaEvent] = useState<string | null>(null);
   const [waEditingBody, setWaEditingBody] = useState("");
   const [waEditingEnabled, setWaEditingEnabled] = useState(true);
 
   const [testPhone, setTestPhone] = useState("");
   const [showTestModal, setShowTestModal] = useState(false);
+  const [metaSdkReady, setMetaSdkReady] = useState(false);
+  const metaSignupResultRef = React.useRef<{ wabaId: string; phoneNumberId: string } | null>(null);
+
+  React.useEffect(() => {
+    if (!metaAppId) return;
+    const win = window as any;
+    const initializeMetaSdk = () => {
+      const fb = win.FB;
+      if (!fb) return;
+      try {
+        fb.init({
+          appId: metaAppId,
+          cookie: true,
+          xfbml: false,
+          version: "v25.0",
+        });
+        setMetaSdkReady(true);
+      } catch (error) {
+        console.error("[Meta Embedded Signup] FB.init failed:", error);
+        setMetaSdkReady(false);
+      }
+    };
+
+    if (win.FB) {
+      initializeMetaSdk();
+      return;
+    }
+
+    win.fbAsyncInit = initializeMetaSdk;
+    const existingScript = document.getElementById("facebook-jssdk");
+    if (!existingScript) {
+      const script = document.createElement("script");
+      script.id = "facebook-jssdk";
+      script.src = "https://connect.facebook.net/en_US/sdk.js";
+      script.async = true;
+      script.defer = true;
+      script.onerror = () => {
+        console.error("[Meta Embedded Signup] Facebook SDK failed to load.");
+        setMetaSdkReady(false);
+      };
+      document.body.appendChild(script);
+    } else {
+      // A script tag may have loaded before the FB global became available; retry after load.
+      existingScript.addEventListener("load", initializeMetaSdk, { once: true });
+    }
+  }, [metaAppId]);
+
+  React.useEffect(() => {
+    const onMetaSignupMessage = (event: MessageEvent) => {
+      if (event.origin !== "https://www.facebook.com" && event.origin !== "https://web.facebook.com") return;
+      let payload: any;
+      try {
+        payload = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+      } catch {
+        return;
+      }
+      if (payload?.type !== "WA_EMBEDDED_SIGNUP") return;
+      const details = payload?.data || {};
+      if (payload.event === "FINISH" || payload.event === "FINISH_ONLY_WABA") {
+        metaSignupResultRef.current = {
+          wabaId: String(details.waba_id || ""),
+          phoneNumberId: String(details.phone_number_id || ""),
+        };
+      }
+    };
+    window.addEventListener("message", onMetaSignupMessage);
+    return () => window.removeEventListener("message", onMetaSignupMessage);
+  }, []);
 
   const isWaConnected = Boolean(
     whatsappConfig?.enabled && whatsappConfig?.phoneNumberId && whatsappConfig?.accessToken
@@ -323,20 +423,23 @@ export default function Notifications() {
   const launchMetaEmbeddedSignup = () => {
     if (typeof window === "undefined") return;
 
-    if (!metaAppId) {
-      alert("Meta App ID is not configured in server environment. Please use manual credentials entry.");
-      setShowManualModal(true);
+    if (!metaAppId || !metaConfigId) {
+      alert("Meta App ID and Embedded Signup Config ID must be configured on the server. This setup cannot be completed with only a phone number.");
       return;
     }
 
     const fb = (window as any).FB;
-    if (fb) {
+    if (fb && metaSdkReady) {
+      metaSignupResultRef.current = null;
       fb.login(
         (response: any) => {
           if (response.authResponse?.code) {
             const fd = new FormData();
             fd.append("actionType", "connectMetaEmbeddedSignup");
             fd.append("code", response.authResponse.code);
+            const signupDetails = metaSignupResultRef.current;
+            if (signupDetails?.wabaId) fd.append("wabaId", signupDetails.wabaId);
+            if (signupDetails?.phoneNumberId) fd.append("phoneNumberId", signupDetails.phoneNumberId);
             fetcher.submit(fd, { method: "post" });
           } else {
             console.warn("Meta login cancelled or no code returned", response);
@@ -348,19 +451,18 @@ export default function Notifications() {
           override_default_response_type: true,
           extras: {
             setup: {},
-            featureType: "",
-            sessionInfoVersion: "2",
+            featureType: "whatsapp_business_app_onboarding",
+            sessionInfoVersion: "3",
           },
         }
       );
     } else {
-      // Fallback to manual setup modal if FB JS SDK is not loaded
-      setShowManualModal(true);
+      alert("Meta's connection service is still loading. Wait a moment, then try Connect again. If it stays unavailable, check the Meta App ID, HTTPS setup, and allowed domains.");
     }
   };
 
   return (
-    <div className="bc-page">
+    <div className="bc-page bc-notifications-page">
       <header className="bc-header">
         <div className="bc-header-copy">
           <p className="bc-eyebrow">CUSTOMER MESSAGING & ALERTS</p>
@@ -370,6 +472,9 @@ export default function Notifications() {
       </header>
 
       {loadError && <div role="alert" className="bc-note bad">{loadError}</div>}
+      <div className="bc-note" role="note">
+        <strong>Meta provider setup:</strong> Embedded Signup connects each merchant's own WhatsApp Business Account to this store. Production onboarding requires your Meta App ID, Embedded Signup Config ID, App Secret, approved permissions, and Meta's Tech Provider/Solution Partner access where applicable. BYNDCART cannot grant itself Meta partner status; complete Meta business verification and App Review in Meta Business Manager.
+      </div>
       {actionData?.error && <div className="bc-note bad">{actionData.error}</div>}
       {actionData?.message && <div className="bc-note ok">{actionData.message}</div>}
 
@@ -501,19 +606,13 @@ export default function Notifications() {
                     type="button"
                     className="bc-btn primary"
                     onClick={launchMetaEmbeddedSignup}
+                    disabled={Boolean(metaAppId && metaConfigId && !metaSdkReady)}
+                    title={!metaAppId || !metaConfigId ? "Meta App ID and Embedded Signup Config ID are required in the server environment." : ""}
                     style={{ padding: "10px 24px", fontSize: "14px" }}
                   >
-                    Connect WhatsApp
+                    {!metaAppId || !metaConfigId ? "Meta setup required" : metaSdkReady ? "Connect WhatsApp" : "Loading Meta…"}
                   </button>
 
-                  <button
-                    type="button"
-                    className="bc-btn"
-                    onClick={() => setShowManualModal(true)}
-                    style={{ padding: "10px 18px", fontSize: "14px" }}
-                  >
-                    Connect with API Credentials
-                  </button>
                 </div>
 
                 <p style={{ fontSize: "12px", color: "#94a3b8", marginTop: "14px" }}>
@@ -551,87 +650,6 @@ export default function Notifications() {
                     <button type="button" className="bc-btn" onClick={() => setShowTestModal(false)}>Cancel</button>
                     <button type="submit" className="bc-btn primary" disabled={isSubmitting}>
                       {isSubmitting ? "Sending..." : "Send Test"}
-                    </button>
-                  </div>
-                </fetcher.Form>
-              </div>
-            </div>
-          )}
-
-          {/* Manual Credentials Modal */}
-          {showManualModal && (
-            <div style={{ position: "fixed", inset: 0, backgroundColor: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "16px" }}>
-              <div style={{ background: "#fff", borderRadius: "10px", maxWidth: "520px", width: "100%", padding: "24px", boxShadow: "0 10px 25px rgba(0,0,0,0.1)", maxHeight: "90vh", overflowY: "auto" }}>
-                <h3 style={{ margin: "0 0 6px 0", fontSize: "18px" }}>Connect WhatsApp Cloud API Credentials</h3>
-                <p className="bc-muted" style={{ fontSize: "13px", marginBottom: "18px" }}>
-                  Paste your Meta Phone Number ID, WhatsApp Business Account ID (WABA), and System User Token from Meta Business Manager.
-                </p>
-
-                <fetcher.Form method="post" onSubmit={() => setShowManualModal(false)} style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                  <input type="hidden" name="actionType" value="saveWhatsAppConfig" />
-
-                  <div>
-                    <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px" }}>Phone Number ID *</label>
-                    <input
-                      type="text"
-                      name="phoneNumberId"
-                      placeholder="e.g. 109876543210987"
-                      defaultValue={whatsappConfig?.phoneNumberId || ""}
-                      style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: "6px" }}
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px" }}>WABA ID (WhatsApp Business Account ID)</label>
-                    <input
-                      type="text"
-                      name="wabaId"
-                      placeholder="e.g. 987654321098765"
-                      defaultValue={whatsappConfig?.wabaId || ""}
-                      style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: "6px" }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px" }}>Permanent Access Token *</label>
-                    <input
-                      type="password"
-                      name="accessToken"
-                      placeholder="EAAG..."
-                      defaultValue={whatsappConfig?.rawAccessToken || ""}
-                      style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: "6px" }}
-                      required
-                    />
-                  </div>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                    <div>
-                      <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px" }}>Display Phone Number</label>
-                      <input
-                        type="text"
-                        name="displayPhoneNumber"
-                        placeholder="e.g. +92 300 1234567"
-                        defaultValue={whatsappConfig?.displayPhoneNumber || ""}
-                        style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: "6px" }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px" }}>Verified Name</label>
-                      <input
-                        type="text"
-                        name="verifiedName"
-                        placeholder="e.g. Brand Name"
-                        defaultValue={whatsappConfig?.verifiedName || ""}
-                        style={{ width: "100%", padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: "6px" }}
-                      />
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "14px" }}>
-                    <button type="button" className="bc-btn" onClick={() => setShowManualModal(false)}>Cancel</button>
-                    <button type="submit" className="bc-btn primary" disabled={isSubmitting}>
-                      {isSubmitting ? "Connecting..." : "Save & Connect"}
                     </button>
                   </div>
                 </fetcher.Form>
@@ -797,7 +815,28 @@ export default function Notifications() {
       {/* TAB 2: EMAIL NOTIFICATIONS (EXISTING CORE EMAIL SYSTEM)        */}
       {/* ============================================================== */}
       {activeTab === "email" && (
-        <section className="bc-card">
+        <div className="bc-stack">
+          <section className={`bc-note ${emailProviderConfigured ? "ok" : "bad"}`} role={emailProviderConfigured ? "status" : "alert"}>
+            <strong>{emailProviderConfigured ? "Email provider API key detected" : "Email delivery is not configured"}</strong>
+            <p style={{ margin: "5px 0 0" }}>
+              {emailProviderConfigured
+                ? `From: ${emailFromAddress}. Reply-to: ${merchantReplyTo || "not configured; replies will go to the verified sender"}.`
+                : "Add RESEND_API_KEY and a NOTIFICATIONS_FROM_EMAIL sender that is verified with Resend to enable delivery. BYNDCART will not pretend an email was sent if the provider rejects it."}
+            </p>
+            <p style={{ margin: "5px 0 0" }}>Shopify's native order-confirmation email remains controlled by Shopify. BYNDCART lifecycle emails use the configured verified sender and set the merchant's notification/support email as Reply-To; an arbitrary unverified merchant address cannot safely be used as the From address.</p>
+          </section>
+          <section className="bc-card">
+            <h2 className="bc-title">Test email delivery</h2>
+            <p className="bc-muted">Send a real test through the configured email provider and check its response in the notification logs.</p>
+            <fetcher.Form method="post" className="bc-actions">
+              <input type="hidden" name="actionType" value="sendTestEmail" />
+              <input type="email" name="recipient" required placeholder="Test recipient email" style={{ flex: "1 1 260px", minWidth: 0 }} />
+              <button type="submit" className="bc-btn primary" disabled={isSubmitting || !emailProviderConfigured}>
+                {isSubmitting ? "Sending test…" : "Send test email"}
+              </button>
+            </fetcher.Form>
+          </section>
+          <section className="bc-card">
           <h2 className="bc-title">Email templates</h2>
           <p className="bc-muted">Choose an event, then edit the subject and body for that message.</p>
 
@@ -882,7 +921,8 @@ export default function Notifications() {
               )}
             </div>
           </div>
-        </section>
+          </section>
+        </div>
       )}
 
       {/* ============================================================== */}

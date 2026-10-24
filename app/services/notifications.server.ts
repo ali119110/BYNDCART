@@ -7,10 +7,12 @@ export interface SendEmailInput {
   to: string;
   subject: string;
   html: string;
+  replyTo?: string;
 }
 
 const RESEND_API_URL = "https://api.resend.com/emails";
-const FROM_ADDRESS = process.env.NOTIFICATIONS_FROM_EMAIL || "BYNDCART <notifications@byndcart.app>";
+const FROM_ADDRESS = process.env.NOTIFICATIONS_FROM_EMAIL
+  || (process.env.NODE_ENV === "test" ? "BYNDCART <notifications@byndcart.app>" : "");
 
 /**
  * Low-level email dispatch via Resend. Never throws.
@@ -21,6 +23,10 @@ export async function sendEmail(input: SendEmailInput) {
   if (!apiKey) {
     console.warn("[Notifications] RESEND_API_KEY not set — skipping email send.");
     return { success: false, error: "RESEND_API_KEY not configured" };
+  }
+  if (!FROM_ADDRESS) {
+    console.warn("[Notifications] NOTIFICATIONS_FROM_EMAIL not set — skipping email send.");
+    return { success: false, error: "NOTIFICATIONS_FROM_EMAIL is not configured. Set it to an email address on a domain verified with Resend." };
   }
 
   try {
@@ -33,6 +39,7 @@ export async function sendEmail(input: SendEmailInput) {
       body: JSON.stringify({
         from: FROM_ADDRESS,
         to: input.to,
+        ...(input.replyTo ? { reply_to: input.replyTo } : {}),
         subject: input.subject,
         html: input.html,
       }),
@@ -269,8 +276,10 @@ export async function triggerLifecycleNotification(input: TriggerNotificationInp
       },
     });
 
-    // Run in-band execution immediately for immediate delivery
-    await processNotificationJob({
+    // Execute immediately and return the real delivery outcome. The background job
+    // remains as a retry/fallback, but callers must never be told "queued" when a
+    // synchronous provider response already confirmed failure.
+    const delivery = await processNotificationJob({
       notificationLogId: log.id,
       shopifyStoreId: input.shopifyStoreId,
       eventType: input.eventType,
@@ -279,7 +288,9 @@ export async function triggerLifecycleNotification(input: TriggerNotificationInp
       variables: input.variables,
     });
 
-    return { status: "QUEUED", jobId: job.id, logId: log.id };
+    return delivery.success
+      ? { status: "SENT", jobId: job.id, logId: log.id }
+      : { status: "FAILED", error: delivery.error || "Provider did not confirm notification delivery.", jobId: job.id, logId: log.id };
   } catch (err: any) {
     console.error(`[Notifications] Error triggering notification for ${input.eventType}:`, err);
     return { status: "FAILED_TRIGGER", error: err.message };
@@ -382,10 +393,16 @@ export async function processNotificationJob(payload: {
     let sendResult: { success: boolean; error?: string } = { success: false };
 
     if (channel === "EMAIL") {
+      // Keep a provider-verified BYNDCART sender, but reply directly to the merchant's
+      // configured notification/support inbox. Arbitrary merchant domains cannot be
+      // used as the From address until that domain is verified by the email provider.
+      const mailSettings = await getSettings(shopifyStoreId).catch(() => null);
+      const replyTo = String(mailSettings?.notificationEmail || mailSettings?.supportEmail || "").trim();
       sendResult = await sendEmail({
         to: recipient,
         subject: renderedSubject,
         html: renderedBody,
+        ...(replyTo && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(replyTo) ? { replyTo } : {}),
       });
     } else if (channel === "WHATSAPP") {
       sendResult = await dispatchWhatsAppNotification({

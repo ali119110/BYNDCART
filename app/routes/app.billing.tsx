@@ -2,16 +2,26 @@ import React from "react";
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { useLoaderData, useFetcher } from "react-router";
 import { requireTenantContext } from "../services/tenant.server";
-import { getStorePlan, createAppSubscription, cancelAppSubscription } from "../services/billing.server";
+import { getStorePlan, createAppSubscription, cancelAppSubscription, syncSubscriptionState } from "../services/billing.server";
 import { PLAN_CONFIGS } from "../services/planGate.server";
 import { planPriceInPKR } from "../utils/pricing";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { shopifyStoreId } = await requireTenantContext(request);
+  const { shopifyStoreId, admin } = await requireTenantContext(request);
+  let billingSyncError: string | null = null;
+  try {
+    // Sync status on every billing page load so an approved/cancelled Shopify charge
+    // cannot remain stuck in a stale local pending/paid state.
+    await syncSubscriptionState(shopifyStoreId, admin);
+  } catch (error) {
+    billingSyncError = error instanceof Error ? error.message : "Shopify billing status could not be verified.";
+    console.error("[Billing] Live subscription status sync failed:", error);
+  }
   const storePlan = await getStorePlan(shopifyStoreId);
 
   return {
     storePlan,
+    billingSyncError,
     plans: Object.values(PLAN_CONFIGS),
   };
 };
@@ -24,8 +34,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const planCode = formData.get("planCode") as string;
 
   if (actionType === "subscribe") {
-    const origin = new URL(request.url).origin;
-    const returnUrl = `${origin}/app/billing`;
+    const actionUrl = new URL(request.url);
+    const returnUrlUrl = new URL("/app/billing", actionUrl.origin);
+    // Shopify returns the merchant to this embedded route after approval. Preserve the
+    // store/host context required by embedded authentication instead of dropping it.
+    for (const key of ["shop", "host", "embedded", "locale"]) {
+      const value = actionUrl.searchParams.get(key);
+      if (value) returnUrlUrl.searchParams.set(key, value);
+    }
+    const returnUrl = returnUrlUrl.toString();
     try {
       const result = await createAppSubscription(shopifyStoreId, planCode, returnUrl, admin);
       if (result.confirmationUrl && result.status === "PENDING") {
@@ -50,7 +67,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Billing() {
-  const { storePlan: rawStorePlan, plans } = useLoaderData<typeof loader>();
+  const { storePlan: rawStorePlan, plans, billingSyncError } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
 
   const storePlan = rawStorePlan ?? {
@@ -79,7 +96,14 @@ export default function Billing() {
     : Math.min(100, Math.round(((storePlan.usageCount ?? 0) / Math.max(1, storePlan.returnsLimit ?? 50)) * 100));
 
   return (
-    <div className="bc-page">
+    <div className="bc-page bc-billing-page">
+      {billingSyncError && (
+        <div className="bc-note warn" role="alert">
+          <strong>Live billing status could not be verified.</strong>
+          <p>{billingSyncError}</p>
+          <p>No new plan is assumed active from a local record alone. Reload this page from Shopify Admin after restoring API access.</p>
+        </div>
+      )}
       <header className="bc-header">
         <div className="bc-header-copy">
           <p className="bc-eyebrow">ACCOUNT</p>

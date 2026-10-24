@@ -8,6 +8,23 @@ export interface TrackLookupQuery {
   phone?: string;
 }
 
+function normalizeTrackingPhone(raw: string): string {
+  let digits = String(raw || "").replace(/\D/g, "");
+  if (digits.startsWith("0092")) digits = `0${digits.slice(4)}`;
+  else if (digits.startsWith("92") && digits.length === 12) digits = `0${digits.slice(2)}`;
+  else if (digits.length === 10 && digits.startsWith("3")) digits = `0${digits}`;
+  return digits;
+}
+
+function escapeTrackHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 /**
  * Looks up shipment tracking record by tracking number or order number
  */
@@ -30,10 +47,26 @@ export async function lookupShipmentTracking(shopifyStoreId: string, query: Trac
       },
     });
   } else if (cleanOrder) {
+    // Order numbers are enumerable, so never reveal a customer's tracking details from an
+    // order number alone. Require the checkout phone and verify it against this store's order.
+    const suppliedPhone = normalizeTrackingPhone(String(query.phone || ""));
+    if (!suppliedPhone) return null;
+
     const formattedOrder = cleanOrder.startsWith("#") ? cleanOrder : `#${cleanOrder}`;
+    const matchedOrder = await prisma.order.findFirst({
+      where: {
+        shopifyStoreId,
+        orderNumber: { in: [formattedOrder, cleanOrder] },
+      },
+      select: { shopifyOrderId: true, customerPhone: true },
+    });
+    const savedPhone = normalizeTrackingPhone(String(matchedOrder?.customerPhone || ""));
+    if (!matchedOrder?.shopifyOrderId || !savedPhone || savedPhone !== suppliedPhone) return null;
+
     shipment = await prisma.shipmentTrack.findFirst({
       where: {
         shopifyStoreId,
+        shopifyOrderId: matchedOrder.shopifyOrderId,
         OR: [
           { orderNumber: formattedOrder },
           { orderNumber: cleanOrder },
@@ -112,13 +145,15 @@ export async function renderTrackPageHtml(
     });
   }
 
+  const lookupMiss = Boolean(trackingParam || orderParam) && !shipment;
   const step = shipment ? getTrackingStep(shipment.status) : 0;
   const statusLabel = shipment ? shipment.status.replace(/_/g, " ") : "ENTER ORDER";
 
-  const logoHtml = settings?.storeLogoUrl
-    ? `<img src="${settings.storeLogoUrl}" alt="${brandName}" style="max-height: 40px; max-width: 180px; object-fit: contain; margin-bottom: 8px;" />`
-    : `<h1 style="margin: 0; font-size: 20px; font-weight: 800; color: #111827; letter-spacing: -0.5px;">${brandName}</h1>`;
-
+  const safeBrandName = escapeTrackHtml(brandName);
+  const safeLogoUrl = String(settings?.storeLogoUrl || "");
+  const logoHtml = safeLogoUrl && /^https:\/\//i.test(safeLogoUrl)
+    ? `<img src="${escapeTrackHtml(safeLogoUrl)}" alt="${safeBrandName}" style="max-height: 44px; max-width: 220px; object-fit: contain; margin-bottom: 8px;" />`
+    : `<h1 style="margin: 0; font-size: 24px; font-weight: 800; color: var(--brand); letter-spacing: -0.7px;">${safeBrandName}</h1>`
   const whatsappLink = settings?.whatsappNumber
     ? `<a href="https://wa.me/${settings.whatsappNumber.replace(/[^0-9]/g, "")}" target="_blank" rel="noopener" style="display: inline-flex; align-items: center; gap: 6px; background: #111827; color: #ffffff; padding: 7px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; text-decoration: none;">WhatsApp Support</a>`
     : "";
@@ -128,7 +163,7 @@ export async function renderTrackPageHtml(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Track Your Order — ${brandName}</title>
+  <title>Track Your Order — ${safeBrandName}</title>
   <style>
     :root {
       --bg: #f9fafb;
@@ -137,13 +172,14 @@ export async function renderTrackPageHtml(
       --text: #111827;
       --muted: #6b7280;
       --brand: #111827;
+      --brand-soft: #eff6ff;
       --success: #166534;
       --success-bg: #dcfce7;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      background: var(--bg);
+      background: radial-gradient(ellipse at top, #eef2ff 0%, var(--bg) 42%);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       color: var(--text);
       display: flex;
@@ -152,9 +188,9 @@ export async function renderTrackPageHtml(
       line-height: 1.5;
     }
     .track-shell {
-      max-width: 680px;
-      margin: 30px auto;
-      padding: 0 16px;
+      max-width: 900px;
+      margin: 36px auto;
+      padding: 0 20px;
       width: 100%;
       flex: 1;
     }
@@ -165,10 +201,10 @@ export async function renderTrackPageHtml(
     .track-card {
       background: var(--card-bg);
       border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 24px;
-      margin-bottom: 20px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+      border-radius: 18px;
+      padding: clamp(18px, 3vw, 28px);
+      margin-bottom: 18px;
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.05);
     }
     .search-row {
       display: flex;
@@ -186,6 +222,7 @@ export async function renderTrackPageHtml(
     }
     .search-input:focus {
       border-color: var(--brand);
+      box-shadow: 0 0 0 3px var(--brand-soft);
     }
     .search-btn {
       background: var(--brand);
@@ -288,22 +325,24 @@ export async function renderTrackPageHtml(
 
     <div class="track-card">
       <form method="get" class="search-row">
-        <input class="search-input" name="order" value="${orderParam}" placeholder="Enter Order # (e.g. #1001)" />
-        <input class="search-input" name="tracking" value="${trackingParam}" placeholder="Or Courier Tracking (CN) #" />
-        <button type="submit" class="search-btn">Track Order</button>
+        <input class="search-input" name="order" value="${escapeTrackHtml(orderParam)}" placeholder="Order number (e.g. #1001)" autocomplete="off" />
+        <input class="search-input" name="phone" value="${escapeTrackHtml(phoneParam)}" placeholder="Checkout phone (required for order lookup)" autocomplete="tel" />
+        <input class="search-input" name="tracking" value="${escapeTrackHtml(trackingParam)}" placeholder="Or tracking / consignment number" autocomplete="off" />
+        <button type="submit" class="search-btn">Track order</button>
       </form>
+      ${lookupMiss ? `<p role="status" style="margin:12px 0 0;color:var(--muted);font-size:13px;">We couldn’t verify that shipment. Check the tracking number, or enter the exact order number and checkout phone for this store.</p>` : ""}
     </div>
 
     ${shipment ? `
     <div class="track-card">
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 14px; margin-bottom: 14px;">
         <div>
-          <span style="font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 700;">Order ${shipment.orderNumber}</span>
-          <h2 style="margin: 2px 0 0; font-size: 18px; font-weight: 800;">Status: ${statusLabel}</h2>
+          <span style="font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 700;">Order ${escapeTrackHtml(shipment.orderNumber)}</span>
+          <h2 style="margin: 2px 0 0; font-size: 18px; font-weight: 800;">Status: ${escapeTrackHtml(statusLabel)}</h2>
         </div>
         <div style="text-align: right;">
-          <span style="font-size: 11px; color: var(--muted);">Courier: <strong>${shipment.courier}</strong></span>
-          <div style="font-size: 13px; font-weight: 700; letter-spacing: 0.5px;">CN: ${shipment.trackingNumber}</div>
+          <span style="font-size: 11px; color: var(--muted);">Courier: <strong>${escapeTrackHtml(shipment.courier)}</strong></span>
+          <div style="font-size: 13px; font-weight: 700; letter-spacing: 0.5px;">CN: ${escapeTrackHtml(shipment.trackingNumber)}</div>
         </div>
       </div>
 
@@ -333,7 +372,7 @@ export async function renderTrackPageHtml(
 
       ${shipment.destinationCity ? `
       <div style="background: var(--bg); padding: 10px 14px; border-radius: 8px; font-size: 12px; margin: 16px 0; display: flex; justify-content: space-between;">
-        <span>Destination: <strong>${shipment.destinationCity}</strong></span>
+        <span>Destination: <strong>${escapeTrackHtml(shipment.destinationCity)}</strong></span>
         <span>COD Amount: <strong>${shipment.codAmount ? `PKR ${Math.round(Number(shipment.codAmount)).toLocaleString("en-PK")}` : "Paid"}</strong></span>
       </div>
       ` : ""}
@@ -345,9 +384,9 @@ export async function renderTrackPageHtml(
           <div class="timeline-item">
             <div class="timeline-date">${new Date(ev.timestamp).toLocaleDateString("en-PK", { month: "short", day: "numeric" })}<br/><span style="font-size: 10px;">${new Date(ev.timestamp).toLocaleTimeString("en-PK", { hour: "2-digit", minute: "2-digit" })}</span></div>
             <div class="timeline-info">
-              <strong>${ev.status.replace(/_/g, " ")}</strong>
-              ${ev.description ? `<div style="color: var(--muted); font-size: 12px;">${ev.description}</div>` : ""}
-              ${ev.location ? `<div style="font-size: 11px; color: var(--muted);">Location: ${ev.location}</div>` : ""}
+              <strong>${escapeTrackHtml(ev.status.replace(/_/g, " "))}</strong>
+              ${ev.description ? `<div style="color: var(--muted); font-size: 12px;">${escapeTrackHtml(ev.description)}</div>` : ""}
+              ${ev.location ? `<div style="font-size: 11px; color: var(--muted);">Location: ${escapeTrackHtml(ev.location)}</div>` : ""}
             </div>
           </div>
         `).join("") : `

@@ -145,14 +145,8 @@ export function CodPaymentCheck({
         : data.message || "Courier check failed.",
     );
 
-    // If auto-reconcile on verify is enabled, reconcile safely matched orders
-    if (autoReconcileOnVerify && data.ok && data.results?.length) {
-      const safeIds = data.results.filter(isSafe).map((r) => r.orderId);
-      if (safeIds.length > 0) {
-        await executeReconciliation(safeIds, false);
-      }
-    }
-
+    // Manual one-page verification never triggers reconciliation for just part of the data set.
+    // "Verify all" collects pages first and runs a single reconciliation operation afterward.
     return data;
   }
 
@@ -169,15 +163,11 @@ export function CodPaymentCheck({
       let data = await submitVerify(null, "replace");
       applyBatch(data, false);
       let loaded = data.results?.length || 0;
+      const verifiedRows: CodVerificationResult[] = [...(data.results || [])];
       let page = 1;
       let next = data.nextCursor || null;
       let more = data.hasNextPage === true;
       setStatus(`Batch 1 verified. ${loaded} orders loaded.`);
-
-      if (autoReconcileOnVerify && data.ok && data.results?.length) {
-        const safeIds = data.results.filter(isSafe).map((r) => r.orderId);
-        if (safeIds.length > 0) await executeReconciliation(safeIds, false);
-      }
 
       while (more && next && !stopAuto.current) {
         await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -193,6 +183,7 @@ export function CodPaymentCheck({
 
         const count = data.results?.length || 0;
         loaded += count;
+        verifiedRows.push(...(data.results || []));
         setRows((current) => [...current, ...(data.results || [])]);
         next = data.nextCursor || null;
         more = data.hasNextPage === true;
@@ -201,16 +192,20 @@ export function CodPaymentCheck({
         setBatch(page);
         setStatus(`Batch ${page} verified. ${loaded} orders loaded.`);
 
-        if (autoReconcileOnVerify && data.ok && data.results?.length) {
-          const safeIds = data.results.filter(isSafe).map((r) => r.orderId);
-          if (safeIds.length > 0) await executeReconciliation(safeIds, false);
-        }
       }
 
       if (stopAuto.current) {
         setStatus(`Verification stopped. ${loaded} orders loaded.`);
       } else {
         setStatus(`All ${loaded} pending fulfilled orders verified against couriers.`);
+        if (autoReconcileOnVerify) {
+          const safeIds = Array.from(new Set(verifiedRows.filter(isSafe).map((row) => row.orderId)));
+          if (safeIds.length) {
+            await executeReconciliation(safeIds, false);
+          } else {
+            setStatus(`All ${loaded} orders checked. No orders met the safety rules for automatic reconciliation.`);
+          }
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Auto-verification stopped.");
@@ -246,8 +241,9 @@ export function CodPaymentCheck({
     let markedCount = 0;
 
     try {
-      for (let index = 0; index < orderIds.length; index += 20) {
-        const chunk = orderIds.slice(index, index + 20);
+      for (let index = 0; index < orderIds.length; index += 100) {
+        const chunk = orderIds.slice(index, index + 100);
+        setStatus(`Reconciling orders ${Math.min(index + chunk.length, orderIds.length)} of ${orderIds.length}…`);
         const data = await submitMark(chunk);
         const marked = data.marked || [];
         markedCount += marked.length;
@@ -262,9 +258,6 @@ export function CodPaymentCheck({
           break;
         }
 
-        if (index + 20 < orderIds.length) {
-          await new Promise((resolve) => setTimeout(resolve, 800));
-        }
       }
 
       setStatus(`Successfully reconciled ${markedCount} of ${orderIds.length} orders into Shopify & database ledger.`);
@@ -421,7 +414,7 @@ export function CodPaymentCheck({
           disabled={reconciling}
           onClick={autoVerify}
         >
-          {autoRunning ? "Stop verification" : "Verify all"}
+          {autoRunning ? "Stop verification" : "Verify all orders"}
         </button>
 
         <button
@@ -430,9 +423,11 @@ export function CodPaymentCheck({
           disabled={busy || safeVisibleUnreconciled.length === 0}
           onClick={() => executeReconciliation(safeVisibleUnreconciled.map((r) => r.orderId))}
         >
-          {courierFilter === "ALL"
-            ? `Auto-reconcile matched (${safeVisibleUnreconciled.length})`
-            : `Auto-reconcile ${courierFilter === "POSTEX" ? "PostEx" : "Leopards"} (${safeVisibleUnreconciled.length})`}
+          {reconciling
+            ? "Reconciling orders…"
+            : courierFilter === "ALL"
+              ? `Auto-reconcile all matched (${safeVisibleUnreconciled.length})`
+              : `Auto-reconcile all ${courierFilter === "POSTEX" ? "PostEx" : "Leopards"} (${safeVisibleUnreconciled.length})`}
         </button>
 
         {selected.length > 0 && (
@@ -592,7 +587,10 @@ export function CodPaymentCheck({
       </label>
 
       {/* Status banner */}
-      <p className="bc-muted">{status}{batch > 0 ? ` Batch ${batch}.` : ""}</p>
+      <p className="bc-muted" aria-live="polite">
+        {busy ? <><span className="bc-inline-spinner" aria-hidden="true" /> {status}</> : status}
+        {batch > 0 ? ` Batch ${batch}.` : ""}
+      </p>
       {error && <p className="bc-note bad">{error}</p>}
 
       {/* Orders Table */}

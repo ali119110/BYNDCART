@@ -317,7 +317,7 @@ export default function Returns() {
   const isSubmitting = fetcher.state !== "idle" && fetcher.formData?.get("actionType") === "CREATE_MANUAL_RETURN";
 
   return (
-    <div className="bc-page">
+    <div className="bc-page bc-returns-page">
       <header className="bc-header">
         <div className="bc-page-bar">
           <div className="bc-header-copy">
