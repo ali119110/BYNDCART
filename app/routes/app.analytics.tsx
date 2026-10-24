@@ -21,8 +21,8 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   try {
-    const analytics = await getAnalytics(shopifyStoreId, { startDate });
-    return { analytics, range };
+    const analytics = await getAnalytics(shopifyStoreId, { startDate, endDate: now });
+    return { analytics, range, dataAvailable: true };
   } catch (error) {
     console.error("Failed to fetch analytics:", error);
     return {
@@ -31,9 +31,10 @@ export async function loader({ request }: Route.LoaderArgs) {
           totalReturns: 0,
           totalExchanges: 0,
           totalRequests: 0,
-          returnRate: 0,
-          exchangeRate: 0,
+          returnRequestShare: 0,
+          exchangeRequestShare: 0,
           totalRefunded: 0,
+          confirmedRefundsByCurrency: [],
           revenueFromExchanges: 0,
           revenueRetained: 0,
         },
@@ -44,6 +45,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         topReturnedProducts: [],
       },
       range,
+      dataAvailable: false,
     };
   }
 }
@@ -63,9 +65,10 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 export default function Analytics() {
-  const { analytics, range } = useLoaderData<typeof loader>();
+  const { analytics, range, dataAvailable = true } = useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { summary, returnReasons, monthlyTrend, topReturnedProducts } = analytics;
+  const otherRefundCurrencies = (summary.confirmedRefundsByCurrency || []).filter((item: { currency: string }) => item.currency !== "PKR");
   const exportFetcher = useFetcher();
 
   const handleRangeChange = (newRange: string) => {
@@ -84,7 +87,7 @@ export default function Analytics() {
     ...monthlyTrend.map((t) => Math.max(t.returnsCount, t.exchangesCount))
   );
 
-  const maxProductReturnCount = Math.max(1, ...topReturnedProducts.map((p) => p.returnCount));
+  const maxProductReturnCount = Math.max(1, ...topReturnedProducts.map((p) => p.requestedUnits));
 
   // Top 5 reasons and top 5 products (enforce max 5)
   const displayReasons = returnReasons.slice(0, 5);
@@ -140,33 +143,39 @@ export default function Analytics() {
       {/* Rate Metrics Cards */}
       <section className="bc-kpi-grid">
         <article className="bc-kpi-card bc-kpi-returns">
-          <span className="bc-kpi-label">Return rate</span>
-          <p className="bc-kpi-value">{summary.returnRate}%</p>
-          <p className="bc-muted">{summary.totalReturns} of {summary.totalRequests} requests</p>
+          <span className="bc-kpi-label">Return request share</span>
+          <p className="bc-kpi-value">{dataAvailable ? summary.returnRequestShare + "%" : "—"}</p>
+          <p className="bc-muted">{summary.totalReturns} of {summary.totalRequests} requests · request mix, not unit return rate</p>
         </article>
         <article className="bc-kpi-card bc-kpi-exchanges">
-          <span className="bc-kpi-label">Exchange rate</span>
-          <p className="bc-kpi-value">{summary.exchangeRate}%</p>
-          <p className="bc-muted">{summary.totalExchanges} of {summary.totalRequests} requests</p>
+          <span className="bc-kpi-label">Exchange request share</span>
+          <p className="bc-kpi-value">{dataAvailable ? summary.exchangeRequestShare + "%" : "—"}</p>
+          <p className="bc-muted">{summary.totalExchanges} of {summary.totalRequests} requests · request mix</p>
         </article>
         <article className="bc-kpi-card">
-          <span className="bc-kpi-label">Refunded</span>
-          <p className="bc-kpi-value bc-kpi-value-currency">Rs. {(summary.totalRefunded || 0).toLocaleString()}</p>
-          <p className="bc-muted">Completed return payouts</p>
+          <span className="bc-kpi-label">Confirmed refunds (PKR)</span>
+          <p className="bc-kpi-value bc-kpi-value-currency">{dataAvailable ? "Rs. " + (summary.totalRefunded || 0).toLocaleString("en-PK") : "—"}</p>
+          <p className="bc-muted">Confirmed refund records only</p>
+          {dataAvailable && otherRefundCurrencies.length > 0 && (
+            <p className="bc-muted">{otherRefundCurrencies.map((item: { currency: string; amount: number }) => item.currency + " " + item.amount.toLocaleString()).join(" · ")} in other currencies</p>
+          )}
         </article>
         <article className="bc-kpi-card bc-kpi-revenue">
-          <span className="bc-kpi-label">Kept from exchanges</span>
-          <p className="bc-kpi-value bc-kpi-value-currency">Rs. {(summary.revenueFromExchanges || 0).toLocaleString()}</p>
-          <p className="bc-muted">Price difference on completed exchanges</p>
+          <span className="bc-kpi-label">Recorded exchange price difference</span>
+          <p className="bc-kpi-value bc-kpi-value-currency">{dataAvailable ? (summary.revenueFromExchanges || 0).toLocaleString("en-PK") : "—"}</p>
+          <p className="bc-muted">Completed exchanges; currency is not stored per item and no conversion is applied</p>
         </article>
       </section>
 
       {/* Monthly Return Trend Chart */}
       <section className="bc-card">
         <h2 className="bc-title">Last 6 months</h2>
-        <p className="bc-muted">Volume of returns and exchanges.</p>
+        <p className="bc-muted">Monthly return and exchange requests. This trend is independent of the selected KPI date range.</p>
+        {!dataAvailable && <p className="bc-note warn" role="alert">Analytics could not be loaded. The displayed figures are unavailable, not zero.</p>}
         <div>
-          {monthlyTrend.length === 0 ? (
+          {!dataAvailable ? (
+            <p className="bc-muted">Trend unavailable until analytics loads successfully.</p>
+          ) : monthlyTrend.length === 0 ? (
             <p className="bc-muted">No data yet.</p>
           ) : (
             <>
@@ -221,7 +230,9 @@ export default function Analytics() {
       <div className="bc-split">
         <section className="bc-card">
           <h2 className="bc-title">Top 5 Return Reasons</h2>
-          {displayReasons.length === 0 ? (
+          {!dataAvailable ? (
+            <p className="bc-muted">Return reasons unavailable until analytics loads successfully.</p>
+          ) : displayReasons.length === 0 ? (
             <p className="bc-muted">No returns recorded yet.</p>
           ) : (
             <table className="bc-table">
@@ -249,20 +260,22 @@ export default function Analytics() {
 
         <section className="bc-card">
           <h2 className="bc-title">Top 5 Most-Returned Products</h2>
-          {displayProducts.length === 0 ? (
-            <p className="bc-muted">This fills in after orders sync and returns exist.</p>
+          {!dataAvailable ? (
+            <p className="bc-muted">Product data unavailable until analytics loads successfully.</p>
+          ) : displayProducts.length === 0 ? (
+            <p className="bc-muted">This fills in after orders sync and return requests exist.</p>
           ) : (
             <div className="bc-stack">
               {displayProducts.map((p, idx) => (
                 <div key={idx} style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
                     <span>{p.title}</span>
-                    <strong>{p.returnCount} {p.returnCount === 1 ? "return" : "returns"}</strong>
+                    <strong>{p.requestedUnits} {p.requestedUnits === 1 ? "requested unit" : "requested units"}</strong>
                   </div>
                   <div style={{ width: "100%", height: "6px", background: "#e1e3e5", borderRadius: "3px" }}>
                     <div
                       style={{
-                        width: `${(p.returnCount / maxProductReturnCount) * 100}%`,
+                        width: `${(p.requestedUnits / maxProductReturnCount) * 100}%`,
                         height: "100%",
                         background: "#263f8c",
                         borderRadius: "3px",
