@@ -420,7 +420,7 @@ export default function Notifications() {
   };
 
   return (
-    <div className="bc-page">
+    <div className="bc-page bc-notifications-page">
       <header className="bc-header">
         <div className="bc-header-copy">
           <p className="bc-eyebrow">CUSTOMER MESSAGING & ALERTS</p>
