@@ -127,6 +127,7 @@ export async function action({ request }: Route.ActionArgs) {
   const shipperProfiles = [0, 1, 2].map((index) => ({
     name: String(formData.get(`shipperProfile${index}Name`) || "").trim(),
     phone: String(formData.get(`shipperProfile${index}Phone`) || "").trim(),
+    email: String(formData.get(`shipperProfile${index}Email`) || "").trim(),
     city: String(formData.get(`shipperProfile${index}City`) || "").trim(),
     address: String(formData.get(`shipperProfile${index}Address`) || "").trim(),
   }));
@@ -564,6 +565,10 @@ export default function Settings() {
                       <input id={`shipperProfile${index}Phone`} name={`shipperProfile${index}Phone`} maxLength={40} defaultValue={profile.phone} placeholder="03XXXXXXXXX" />
                     </div>
                     <div className="bco-field">
+                      <label htmlFor={`shipperProfile${index}Email`}>Email (optional)</label>
+                      <input id={`shipperProfile${index}Email`} name={`shipperProfile${index}Email`} type="email" maxLength={200} defaultValue={profile.email} placeholder="dispatch@yourstore.com" />
+                    </div>
+                    <div className="bco-field">
                       <label htmlFor={`shipperProfile${index}City`}>City</label>
                       <input id={`shipperProfile${index}City`} name={`shipperProfile${index}City`} maxLength={100} defaultValue={profile.city} placeholder="Karachi" />
                     </div>
@@ -575,7 +580,7 @@ export default function Settings() {
                 </div>
               ))}
             </div>
-            <div className="bco-note">Sender profiles and label settings are shared across couriers. Courier API pickup-address codes remain provider-specific because each carrier registers its own pickup locations.</div>
+            <div className="bco-note">Set sender contact and address details here once. Booking and supported courier APIs reuse this profile, so you do not need to enter warehouse details separately under each courier. Registered carrier IDs are resolved automatically when the carrier API allows it.</div>
             <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap", marginTop: "16px" }}>
               <button type="submit" className="bc-btn primary" disabled={isSaving}>
                 {isSaving ? "Saving settings…" : "Save Settings"}
