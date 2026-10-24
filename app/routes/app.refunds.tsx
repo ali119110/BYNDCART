@@ -103,9 +103,16 @@ export async function action({ request }: ActionFunctionArgs) {
           metadata: { emailRequested: Boolean(email), whatsappRequested: Boolean(phone), statuses: results.map((result) => result.status || "UNKNOWN") },
         },
       });
+      const failedResults = results.filter((result) => ["FAILED", "FAILED_TRIGGER"].includes(String(result.status || "").toUpperCase()));
+      if (failedResults.length) {
+        return {
+          ok: false,
+          message: `At least one customer notification failed: ${failedResults.map((result) => result.error || result.status).join("; ")}. Check Notifications → Logs. The refund record and receipt remain saved; retry after fixing channel configuration.`,
+        };
+      }
       return {
         ok: true,
-        message: `Customer notifications queued for ${[email ? "email" : "", phone ? "WhatsApp" : ""].filter(Boolean).join(" and ")}. Check Notifications → Logs for delivery status.`,
+        message: `Customer notifications delivered or accepted for ${[email ? "email" : "", phone ? "WhatsApp" : ""].filter(Boolean).join(" and ")}. Check Notifications → Logs for the exact provider status.`,
       };
     }
 
