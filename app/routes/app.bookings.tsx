@@ -168,10 +168,13 @@ export async function action({ request }: ActionFunctionArgs) {
         return { intent, ok: false, message: result.error || "Booking failed.", booking: result };
       }
 
+      const fulfillmentWarning = result.fulfillmentSyncError
+        ? ` IMPORTANT: PostEx/courier booking succeeded, but Shopify fulfillment did not sync: ${result.fulfillmentSyncError} Do not book this parcel again. Open Shipments and use “Sync Shopify fulfillment”.`
+        : "";
       return {
         intent,
         ok: true,
-        message: `Order ${orderNumber} successfully booked with ${courier}! Tracking: ${result.trackingNumber}`,
+        message: `Order ${orderNumber} successfully booked with ${courier}. Tracking: ${result.trackingNumber}.${fulfillmentWarning}`,
         booking: result,
       };
     }
@@ -192,9 +195,13 @@ export async function action({ request }: ActionFunctionArgs) {
       const { booked, failed } = await bulkBookCourierShipments(admin, shopifyStoreId, session, items);
 
       const failedMsg = failed.length ? ` (${failed.length} failed: ${failed.map((f) => `${f.orderNumber}: ${f.error}`).join("; ")})` : "";
+      const fulfillmentSyncFailures = booked.filter((booking) => booking.fulfillmentSyncError);
+      const fulfillmentSyncMsg = fulfillmentSyncFailures.length
+        ? ` WARNING: ${fulfillmentSyncFailures.length} courier booking(s) need Shopify fulfillment sync: ${fulfillmentSyncFailures.map((booking) => `${booking.orderNumber}: ${booking.fulfillmentSyncError}`).join("; ")}. Do not rebook these parcels; open Shipments and use “Sync Shopify fulfillment”.`
+        : "";
       return {
         ok: booked.length > 0,
-        message: `Bulk booked ${booked.length} of ${items.length} orders successfully.${failedMsg}`,
+        message: `Bulk booked ${booked.length} of ${items.length} orders successfully.${failedMsg}${fulfillmentSyncMsg}`,
         booked,
         failed,
       };

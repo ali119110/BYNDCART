@@ -7,11 +7,42 @@ import {
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import prisma from "./db.server";
 
+// Current Shopify fulfillment mutations require merchant-managed fulfillment-order scopes.
+// Union these with the configured scopes so an older Railway SCOPES variable cannot silently
+// remove permissions needed to sync courier bookings into Shopify.
+const DEFAULT_SHOPIFY_SCOPES = [
+  "read_all_orders",
+  "read_customers",
+  "write_draft_orders",
+  "write_inventory",
+  "read_inventory",
+  "read_orders",
+  "write_orders",
+  "write_fulfillments",
+  "read_products",
+  "write_products",
+  "read_returns",
+  "write_returns",
+  "write_store_credit_account_transactions",
+] as const;
+const REQUIRED_FULFILLMENT_SCOPES = [
+  "read_merchant_managed_fulfillment_orders",
+  "write_merchant_managed_fulfillment_orders",
+] as const;
+const configuredScopes = (process.env.SCOPES || "")
+  .split(",")
+  .map((scope) => scope.trim())
+  .filter(Boolean);
+const shopifyScopes = Array.from(new Set([
+  ...(configuredScopes.length ? configuredScopes : DEFAULT_SHOPIFY_SCOPES),
+  ...REQUIRED_FULFILLMENT_SCOPES,
+]));
+
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
   apiVersion: ApiVersion.July26,
-  scopes: process.env.SCOPES?.split(","),
+  scopes: shopifyScopes,
   appUrl: process.env.SHOPIFY_APP_URL || "",
   authPathPrefix: "/auth",
   sessionStorage:

@@ -2,6 +2,8 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useFetcher, useLoaderData, useSearchParams } from "react-router";
 import prisma from "../db.server";
 import { requireTenantContext } from "../services/tenant.server";
+import { assertPermission } from "../services/permissions.server";
+import { fulfillOrderInShopify } from "../services/booking.server";
 import { cancelShipmentTrack, getStoreShipments, syncShipmentTrackingStatus, syncAllActiveShipments } from "../services/shipments.server";
 import { CourierRegistry, getDecryptedCourierCredentials } from "../services/courier.server";
 
@@ -41,7 +43,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   if (request.method !== "POST") return { success: false, error: "Method not allowed." };
-  const { shopifyStoreId } = await requireTenantContext(request);
+  const { shopifyStoreId, session, admin } = await requireTenantContext(request);
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
 
@@ -101,6 +103,48 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   try {
+    if (intent === "SYNC_SHOPIFY_FULFILLMENT") {
+      await assertPermission(shopifyStoreId, session, "shipments");
+      const shipment = await prisma.shipmentTrack.findFirst({
+        where: {
+          id: shipmentId,
+          shopifyStoreId,
+          type: { in: ["FORWARD", "EXCHANGE"] },
+          status: { notIn: ["FAILED", "CANCELLED"] },
+        },
+        select: {
+          id: true,
+          shopifyOrderId: true,
+          orderNumber: true,
+          courier: true,
+          trackingNumber: true,
+          type: true,
+        },
+      });
+      if (!shipment) {
+        throw new Error("Eligible forward/replacement shipment not found for this store. Returns are never used to fulfill the original order.");
+      }
+
+      const fulfillment = await fulfillOrderInShopify(
+        admin,
+        shipment.shopifyOrderId,
+        shipment.courier,
+        shipment.trackingNumber,
+      );
+      if (!fulfillment.success) {
+        throw new Error(
+          `Courier booking ${shipment.trackingNumber} is still saved. Shopify fulfillment sync failed: ${fulfillment.error || "Unknown Shopify error."} No new carrier booking was created.`,
+        );
+      }
+
+      return {
+        success: true,
+        intent,
+        message: `Shopify fulfillment synced for ${shipment.orderNumber} using ${shipment.courier} tracking ${shipment.trackingNumber}.`,
+        shipmentId,
+      };
+    }
+
     if (intent === "REFRESH_TRACKING") {
       const shipment = await prisma.shipmentTrack.findFirst({
         where: { id: shipmentId, shopifyStoreId },
@@ -116,6 +160,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
     return { success: false, error: "Invalid shipment action.", intent };
   } catch (error) {
+    if (error instanceof Response) throw error;
     return { success: false, error: error instanceof Error ? error.message : "Shipment action failed.", intent, shipmentId };
   }
 };
@@ -286,6 +331,17 @@ export default function Shipments() {
                     </td>
                     <td>
                       <div className="bc-shipment-row-actions">
+                        {["FORWARD", "EXCHANGE"].includes(shipment.type) && !["FAILED", "CANCELLED"].includes(shipment.status) && (
+                          <actionFetcher.Form method="post">
+                            <input type="hidden" name="intent" value="SYNC_SHOPIFY_FULFILLMENT" />
+                            <input type="hidden" name="shipmentId" value={shipment.id} />
+                            <button type="submit" className="bc-btn" disabled={actionFetcher.state !== "idle"}>
+                              {actionFetcher.state !== "idle" && actionFetcher.formData?.get("intent") === "SYNC_SHOPIFY_FULFILLMENT" && actionFetcher.formData?.get("shipmentId") === shipment.id
+                                ? "Syncing Shopify…"
+                                : "Sync Shopify fulfillment"}
+                            </button>
+                          </actionFetcher.Form>
+                        )}
                         {shipment.courier === "POSTEX" && shipment.status !== "CANCELLED" && shipment.status !== "DELIVERED" && (
                           <Form method="post" target="_blank">
                             <input type="hidden" name="intent" value="GENERATE_POSTEX_LOAD_SHEET" />
