@@ -333,7 +333,52 @@ export default function Notifications() {
 
   const [testPhone, setTestPhone] = useState("");
   const [showTestModal, setShowTestModal] = useState(false);
+  const [metaSdkReady, setMetaSdkReady] = useState(false);
   const metaSignupResultRef = React.useRef<{ wabaId: string; phoneNumberId: string } | null>(null);
+
+  React.useEffect(() => {
+    if (!metaAppId) return;
+    const win = window as any;
+    const initializeMetaSdk = () => {
+      const fb = win.FB;
+      if (!fb) return;
+      try {
+        fb.init({
+          appId: metaAppId,
+          cookie: true,
+          xfbml: false,
+          version: "v25.0",
+        });
+        setMetaSdkReady(true);
+      } catch (error) {
+        console.error("[Meta Embedded Signup] FB.init failed:", error);
+        setMetaSdkReady(false);
+      }
+    };
+
+    if (win.FB) {
+      initializeMetaSdk();
+      return;
+    }
+
+    win.fbAsyncInit = initializeMetaSdk;
+    const existingScript = document.getElementById("facebook-jssdk");
+    if (!existingScript) {
+      const script = document.createElement("script");
+      script.id = "facebook-jssdk";
+      script.src = "https://connect.facebook.net/en_US/sdk.js";
+      script.async = true;
+      script.defer = true;
+      script.onerror = () => {
+        console.error("[Meta Embedded Signup] Facebook SDK failed to load.");
+        setMetaSdkReady(false);
+      };
+      document.body.appendChild(script);
+    } else {
+      // A script tag may have loaded before the FB global became available; retry after load.
+      existingScript.addEventListener("load", initializeMetaSdk, { once: true });
+    }
+  }, [metaAppId]);
 
   React.useEffect(() => {
     const onMetaSignupMessage = (event: MessageEvent) => {
@@ -386,7 +431,7 @@ export default function Notifications() {
     }
 
     const fb = (window as any).FB;
-    if (fb) {
+    if (fb && metaSdkReady) {
       metaSignupResultRef.current = null;
       fb.login(
         (response: any) => {
@@ -414,8 +459,7 @@ export default function Notifications() {
         }
       );
     } else {
-      // Fallback to manual setup modal if FB JS SDK is not loaded
-      setShowManualModal(true);
+      alert("Meta's connection service is still loading. Wait a moment, then try Connect again. If it stays unavailable, check the Meta App ID, HTTPS setup, and allowed domains.");
     }
   };
 
