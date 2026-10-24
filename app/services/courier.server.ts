@@ -963,7 +963,7 @@ export class DHLCourierAdapter implements ICourierAdapter {
         ? { success: true, message: "DHL MyDHL API authentication was accepted. Booking still depends on the account, product code, route, and shipment data being valid.", isLive: true }
         : { success: false, message: httpMessage(payload, `DHL authentication check failed (HTTP ${response.status}).`), isLive: false };
     } catch {
-      return { success: false, message: "DHL MyDHL API could not be reached. Check the environment and retry.", isLive: false };
+      return { success: false, message: "DHL MyDHL production API could not be reached. Verify production API access and retry.", isLive: false };
     }
   }
 
@@ -2185,7 +2185,7 @@ function bookingOptionsCredentialFingerprint(provider: string, credentials: Reco
   const keys = provider === "POSTEX"
     ? ["apiToken"]
     : provider === "LEOPARDS"
-      ? ["apiKey", "apiPassword", "environment"]
+      ? ["apiKey", "apiPassword"]
       : ["clientId", "userName", "password", "costCenterCode"];
   const identity = Object.fromEntries(keys.map((key) => [key, credentialValue(credentials, key)]));
   return createHash("sha256").update(JSON.stringify({ provider, identity })).digest("hex");
@@ -2213,7 +2213,7 @@ function isValidPersistedBookingOptions(
 
 /**
  * Uses a store-scoped persistent city/type catalog. Carrier city endpoints are requested only
- * for the first selection (or when the courier credentials/environment change), not on every
+ * for the first selection (or when the courier credentials change), not on every
  * page render or individual shipment booking.
  */
 export async function getMerchantCourierBookingOptions(
