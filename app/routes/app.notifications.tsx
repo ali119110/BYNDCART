@@ -8,6 +8,7 @@ import {
   upsertNotificationTemplate,
   getNotificationLogs,
   processNotificationJob,
+  sendEmail,
   NotificationEventType,
 } from "../services/notifications.server";
 import {
@@ -19,6 +20,7 @@ import {
   dispatchWhatsAppNotification,
 } from "../services/whatsapp.server";
 import prisma from "../db.server";
+import { getSettings } from "../services/settings.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -28,11 +30,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   try {
-    const [emailTemplates, waTemplates, whatsappConfig, logs] = await Promise.all([
+    const [emailTemplates, waTemplates, whatsappConfig, logs, storeSettings] = await Promise.all([
       getStoreNotificationTemplates(store.id, "EMAIL"),
       getStoreNotificationTemplates(store.id, "WHATSAPP"),
       getWhatsAppConfig(store.id),
       getNotificationLogs(store.id, 40),
+      getSettings(store.id).catch(() => null),
     ]);
 
     return {
@@ -43,6 +46,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig,
       metaAppId: process.env.META_APP_ID || process.env.WHATSAPP_APP_ID || "",
       metaConfigId: process.env.META_CONFIG_ID || "",
+      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY),
+      emailFromAddress: process.env.NOTIFICATIONS_FROM_EMAIL || "BYNDCART <notifications@byndcart.app>",
+      merchantReplyTo: storeSettings?.notificationEmail || storeSettings?.supportEmail || "",
       logs: logs.map((l) => ({
         ...l,
         createdAt: l.createdAt.toISOString(),
@@ -60,6 +66,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig: null,
       metaAppId: "",
       metaConfigId: "",
+      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY),
+      emailFromAddress: process.env.NOTIFICATIONS_FROM_EMAIL || "BYNDCART <notifications@byndcart.app>",
+      merchantReplyTo: "",
       logs: [],
       loadError:
         "Notification settings could not be loaded. Details: " +
@@ -219,6 +228,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  if (actionType === "sendTestEmail") {
+    const recipient = String(formData.get("recipient") || "").trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
+      return { success: false, error: "Enter a valid test recipient email address." };
+    }
+    try {
+      const settings = await getSettings(store.id).catch(() => null);
+      const replyTo = String(settings?.notificationEmail || settings?.supportEmail || "").trim();
+      const result = await sendEmail({
+        to: recipient,
+        subject: "BYNDCART email delivery test",
+        html: `<div style="font-family:Arial,sans-serif;max-width:560px;margin:auto"><h2>Test email received</h2><p>Your BYNDCART notification email configuration can deliver messages to this address.</p><p>Store: ${session.shop}</p></div>`,
+        ...(replyTo && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(replyTo) ? { replyTo } : {}),
+      });
+      if (!result.success) return { success: false, error: result.error || "Email provider did not confirm delivery." };
+      return { success: true, message: `Test email accepted by the email provider for ${recipient}. Check inbox/spam. Provider message ID: ${result.messageId || "accepted"}.` };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : "Test email failed." };
+    }
+  }
+
   // 9. Retry Notification Log
   if (actionType === "retryLog") {
     const logId = formData.get("logId") as string;
@@ -258,6 +288,9 @@ export default function Notifications() {
     whatsappConfig,
     metaAppId,
     metaConfigId,
+    emailProviderConfigured,
+    emailFromAddress,
+    merchantReplyTo,
     logs,
     loadError,
   } = useLoaderData<typeof loader>();
