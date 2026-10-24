@@ -1012,6 +1012,12 @@ export default function BookingsPage() {
             </div>
           </div>
 
+          {filteredOrders.some((order) => order.alreadyBooked) && (
+            <div className="bc-note" role="status" style={{ marginBottom: "12px" }}>
+              {filteredOrders.filter((order) => order.alreadyBooked).length} Shopify-unfulfilled order(s) already have a courier booking. They remain visible but cannot be booked again. Use <strong>Sync Shopify</strong> for saved shipments, or <strong>Review</strong> if the saved tracking record is missing.
+            </div>
+          )}
+
           {/* Universal Courier Orders Table */}
           <style>{`
             .bc-booking-table-wrap {
@@ -1132,7 +1138,7 @@ export default function BookingsPage() {
               <tbody>
                 {paginatedOrders.length === 0 ? (
                   <tr>
-                    <td colSpan={12} style={{ padding: "36px 16px", textAlign: "center", color: "#64748b" }}>
+                    <td colSpan={13} style={{ padding: "36px 16px", textAlign: "center", color: "#64748b" }}>
                       No unfulfilled orders found matching your search criteria.
                     </td>
                   </tr>
