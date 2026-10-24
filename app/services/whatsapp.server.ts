@@ -7,6 +7,7 @@ export interface SendWhatsAppInput {
   message: string;
   templateName?: string;
   templateVariables?: Record<string, string>;
+  eventType?: string;
   shopifyStoreId?: string;
 }
 
@@ -37,6 +38,100 @@ export function formatPhoneForMeta(rawPhone: string): string {
     cleaned = `92${cleaned}`;
   }
   return cleaned;
+}
+
+type MetaUtilityTemplateDefinition = { name: string; body: string; variables: string[] };
+
+const META_UTILITY_TEMPLATES: Record<string, MetaUtilityTemplateDefinition> = {
+  RETURN_SUBMITTED: { name: "byndcart_return_submitted", body: "Hello {{1}}, we received your return request for order {{2}}. Our team is reviewing your request.", variables: ["customer_name", "order_number"] },
+  EXCHANGE_SUBMITTED: { name: "byndcart_exchange_submitted", body: "Hello {{1}}, we received your exchange request for order {{2}}. Our team is reviewing your request.", variables: ["customer_name", "order_number"] },
+  RETURN_APPROVED: { name: "byndcart_return_approved", body: "Hello {{1}}, your return request for order {{2}} has been approved. Please check your merchant's return instructions.", variables: ["customer_name", "order_number"] },
+  RETURN_REJECTED: { name: "byndcart_return_rejected", body: "Hello {{1}}, your return request for order {{2}} could not be approved. Reason: {{3}}.", variables: ["customer_name", "order_number", "reason"] },
+  COURIER_PICKUP_BOOKED: { name: "byndcart_courier_booked", body: "Hello {{1}}, order {{2}} has been booked with {{3}}. Tracking number: {{4}}. COD amount: {{5}}.", variables: ["customer_name", "order_number", "courier_name", "tracking_number", "cod_amount"] },
+  TRACKING_UPDATE: { name: "byndcart_tracking_update", body: "Hello {{1}}, the latest shipment status for order {{2}} is {{3}}. Courier: {{4}}. Tracking number: {{5}}.", variables: ["customer_name", "order_number", "status", "courier_name", "tracking_number"] },
+  RETURN_RECEIVED: { name: "byndcart_return_received", body: "Hello {{1}}, we received the return parcel for order {{2}} at the warehouse.", variables: ["customer_name", "order_number"] },
+  EXCHANGE_RECEIVED: { name: "byndcart_exchange_received", body: "Hello {{1}}, we received the original item for exchange on order {{2}}. Our team will inspect it next.", variables: ["customer_name", "order_number"] },
+  INSPECTION_COMPLETED: { name: "byndcart_inspection_completed", body: "Hello {{1}}, inspection for order {{2}} is complete. Condition: {{3}}.", variables: ["customer_name", "order_number", "condition"] },
+  EXCHANGE_INSPECTION_COMPLETED: { name: "byndcart_exchange_inspection_completed", body: "Hello {{1}}, inspection for the exchange on order {{2}} is complete. The replacement will follow your store's workflow.", variables: ["customer_name", "order_number"] },
+  REFUND_INITIATED: { name: "byndcart_refund_update", body: "Hello {{1}}, the refund update for order {{2}} is {{3}} {{4}} using {{5}}. Reference: {{6}}.", variables: ["customer_name", "order_number", "refund_amount", "refund_currency", "refund_method", "refund_reference"] },
+  EXCHANGE_APPROVED: { name: "byndcart_exchange_approved", body: "Hello {{1}}, your exchange request for order {{2}} is approved. Replacement order: {{3}}.", variables: ["customer_name", "order_number", "replacement_order"] },
+  REPLACEMENT_CREATED: { name: "byndcart_replacement_created", body: "Hello {{1}}, replacement order {{2}} for original order {{3}} has been created and is queued for fulfillment.", variables: ["customer_name", "replacement_order", "order_number"] },
+  REPLACEMENT_DELIVERED: { name: "byndcart_replacement_delivered", body: "Hello {{1}}, replacement order {{2}} for original order {{3}} has been marked delivered.", variables: ["customer_name", "replacement_order", "order_number"] },
+  LIFECYCLE_COMPLETED: { name: "byndcart_request_completed", body: "Hello {{1}}, the return or exchange process for order {{2}} has been completed. Thank you.", variables: ["customer_name", "order_number"] },
+};
+
+export function getMetaUtilityTemplateName(eventType: string): string | undefined {
+  return META_UTILITY_TEMPLATES[eventType]?.name;
+}
+
+function metaTemplateParameters(eventType: string, variables: Record<string, any> = {}): string[] {
+  const definition = META_UTILITY_TEMPLATES[eventType];
+  if (!definition) return [];
+  return definition.variables.map((key) => {
+    const value = variables[key];
+    return value === undefined || value === null || String(value).trim() === "" ? "—" : String(value).trim().slice(0, 500);
+  });
+}
+
+/**
+ * Submit dedicated UTILITY templates to each merchant's own WABA. New submissions
+ * remain pending review; local seeding does not mean Meta has approved a template.
+ */
+export async function ensureMetaUtilityTemplates(wabaId: string, accessToken: string) {
+  if (!wabaId.trim() || !accessToken.trim()) throw new Error("A verified WABA ID and access token are required to set up WhatsApp templates.");
+  const result = { created: 0, pending: 0, approved: 0, failed: 0, errors: [] as string[] };
+  const listUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(wabaId)}/message_templates`);
+  listUrl.searchParams.set("fields", "id,name,status,language,category");
+  listUrl.searchParams.set("limit", "100");
+  const listResponse = await fetch(listUrl, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+  const listPayload = await listResponse.json().catch(() => ({}));
+  if (!listResponse.ok || !Array.isArray(listPayload?.data)) {
+    throw new Error(listPayload?.error?.message || "Meta could not list message templates for this WABA.");
+  }
+  const existing = new Map<string, any>();
+  for (const tpl of listPayload.data) {
+    if (tpl?.name && (tpl?.language === "en" || tpl?.language === "en_US")) existing.set(String(tpl.name), tpl);
+  }
+  const examples: Record<string, string> = {
+    customer_name: "Customer", order_number: "#1001", reason: "Store policy", courier_name: "Courier",
+    tracking_number: "TRACK123", cod_amount: "3990", status: "In transit", condition: "Inspection completed",
+    refund_amount: "3990.00", refund_currency: "PKR", refund_method: "Bank transfer",
+    refund_reference: "REF123", replacement_order: "#1002",
+  };
+  for (const definition of Object.values(META_UTILITY_TEMPLATES)) {
+    const current = existing.get(definition.name);
+    if (current) {
+      const status = String(current.status || "").toUpperCase();
+      if (status === "APPROVED") result.approved += 1;
+      else if (["PENDING", "IN_APPEAL", "PAUSED"].includes(status)) result.pending += 1;
+      else { result.failed += 1; result.errors.push(`${definition.name}: Meta status ${status || "unknown"}`); }
+      continue;
+    }
+    const url = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(wabaId)}/message_templates`);
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        name: definition.name,
+        language: "en",
+        category: "UTILITY",
+        components: [{
+          type: "BODY",
+          text: definition.body,
+          example: { body_text: [definition.variables.map((key) => examples[key] || "Value")] },
+        }],
+      }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok || body?.error) {
+      result.failed += 1;
+      result.errors.push(`${definition.name}: ${String(body?.error?.message || `Meta HTTP ${response.status}`)}`);
+    } else {
+      result.created += 1;
+      result.pending += 1;
+    }
+  }
+  return result;
 }
 
 /**
@@ -76,46 +171,26 @@ export class MetaWhatsAppCloudAdapter implements IWhatsAppAdapter {
 
     let payload: any;
 
-    if (input.templateName) {
-      // HSM Approved Utility Template
-      const parameters = input.templateVariables
-        ? Object.entries(input.templateVariables).map(([_, val]) => ({
-            type: "text",
-            text: String(val || ""),
-          }))
-        : [];
-
-      payload = {
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: formattedRecipient,
-        type: "template",
-        template: {
-          name: input.templateName,
-          language: { code: "en" },
-          components: parameters.length
-            ? [
-                {
-                  type: "body",
-                  parameters,
-                },
-              ]
-            : undefined,
-        },
-      };
-    } else {
-      // Direct Interactive / Formatted Text Message
-      payload = {
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: formattedRecipient,
-        type: "text",
-        text: {
-          preview_url: true,
-          body: input.message,
-        },
-      };
+    const effectiveTemplateName = input.templateName || (input.eventType ? getMetaUtilityTemplateName(input.eventType) : undefined);
+    if (!effectiveTemplateName) {
+      return { success: false, error: "No dedicated Meta utility template is configured for this notification event." };
     }
+    const parameterValues = input.eventType
+      ? metaTemplateParameters(input.eventType, input.templateVariables || {})
+      : Object.values(input.templateVariables || {}).map((value) => String(value || "—").slice(0, 500));
+    payload = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: formattedRecipient,
+      type: "template",
+      template: {
+        name: effectiveTemplateName,
+        language: { code: "en" },
+        components: parameterValues.length
+          ? [{ type: "body", parameters: parameterValues.map((value) => ({ type: "text", text: value })) }]
+          : undefined,
+      },
+    };
 
     try {
       const response = await fetch(url, {
@@ -486,7 +561,8 @@ export async function exchangeMetaEmbeddedSignupCode(
     enabled: true,
   });
 
-  return saved;
+  const templateSetup = await ensureMetaUtilityTemplates(targetWabaId, userAccessToken);
+  return { ...saved, templateSetup };
 }
 
 /**
