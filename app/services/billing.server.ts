@@ -309,70 +309,133 @@ export async function cancelAppSubscription(shopifyStoreId: string, adminContext
  * Synchronizes subscription state from Shopify GraphQL API to database.
  */
 export async function syncSubscriptionState(shopifyStoreId: string, adminContext?: any) {
-  const store = await prisma.shopifyStore.findUnique({
-    where: { id: shopifyStoreId },
-  });
-  if (!store) return null;
+  const store = await prisma.shopifyStore.findUnique({ where: { id: shopifyStoreId } });
+  if (!store) throw new Error("Shopify store not found while syncing billing.");
 
-  try {
-    const admin = await getShopifyAdminClient(store.shop, adminContext);
-    const response = await admin.graphql(
+  const local = await getStoreSubscription(shopifyStoreId);
+  const admin = await getShopifyAdminClient(store.shop, adminContext);
+  const response = await admin.graphql(
+    `#graphql
+    query GetActiveSubscriptions {
+      currentAppInstallation {
+        activeSubscriptions {
+          id
+          name
+          status
+          createdAt
+          currentPeriodEnd
+        }
+      }
+    }`,
+  );
+  const result = await response.json();
+  const topLevelErrors = Array.isArray(result?.errors) ? result.errors.map((error: any) => error?.message).filter(Boolean) : [];
+  if (topLevelErrors.length) throw new Error(`Shopify subscription sync failed: ${topLevelErrors.join("; ")}`);
+
+  const activeSubs = Array.isArray(result?.data?.currentAppInstallation?.activeSubscriptions)
+    ? result.data.currentAppInstallation.activeSubscriptions
+    : [];
+  if (!Array.isArray(result?.data?.currentAppInstallation?.activeSubscriptions)) {
+    throw new Error("Shopify returned no readable activeSubscriptions field. Local billing was not changed.");
+  }
+
+  if (activeSubs.length > 0) {
+    // Prefer the locally-associated active subscription if it is still active;
+    // otherwise select the newest subscription returned by Shopify.
+    const active = activeSubs.find((item: any) => item.id === local.shopifySubscriptionId) || activeSubs[0];
+    const normalizedName = String(active.name || "").toUpperCase();
+    const matchedCode = normalizedName.includes("PRO")
+      ? "PRO"
+      : normalizedName.includes("GROWTH")
+        ? "GROWTH"
+        : normalizedName.includes("BASIC")
+          ? "BASIC"
+          : null;
+    if (!matchedCode) {
+      throw new Error(`Shopify reports active subscription "${active.name || active.id}" but BYNDCART cannot map it to a configured plan. Contact support before changing access.`);
+    }
+    const config = PLAN_CONFIGS[matchedCode];
+    return prisma.billingSubscription.upsert({
+      where: { shopifyStoreId },
+      create: {
+        shopifyStoreId,
+        shopifySubscriptionId: active.id,
+        name: config.name,
+        planCode: config.code,
+        status: String(active.status || "ACTIVE"),
+        price: config.price,
+        currency: config.currency,
+        interval: config.interval,
+        monthlyReturnLimit: config.monthlyReturnLimit,
+        currentPeriodEnd: active.currentPeriodEnd ? new Date(active.currentPeriodEnd) : null,
+      },
+      update: {
+        shopifySubscriptionId: active.id,
+        name: config.name,
+        planCode: config.code,
+        status: String(active.status || "ACTIVE"),
+        price: config.price,
+        currency: config.currency,
+        interval: config.interval,
+        monthlyReturnLimit: config.monthlyReturnLimit,
+        currentPeriodEnd: active.currentPeriodEnd ? new Date(active.currentPeriodEnd) : null,
+      },
+    });
+  }
+
+  // Shopify lists only active subscriptions above. If the local record points at an
+  // AppSubscription, query its actual status before downgrading local entitlements.
+  if (local.shopifySubscriptionId?.startsWith("gid://shopify/AppSubscription/")) {
+    const statusResponse = await admin.graphql(
       `#graphql
-      query GetActiveSubscriptions {
-        currentAppInstallation {
-          activeSubscriptions {
+      query GetBillingSubscriptionStatus($id: ID!) {
+        node(id: $id) {
+          ... on AppSubscription {
             id
             name
             status
-            createdAt
-            currentPeriodEnd
           }
         }
-      }`
+      }`,
+      { variables: { id: local.shopifySubscriptionId } },
     );
-    const result = await response.json();
-    const activeSubs = result?.data?.currentAppInstallation?.activeSubscriptions || [];
+    const statusPayload = await statusResponse.json();
+    const statusErrors = Array.isArray(statusPayload?.errors) ? statusPayload.errors.map((error: any) => error?.message).filter(Boolean) : [];
+    if (statusErrors.length) throw new Error(`Could not verify existing Shopify subscription: ${statusErrors.join("; ")}`);
 
-    if (activeSubs.length > 0) {
-      const active = activeSubs[0];
-      let matchedCode = "BASIC";
-      if (active.name.toUpperCase().includes("GROWTH")) matchedCode = "GROWTH";
-      if (active.name.toUpperCase().includes("PRO")) matchedCode = "PRO";
-
-      const config = PLAN_CONFIGS[matchedCode] || PLAN_CONFIGS.BASIC;
-
-      return await prisma.billingSubscription.upsert({
+    const remote = statusPayload?.data?.node;
+    const remoteStatus = String(remote?.status || "").toUpperCase();
+    if (remote?.id && remoteStatus === "PENDING") {
+      return prisma.billingSubscription.update({
         where: { shopifyStoreId },
-        create: {
-          shopifyStoreId,
-          shopifySubscriptionId: active.id,
-          name: config.name,
-          planCode: config.code,
-          status: active.status || "ACTIVE",
-          price: config.price,
-          currency: config.currency,
-          interval: config.interval,
-          monthlyReturnLimit: config.monthlyReturnLimit,
-          currentPeriodEnd: active.currentPeriodEnd ? new Date(active.currentPeriodEnd) : null,
-        },
-        update: {
-          shopifySubscriptionId: active.id,
-          name: config.name,
-          planCode: config.code,
-          status: active.status || "ACTIVE",
-          price: config.price,
-          currency: config.currency,
-          interval: config.interval,
-          monthlyReturnLimit: config.monthlyReturnLimit,
-          currentPeriodEnd: active.currentPeriodEnd ? new Date(active.currentPeriodEnd) : null,
-        },
+        data: { status: "PENDING", name: remote.name || local.name },
       });
     }
-  } catch (err: any) {
-    console.warn(`[Billing Service] syncSubscriptionState note: ${err.message}`);
+    if (remote?.id && remoteStatus === "ACTIVE") {
+      throw new Error("Shopify reported an active subscription that was not present in activeSubscriptions. Local plan was left unchanged; retry billing sync or contact support.");
+    }
+    if (remote?.id && !["CANCELLED", "DECLINED", "EXPIRED", "FROZEN"].includes(remoteStatus)) {
+      throw new Error(`Shopify returned an unrecognized subscription status (${remoteStatus || "unknown"}). Local plan was left unchanged.`);
+    }
   }
 
-  return getStoreSubscription(shopifyStoreId);
+  const free = PLAN_CONFIGS.FREE;
+  const current = await prisma.billingSubscription.findUnique({ where: { shopifyStoreId } });
+  if (!current) return getStoreSubscription(shopifyStoreId);
+  return prisma.billingSubscription.update({
+    where: { shopifyStoreId },
+    data: {
+      shopifySubscriptionId: null,
+      name: free.name,
+      planCode: free.code,
+      status: "ACTIVE",
+      price: free.price,
+      currency: free.currency,
+      interval: free.interval,
+      monthlyReturnLimit: free.monthlyReturnLimit,
+      currentPeriodEnd: null,
+    },
+  });
 }
 
 /**
