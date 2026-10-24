@@ -380,7 +380,7 @@ export default function Exchanges() {
   const isApproving = fetcher.state !== "idle" && fetcher.formData?.get("status") === "APPROVED";
 
   return (
-    <div className="bc-page">
+    <div className="bc-page bc-exchanges-page">
       <header className="bc-header">
         <div className="bc-page-bar">
           <div className="bc-header-copy">
