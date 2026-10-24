@@ -63,6 +63,9 @@ export async function ensureReconciliationScheduledForAllStores() {
 
 /** Ensure one store-scoped periodic courier status refresh exists in the queue. */
 export async function ensureCourierTrackingScheduled(shopifyStoreId: string) {
+  const settings = await getCourierOperationsSettings(shopifyStoreId);
+  if (!settings.autoCourierTracking) return;
+
   const existingJob = await prisma.backgroundJob.findFirst({
     where: {
       shopifyStoreId,
