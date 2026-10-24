@@ -73,7 +73,24 @@ export async function action({ request }: Route.ActionArgs) {
 export default function Analytics() {
   const { analytics, range, dataAvailable = true } = useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
-  const { summary, returnReasons, monthlyTrend, topReturnedProducts } = analytics;
+  const { summary, returnReasons, monthlyTrend, topReturnedProducts, returnsByStatus, exchangesByStatus } = analytics;
+  const statusCount = (items: Array<{ status: string; count: number }>, statuses: string[]) =>
+    items.filter((item) => statuses.includes(String(item.status).toUpperCase())).reduce((sum, item) => sum + Number(item.count || 0), 0);
+  const statusTotal = (items: Array<{ status: string; count: number }>) =>
+    items.reduce((sum, item) => sum + Number(item.count || 0), 0);
+  const openReturns = statusCount(returnsByStatus, ["PENDING", "APPROVED", "RECEIVED", "INSPECTED"]);
+  const terminalReturns = statusCount(returnsByStatus, ["COMPLETED", "REJECTED", "CANCELLED"]);
+  const rejectedReturns = statusCount(returnsByStatus, ["REJECTED", "CANCELLED"]);
+  const completedExchanges = statusCount(exchangesByStatus, ["COMPLETED", "FULFILLED"]);
+  const rejectedExchanges = statusCount(exchangesByStatus, ["REJECTED", "CANCELLED"]);
+  const exchangeCompletionRate = statusTotal(exchangesByStatus) > 0
+    ? Math.round((completedExchanges / statusTotal(exchangesByStatus)) * 100)
+    : null;
+  const returnRejectionRate = statusTotal(returnsByStatus) > 0
+    ? Math.round((rejectedReturns / statusTotal(returnsByStatus)) * 100)
+    : null;
+  const maximumReturnStatus = Math.max(1, ...returnsByStatus.map((item: { count: number }) => Number(item.count || 0)));
+  const maximumExchangeStatus = Math.max(1, ...exchangesByStatus.map((item: { count: number }) => Number(item.count || 0)));
   const otherRefundCurrencies = (summary.confirmedRefundsByCurrency || []).filter((item: { currency: string }) => item.currency !== "PKR");
   const exportFetcher = useFetcher();
 
@@ -165,10 +182,9 @@ export default function Analytics() {
             {!dataAvailable
               ? "Sales and return data unavailable"
               : summary.unitReturnRate === null
-                ? "No valid sold-unit denominator in the selected order cohort"
-                : summary.receivedReturnUnits.toLocaleString("en-PK") + " received/inspected units ÷ " + summary.orderedUnits.toLocaleString("en-PK") + " ordered units"}
+                ? "No valid sold-unit denominator"
+                : `${summary.receivedReturnUnits.toLocaleString("en-PK")} confirmed units from ${summary.orderedUnits.toLocaleString("en-PK")} ordered units`}
           </p>
-          <p className="bc-muted">Based on non-cancelled orders placed in the selected period; returns may be received later. Unfulfilled orders may still be in the denominator.</p>
         </article>
         <article className="bc-kpi-card">
           <span className="bc-kpi-label">Confirmed refunds (PKR)</span>
@@ -183,6 +199,65 @@ export default function Analytics() {
           <p className="bc-kpi-value bc-kpi-value-currency">{dataAvailable ? (summary.revenueFromExchanges || 0).toLocaleString("en-PK") : "—"}</p>
           <p className="bc-muted">Completed exchanges; currency is not stored per item and no conversion is applied</p>
         </article>
+      </section>
+
+      <p className="bc-muted bc-analytics-definition">
+        Unit-return ratio uses warehouse-received/inspected items from the selected order cohort. Returns can arrive later, and unfulfilled orders may still be in the denominator. Request shares measure request mix, not unit return rates.
+      </p>
+
+      <section className="bc-analytics-operations">
+        <div className="bc-analytics-section-heading">
+          <div>
+            <p className="bc-eyebrow">OPERATIONS</p>
+            <h2 className="bc-title">Request health &amp; resolution</h2>
+            <p className="bc-muted">Use these rates to spot queue backlogs and understand how return and exchange requests are resolving.</p>
+          </div>
+          <span className="bc-badge">{dataAvailable ? (openReturns + statusCount(exchangesByStatus, ["PENDING", "APPROVED", "RECEIVED", "INSPECTED"])) + " active requests" : "Unavailable"}</span>
+        </div>
+
+        <div className="bc-analytics-ops-kpis">
+          <article className="bc-analytics-ops-kpi">
+            <span>Open return requests</span>
+            <strong>{dataAvailable ? openReturns.toLocaleString("en-PK") : "—"}</strong>
+            <small>Pending review, approved, or awaiting receipt/inspection</small>
+          </article>
+          <article className="bc-analytics-ops-kpi">
+            <span>Return rejection / cancellation</span>
+            <strong>{dataAvailable && returnRejectionRate !== null ? `${returnRejectionRate}%` : dataAvailable ? "N/A" : "—"}</strong>
+            <small>{statusTotal(returnsByStatus).toLocaleString("en-PK")} total return requests</small>
+          </article>
+          <article className="bc-analytics-ops-kpi">
+            <span>Exchange completion rate</span>
+            <strong>{dataAvailable && exchangeCompletionRate !== null ? `${exchangeCompletionRate}%` : dataAvailable ? "N/A" : "—"}</strong>
+            <small>{completedExchanges.toLocaleString("en-PK")} completed of {statusTotal(exchangesByStatus).toLocaleString("en-PK")} exchange requests</small>
+          </article>
+          <article className="bc-analytics-ops-kpi">
+            <span>Cancelled / rejected exchanges</span>
+            <strong>{dataAvailable ? rejectedExchanges.toLocaleString("en-PK") : "—"}</strong>
+            <small>Requests not completed</small>
+          </article>
+        </div>
+
+        <div className="bc-analytics-status-grid">
+          <article className="bc-card bc-analytics-status-card">
+            <h3 className="bc-title">Return lifecycle</h3>
+            {!dataAvailable || returnsByStatus.length === 0 ? <p className="bc-muted">{dataAvailable ? "No return requests in this period." : "Unavailable"}</p> : returnsByStatus.map((item: {status:string;count:number}) => (
+              <div className="bc-analytics-status-row" key={item.status}>
+                <div><span>{item.status.replaceAll("_", " ")}</span><strong>{Number(item.count).toLocaleString("en-PK")}</strong></div>
+                <div className="bc-analytics-status-track"><span style={{width:`${Math.min(100,(Number(item.count)/maximumReturnStatus)*100)}%`}} /></div>
+              </div>
+            ))}
+          </article>
+          <article className="bc-card bc-analytics-status-card">
+            <h3 className="bc-title">Exchange lifecycle</h3>
+            {!dataAvailable || exchangesByStatus.length === 0 ? <p className="bc-muted">{dataAvailable ? "No exchange requests in this period." : "Unavailable"}</p> : exchangesByStatus.map((item: {status:string;count:number}) => (
+              <div className="bc-analytics-status-row" key={item.status}>
+                <div><span>{item.status.replaceAll("_", " ")}</span><strong>{Number(item.count).toLocaleString("en-PK")}</strong></div>
+                <div className="bc-analytics-status-track"><span style={{width:`${Math.min(100,(Number(item.count)/maximumExchangeStatus)*100)}%`}} /></div>
+              </div>
+            ))}
+          </article>
+        </div>
       </section>
 
       {/* Monthly Return Trend Chart */}
