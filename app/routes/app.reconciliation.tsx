@@ -68,11 +68,10 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     if (intent === "MARK") {
-      const orderIds = String(form.get("orderIds") || "")
+      const orderIds = Array.from(new Set(String(form.get("orderIds") || "")
         .split(",")
         .map((id) => id.trim())
-        .filter(Boolean)
-        .slice(0, 20);
+        .filter((id) => id.startsWith("gid://shopify/Order/"))));
 
       if (!orderIds.length) {
         return { ok: false, intent: "MARK", message: "Select at least one settled order." };
