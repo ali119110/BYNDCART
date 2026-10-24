@@ -428,6 +428,10 @@ export async function processNotificationJob(payload: {
       sendResult = await dispatchWhatsAppNotification({
         to: recipient,
         message: renderedBody,
+        eventType,
+        templateVariables: Object.fromEntries(
+          Object.entries(templateVariables).map(([key, value]) => [key, value === undefined || value === null ? "" : String(value)]),
+        ),
         shopifyStoreId,
       });
     }
