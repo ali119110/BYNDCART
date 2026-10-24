@@ -39,11 +39,21 @@ export async function loader({ request }: Route.LoaderArgs) {
           unitReturnRate: null,
           totalRefunded: 0,
           confirmedRefundsByCurrency: [],
+          pendingRefundsByCurrency: [],
+          openReturnRequests: 0,
+          completedReturnRequests: 0,
+          rejectedOrCancelledReturns: 0,
+          openExchangeRequests: 0,
+          completedExchangeRequests: 0,
+          rejectedOrCancelledExchanges: 0,
+          activeShipments: 0,
+          deliveryExceptions: 0,
           revenueFromExchanges: 0,
           revenueRetained: 0,
         },
         returnsByStatus: [],
         exchangesByStatus: [],
+        shipmentsByStatus: [],
         returnReasons: [],
         monthlyTrend: [],
         topReturnedProducts: [],
@@ -74,6 +84,10 @@ export default function Analytics() {
   const { analytics, range, dataAvailable = true } = useLoaderData<typeof loader>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { summary, returnReasons, monthlyTrend, topReturnedProducts } = analytics;
+  const returnsByStatus = analytics.returnsByStatus || [];
+  const exchangesByStatus = analytics.exchangesByStatus || [];
+  const shipmentsByStatus = analytics.shipmentsByStatus || [];
+  const pendingRefundCurrencies = summary.pendingRefundsByCurrency || [];
   const otherRefundCurrencies = (summary.confirmedRefundsByCurrency || []).filter((item: { currency: string }) => item.currency !== "PKR");
   const exportFetcher = useFetcher();
 
@@ -100,13 +114,13 @@ export default function Analytics() {
   const displayProducts = topReturnedProducts.slice(0, 5);
 
   return (
-    <div className="bc-page">
+    <div className="bc-page bc-analytics-page">
       <header className="bc-header">
         <div className="bc-page-bar">
           <div className="bc-header-copy">
             <p className="bc-eyebrow">INSIGHTS</p>
             <h1>Analytics</h1>
-            <p>Warehouse-confirmed item return rate, request mix, confirmed refund payouts, and product return units.</p>
+            <p>Return and exchange demand, warehouse pipeline, refund exposure, carrier delivery health, and product-level return performance.</p>
           </div>
           <div className="bc-dashboard-controls">
             <div className="bc-range-filter" role="group" aria-label="Filter analytics date range">
@@ -178,11 +192,73 @@ export default function Analytics() {
             <p className="bc-muted">{otherRefundCurrencies.map((item: { currency: string; amount: number }) => item.currency + " " + item.amount.toLocaleString()).join(" · ")} in other currencies</p>
           )}
         </article>
-        <article className="bc-kpi-card bc-kpi-revenue">
-          <span className="bc-kpi-label">Recorded exchange price difference</span>
-          <p className="bc-kpi-value bc-kpi-value-currency">{dataAvailable ? (summary.revenueFromExchanges || 0).toLocaleString("en-PK") : "—"}</p>
-          <p className="bc-muted">Completed exchanges; currency is not stored per item and no conversion is applied</p>
-        </article>
+      </section>
+
+      <section className="bc-analytics-section">
+        <div className="bc-analytics-section-heading">
+          <div>
+            <h2 className="bc-title">Operations at a glance</h2>
+            <p className="bc-muted">Work currently in the return, exchange, refund, and delivery pipeline for the selected period.</p>
+          </div>
+        </div>
+        <div className="bc-kpi-grid bc-analytics-ops-grid">
+          <article className="bc-kpi-card bc-kpi-returns">
+            <span className="bc-kpi-label">Open return requests</span>
+            <p className="bc-kpi-value">{dataAvailable ? summary.openReturnRequests : "—"}</p>
+            <p className="bc-kpi-sub">Pending approval, receipt, inspection, or refund processing</p>
+          </article>
+          <article className="bc-kpi-card bc-kpi-exchanges">
+            <span className="bc-kpi-label">Open exchange requests</span>
+            <p className="bc-kpi-value">{dataAvailable ? summary.openExchangeRequests : "—"}</p>
+            <p className="bc-kpi-sub">Pending, receiving, inspection, or replacement fulfillment</p>
+          </article>
+          <article className="bc-kpi-card bc-kpi-revenue">
+            <span className="bc-kpi-label">Active courier shipments</span>
+            <p className="bc-kpi-value">{dataAvailable ? summary.activeShipments : "—"}</p>
+            <p className="bc-kpi-sub">Excludes delivered, failed, and cancelled records</p>
+          </article>
+          <article className="bc-kpi-card">
+            <span className="bc-kpi-label">Delivery exceptions</span>
+            <p className="bc-kpi-value">{dataAvailable ? summary.deliveryExceptions : "—"}</p>
+            <p className="bc-kpi-sub">Failed or cancelled shipment records</p>
+          </article>
+        </div>
+        <div className="bc-analytics-secondary-kpis">
+          <article className="bc-card">
+            <span className="bc-kpi-label">Completed returns</span>
+            <p className="bc-kpi-value">{dataAvailable ? summary.completedReturnRequests : "—"}</p>
+            <p className="bc-kpi-sub">Return requests in completed status</p>
+          </article>
+          <article className="bc-card">
+            <span className="bc-kpi-label">Completed exchanges</span>
+            <p className="bc-kpi-value">{dataAvailable ? summary.completedExchangeRequests : "—"}</p>
+            <p className="bc-kpi-sub">Completed exchange requests</p>
+          </article>
+          <article className="bc-card">
+            <span className="bc-kpi-label">Rejected / cancelled requests</span>
+            <p className="bc-kpi-value">{dataAvailable ? summary.rejectedOrCancelledReturns + summary.rejectedOrCancelledExchanges : "—"}</p>
+            <p className="bc-kpi-sub">Combined return and exchange requests</p>
+          </article>
+          <article className="bc-card">
+            <span className="bc-kpi-label">Pending refund exposure</span>
+            {dataAvailable && pendingRefundCurrencies.length ? (
+              <div className="bc-analytics-currency-list">
+                {pendingRefundCurrencies.map((item: { currency: string; amount: number; count: number }) => (
+                  <div key={item.currency}>
+                    <strong>{item.currency} {item.amount.toLocaleString("en-PK", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                    <span>{item.count} pending record(s)</span>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="bc-kpi-value">{dataAvailable ? "0" : "—"}</p>}
+            <p className="bc-kpi-sub">Pending records are not confirmed payouts</p>
+          </article>
+          <article className="bc-card">
+            <span className="bc-kpi-label">Exchange price difference</span>
+            <p className="bc-kpi-value bc-kpi-value-currency">{dataAvailable ? (summary.revenueFromExchanges || 0).toLocaleString("en-PK") : "—"}</p>
+            <p className="bc-kpi-sub">Completed exchanges; currency conversion is not applied</p>
+          </article>
+        </div>
       </section>
 
       {/* Monthly Return Trend Chart */}
@@ -241,6 +317,56 @@ export default function Analytics() {
               </div>
             </>
           )}
+        </div>
+      </section>
+
+      <section className="bc-analytics-section">
+        <div className="bc-analytics-section-heading">
+          <div>
+            <h2 className="bc-title">Lifecycle and courier status</h2>
+            <p className="bc-muted">Live counts by recorded status. Shipment states come from the latest status stored by BYNDCART, not a guaranteed real-time carrier SLA.</p>
+          </div>
+        </div>
+        <div className="bc-analytics-pipeline-grid">
+          <article className="bc-card">
+            <h3 className="bc-subtitle">Returns pipeline</h3>
+            {!dataAvailable || !returnsByStatus.length ? <p className="bc-muted">No return status data available.</p> : (
+              <div className="bc-analytics-status-list">
+                {returnsByStatus.map((item: { status: string; count: number }) => (
+                  <div key={item.status}>
+                    <span className="bc-badge">{item.status.replaceAll("_", " ")}</span>
+                    <strong>{item.count}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
+          <article className="bc-card">
+            <h3 className="bc-subtitle">Exchanges pipeline</h3>
+            {!dataAvailable || !exchangesByStatus.length ? <p className="bc-muted">No exchange status data available.</p> : (
+              <div className="bc-analytics-status-list">
+                {exchangesByStatus.map((item: { status: string; count: number }) => (
+                  <div key={item.status}>
+                    <span className="bc-badge">{item.status.replaceAll("_", " ")}</span>
+                    <strong>{item.count}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
+          <article className="bc-card">
+            <h3 className="bc-subtitle">Courier shipments</h3>
+            {!dataAvailable || !shipmentsByStatus.length ? <p className="bc-muted">No shipment status data available for this range.</p> : (
+              <div className="bc-analytics-status-list">
+                {shipmentsByStatus.map((item: { courier: string; status: string; count: number }) => (
+                  <div key={`${item.courier}:${item.status}`}>
+                    <span><strong>{item.courier}</strong><small>{item.status.replaceAll("_", " ")}</small></span>
+                    <strong>{item.count}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
         </div>
       </section>
 
