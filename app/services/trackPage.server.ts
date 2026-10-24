@@ -8,6 +8,14 @@ export interface TrackLookupQuery {
   phone?: string;
 }
 
+function normalizeTrackingPhone(raw: string): string {
+  let digits = String(raw || "").replace(/\D/g, "");
+  if (digits.startsWith("0092")) digits = `0${digits.slice(4)}`;
+  else if (digits.startsWith("92") && digits.length === 12) digits = `0${digits.slice(2)}`;
+  else if (digits.length === 10 && digits.startsWith("3")) digits = `0${digits}`;
+  return digits;
+}
+
 /**
  * Looks up shipment tracking record by tracking number or order number
  */
@@ -30,10 +38,26 @@ export async function lookupShipmentTracking(shopifyStoreId: string, query: Trac
       },
     });
   } else if (cleanOrder) {
+    // Order numbers are enumerable, so never reveal a customer's tracking details from an
+    // order number alone. Require the checkout phone and verify it against this store's order.
+    const suppliedPhone = normalizeTrackingPhone(String(query.phone || ""));
+    if (!suppliedPhone) return null;
+
     const formattedOrder = cleanOrder.startsWith("#") ? cleanOrder : `#${cleanOrder}`;
+    const matchedOrder = await prisma.order.findFirst({
+      where: {
+        shopifyStoreId,
+        orderNumber: { in: [formattedOrder, cleanOrder] },
+      },
+      select: { shopifyOrderId: true, customerPhone: true },
+    });
+    const savedPhone = normalizeTrackingPhone(String(matchedOrder?.customerPhone || ""));
+    if (!matchedOrder?.shopifyOrderId || !savedPhone || savedPhone !== suppliedPhone) return null;
+
     shipment = await prisma.shipmentTrack.findFirst({
       where: {
         shopifyStoreId,
+        shopifyOrderId: matchedOrder.shopifyOrderId,
         OR: [
           { orderNumber: formattedOrder },
           { orderNumber: cleanOrder },
