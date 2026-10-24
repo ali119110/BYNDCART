@@ -460,16 +460,17 @@ function htmlPage(branding: StoreBranding, title: string, body: string, status =
     body {
       margin: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      background: var(--bc-p-bg);
+      background: radial-gradient(ellipse at top, #eef2ff 0%, var(--bc-p-bg) 45%);
       color: var(--bc-p-ink);
-      line-height: 1.5;
+      line-height: 1.55;
       -webkit-font-smoothing: antialiased;
     }
     .portal-header {
       background: var(--bc-p-surface);
       border-bottom: 1px solid var(--bc-p-line);
-      padding: 20px 24px;
+      padding: 24px 20px;
       text-align: center;
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.025);
     }
     .portal-logo {
       max-height: 48px;
@@ -493,9 +494,9 @@ function htmlPage(branding: StoreBranding, title: string, body: string, status =
       margin-top: 6px;
     }
     main {
-      max-width: 760px;
+      max-width: 920px;
       margin: 0 auto;
-      padding: 24px 16px 64px;
+      padding: clamp(18px, 3vw, 32px) 18px 64px;
     }
     h1 { font-size: 24px; letter-spacing: -0.02em; margin: 0 0 8px; }
     h2 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
@@ -505,10 +506,10 @@ function htmlPage(branding: StoreBranding, title: string, body: string, status =
     .portal-card {
       background: var(--bc-p-surface);
       border: 1px solid var(--bc-p-line);
-      border-radius: var(--bc-p-radius);
-      padding: 20px;
+      border-radius: 16px;
+      padding: clamp(18px, 3vw, 26px);
       margin: 16px 0;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      box-shadow: 0 12px 30px rgba(15, 23, 42, 0.045);
     }
     .portal-login-card {
       max-width: 480px;
@@ -540,7 +541,8 @@ function htmlPage(branding: StoreBranding, title: string, body: string, status =
     }
     input:focus, select:focus, textarea:focus {
       outline: none;
-      border-color: var(--bc-p-primary);
+      border-color: var(--bc-p-accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.11);
     }
     .btn {
       display: inline-flex;
@@ -810,6 +812,23 @@ function htmlPage(branding: StoreBranding, title: string, body: string, status =
       .item-fields { grid-template-columns: 1fr; }
       .portal-footer-inner { flex-direction: column; align-items: flex-start; }
       .portal-footer-right { margin-left: 0; }
+    }
+    .portal-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    @media (max-width: 640px) {
+      .portal-header { padding: 18px 14px; }
+      main { padding: 18px 12px 40px; }
+      .portal-card { border-radius: 13px; padding: 16px; }
+      .portal-login-card { margin: 18px auto; }
+      .history-row-header { flex-wrap: wrap; }
+      .history-date { margin-left: 0; width: 100%; }
+      .tracking-form { padding: 11px; }
+      .btn { max-width: 100%; }
     }
   </style>
 </head>
