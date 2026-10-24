@@ -121,16 +121,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   // 3. Connect Meta Embedded Signup (OAuth Code)
   if (actionType === "connectMetaEmbeddedSignup") {
-    const code = formData.get("code") as string;
-    if (!code) {
-      return { success: false, error: "Missing Meta authorization code." };
-    }
+    const code = String(formData.get("code") || "").trim();
+    const wabaId = String(formData.get("wabaId") || "").trim();
+    const phoneNumberId = String(formData.get("phoneNumberId") || "").trim();
+    if (!code) return { success: false, error: "Meta did not return an authorization code. Complete Embedded Signup and try again." };
 
     try {
-      await exchangeMetaEmbeddedSignupCode(store.id, code);
-      return { success: true, message: "WhatsApp Business connected successfully! Default templates installed." };
+      await exchangeMetaEmbeddedSignupCode(store.id, code, undefined, undefined, wabaId, phoneNumberId);
+      return { success: true, message: "This store's WhatsApp Business Account is connected. BYNDCART installed store-specific default templates. Send a test message and review Notifications → Logs before enabling automated sends." };
     } catch (err: any) {
-      return { success: false, error: err.message || "Failed to link Meta WhatsApp account." };
+      return { success: false, error: err.message || "Failed to link the selected Meta WhatsApp account." };
     }
   }
 
@@ -300,6 +300,29 @@ export default function Notifications() {
 
   const [testPhone, setTestPhone] = useState("");
   const [showTestModal, setShowTestModal] = useState(false);
+  const metaSignupResultRef = React.useRef<{ wabaId: string; phoneNumberId: string } | null>(null);
+
+  React.useEffect(() => {
+    const onMetaSignupMessage = (event: MessageEvent) => {
+      if (event.origin !== "https://www.facebook.com" && event.origin !== "https://web.facebook.com") return;
+      let payload: any;
+      try {
+        payload = typeof event.data === "string" ? JSON.parse(event.data) : event.data;
+      } catch {
+        return;
+      }
+      if (payload?.type !== "WA_EMBEDDED_SIGNUP") return;
+      const details = payload?.data || {};
+      if (payload.event === "FINISH" || payload.event === "FINISH_ONLY_WABA") {
+        metaSignupResultRef.current = {
+          wabaId: String(details.waba_id || ""),
+          phoneNumberId: String(details.phone_number_id || ""),
+        };
+      }
+    };
+    window.addEventListener("message", onMetaSignupMessage);
+    return () => window.removeEventListener("message", onMetaSignupMessage);
+  }, []);
 
   const isWaConnected = Boolean(
     whatsappConfig?.enabled && whatsappConfig?.phoneNumberId && whatsappConfig?.accessToken
@@ -323,20 +346,24 @@ export default function Notifications() {
   const launchMetaEmbeddedSignup = () => {
     if (typeof window === "undefined") return;
 
-    if (!metaAppId) {
-      alert("Meta App ID is not configured in server environment. Please use manual credentials entry.");
+    if (!metaAppId || !metaConfigId) {
+      alert("Meta App ID and Embedded Signup Config ID must be configured on the server. This setup cannot be completed with only a phone number.");
       setShowManualModal(true);
       return;
     }
 
     const fb = (window as any).FB;
     if (fb) {
+      metaSignupResultRef.current = null;
       fb.login(
         (response: any) => {
           if (response.authResponse?.code) {
             const fd = new FormData();
             fd.append("actionType", "connectMetaEmbeddedSignup");
             fd.append("code", response.authResponse.code);
+            const signupDetails = metaSignupResultRef.current;
+            if (signupDetails?.wabaId) fd.append("wabaId", signupDetails.wabaId);
+            if (signupDetails?.phoneNumberId) fd.append("phoneNumberId", signupDetails.phoneNumberId);
             fetcher.submit(fd, { method: "post" });
           } else {
             console.warn("Meta login cancelled or no code returned", response);
@@ -348,8 +375,8 @@ export default function Notifications() {
           override_default_response_type: true,
           extras: {
             setup: {},
-            featureType: "",
-            sessionInfoVersion: "2",
+            featureType: "whatsapp_business_app_onboarding",
+            sessionInfoVersion: "3",
           },
         }
       );
@@ -370,6 +397,9 @@ export default function Notifications() {
       </header>
 
       {loadError && <div role="alert" className="bc-note bad">{loadError}</div>}
+      <div className="bc-note" role="note">
+        <strong>Meta provider setup:</strong> Embedded Signup connects each merchant's own WhatsApp Business Account to this store. Production onboarding requires your Meta App ID, Embedded Signup Config ID, App Secret, approved permissions, and Meta's Tech Provider/Solution Partner access where applicable. BYNDCART cannot grant itself Meta partner status; complete Meta business verification and App Review in Meta Business Manager.
+      </div>
       {actionData?.error && <div className="bc-note bad">{actionData.error}</div>}
       {actionData?.message && <div className="bc-note ok">{actionData.message}</div>}
 
