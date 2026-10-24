@@ -1028,11 +1028,13 @@ export default function BookingsPage() {
             .bc-booking-table-wrap {
               width: 100%;
               min-width: 0;
-              overflow-x: hidden;
+              overflow-x: auto;
+              overflow-y: hidden;
+              scrollbar-width: thin;
             }
             .bc-booking-table {
               width: 100%;
-              min-width: 0;
+              min-width: 1360px;
               table-layout: fixed;
               border-collapse: separate;
               border-spacing: 0;
@@ -1056,8 +1058,8 @@ export default function BookingsPage() {
               padding-top: 7px !important;
               padding-bottom: 7px !important;
               font-size: 12px !important;
-              white-space: normal;
-              overflow-wrap: anywhere;
+              white-space: nowrap;
+              vertical-align: middle;
               line-height: 1.2;
             }
             .bc-booking-table td {
@@ -1085,7 +1087,8 @@ export default function BookingsPage() {
           <div
             className="bc-booking-table-wrap"
             style={{
-              overflowX: "hidden",
+              overflowX: "auto",
+              overflowY: "hidden",
               width: "100%",
               minWidth: 0,
               background: "#ffffff",
@@ -1096,7 +1099,7 @@ export default function BookingsPage() {
           >
             <table
               className="bc-booking-table"
-              style={{ width: "100%", minWidth: 0, tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, textAlign: "left", fontSize: "12px" }}
+              style={{ width: "100%", minWidth: "1360px", tableLayout: "fixed", borderCollapse: "separate", borderSpacing: 0, textAlign: "left", fontSize: "12px" }}
             >
               <colgroup>
                 <col style={{ width: "2.5%" }} />
