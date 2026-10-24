@@ -337,3 +337,135 @@ test("Loadsheet Service - Loadsheet creation and parcel assignment", async () =>
     /No eligible forward shipments found/,
   );
 });
+
+test("Shopify fulfillment sync creates fulfillment using the current mutation and confirmed tracking", async () => {
+  const orderId = "gid://shopify/Order/2001";
+  let createCalls = 0;
+  const admin = {
+    graphql: async (query: string) => {
+      if (query.includes("GetOrderFulfillmentOrders")) {
+        return new Response(JSON.stringify({
+          data: {
+            order: {
+              id: orderId,
+              displayFulfillmentStatus: "UNFULFILLED",
+              fulfillments: { nodes: [] },
+              fulfillmentOrders: {
+                nodes: [{
+                  id: "gid://shopify/FulfillmentOrder/3001",
+                  status: "OPEN",
+                  supportedActions: [{ action: "CREATE_FULFILLMENT" }],
+                  assignedLocation: { location: { id: "gid://shopify/Location/1" } },
+                }],
+              },
+            },
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (query.includes("mutation CreateFulfillment")) {
+        createCalls += 1;
+        assert.ok(query.includes("fulfillmentCreate("), "Should use the current fulfillmentCreate mutation");
+        assert.ok(!query.includes("fulfillmentCreateV2("), "Should not use deprecated fulfillmentCreateV2");
+        return new Response(JSON.stringify({
+          data: {
+            fulfillmentCreate: {
+              fulfillment: {
+                id: "gid://shopify/Fulfillment/4001",
+                status: "SUCCESS",
+                trackingInfo: [{ number: "PX-2001", company: "PostEx", url: "https://postex.pk/tracking?cn=PX-2001" }],
+              },
+              userErrors: [],
+            },
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      throw new Error("Unexpected Shopify GraphQL query in test.");
+    },
+  };
+
+  const { fulfillOrderInShopify } = await import("../services/booking.server");
+  const result = await fulfillOrderInShopify(admin, orderId, "POSTEX", "PX-2001");
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.fulfillmentId, "gid://shopify/Fulfillment/4001");
+  assert.strictEqual(createCalls, 1);
+});
+
+test("Shopify fulfillment sync reports top-level GraphQL errors instead of false success", async () => {
+  const orderId = "gid://shopify/Order/2002";
+  const admin = {
+    graphql: async (query: string) => {
+      if (query.includes("GetOrderFulfillmentOrders")) {
+        return new Response(JSON.stringify({
+          data: {
+            order: {
+              id: orderId,
+              displayFulfillmentStatus: "UNFULFILLED",
+              fulfillments: { nodes: [] },
+              fulfillmentOrders: {
+                nodes: [{
+                  id: "gid://shopify/FulfillmentOrder/3002",
+                  status: "OPEN",
+                  supportedActions: [{ action: "CREATE_FULFILLMENT" }],
+                  assignedLocation: { location: { id: "gid://shopify/Location/1" } },
+                }],
+              },
+            },
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({
+        errors: [{ message: "Access denied for fulfillmentCreate. Missing write_merchant_managed_fulfillment_orders scope." }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    },
+  };
+
+  const { fulfillOrderInShopify } = await import("../services/booking.server");
+  const result = await fulfillOrderInShopify(admin, orderId, "POSTEX", "PX-2002");
+  assert.strictEqual(result.success, false);
+  assert.match(result.error || "", /write_merchant_managed_fulfillment_orders/);
+});
+
+test("Shopify fulfillment sync is idempotent when the same tracking number is already fulfilled", async () => {
+  const orderId = "gid://shopify/Order/2003";
+  let createCalls = 0;
+  const admin = {
+    graphql: async (query: string) => {
+      if (query.includes("GetOrderFulfillmentOrders")) {
+        return new Response(JSON.stringify({
+          data: {
+            order: {
+              id: orderId,
+              displayFulfillmentStatus: "FULFILLED",
+              fulfillments: {
+                nodes: [{
+                  id: "gid://shopify/Fulfillment/4003",
+                  trackingInfo: [{ number: "PX-2003" }],
+                  fulfillmentOrders: { nodes: [{ id: "gid://shopify/FulfillmentOrder/3003" }] },
+                }],
+              },
+              fulfillmentOrders: {
+                nodes: [{
+                  id: "gid://shopify/FulfillmentOrder/3003",
+                  status: "CLOSED",
+                  supportedActions: [],
+                  assignedLocation: { location: { id: "gid://shopify/Location/1" } },
+                }],
+              },
+            },
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (query.includes("mutation CreateFulfillment")) {
+        createCalls += 1;
+      }
+      throw new Error("A duplicate fulfillment mutation must not run.");
+    },
+  };
+
+  const { fulfillOrderInShopify } = await import("../services/booking.server");
+  const result = await fulfillOrderInShopify(admin, orderId, "POSTEX", "PX-2003");
+  assert.strictEqual(result.success, true);
+  assert.strictEqual(result.fulfillmentId, "gid://shopify/Fulfillment/4003");
+  assert.strictEqual(createCalls, 0);
+});
+
