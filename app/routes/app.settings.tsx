@@ -1,5 +1,5 @@
 import React from "react";
-import { useLoaderData, useFetcher } from "react-router";
+import { Link, useLoaderData, useFetcher } from "react-router";
 import type { Route } from "./+types/app.settings";
 import { requireTenantContext } from "../utils/tenant.server";
 import {
@@ -11,6 +11,7 @@ import {
   type ShipperProfile,
 } from "../services/settings.server";
 import { getReturnPolicyRule, saveReturnPolicyRule } from "../services/policyEngine.server";
+import { checkFeatureAccess } from "../services/planGate.server";
 
 // ===== LOADER: Fetch settings & policy rules from database =====
 export async function loader({ request }: Route.LoaderArgs) {
@@ -25,9 +26,12 @@ export async function loader({ request }: Route.LoaderArgs) {
       orderTrackingUrl: `https://${shop}/apps/track`,
       baseUrlConfigured: Boolean(hostedPortalUrl),
     };
-    const policyRule = await getReturnPolicyRule(shopifyStoreId);
+    const [policyRule, aiFeaturesAvailable] = await Promise.all([
+      getReturnPolicyRule(shopifyStoreId),
+      checkFeatureAccess(shopifyStoreId, "COURIER_AI_CHECKS"),
+    ]);
 
-    return { settings, policyRule, portal };
+    return { settings, policyRule, portal, aiFeaturesAvailable };
   } catch (error) {
     console.error("Failed to fetch settings:", error);
     const portal = {
@@ -38,6 +42,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       baseUrlConfigured: false,
     };
     return {
+      aiFeaturesAvailable: false,
       settings: {
         portalSlug: null,
         returnWindowDays: 30,
@@ -120,6 +125,7 @@ export async function action({ request }: Route.ActionArgs) {
   const whatsappNumber = String(formData.get("whatsappNumber") || "").trim() || null;
   const returnAddress = String(formData.get("returnAddress") || "").trim() || null;
 
+  const aiFeaturesAllowedForSave = await checkFeatureAccess(shopifyStoreId, "COURIER_AI_CHECKS");
   const shipperProfiles = [0, 1, 2].map((index) => ({
     name: String(formData.get(`shipperProfile${index}Name`) || "").trim(),
     phone: String(formData.get(`shipperProfile${index}Phone`) || "").trim(),
@@ -131,9 +137,9 @@ export async function action({ request }: Route.ActionArgs) {
     sendDeliveryUpdates: formData.get("sendDeliveryUpdates") === "on",
     deliveryUpdatePage: String(formData.get("deliveryUpdatePage") || "COURIER_LOGS"),
     deliveryUpdateTemplate: String(formData.get("deliveryUpdateTemplate") || ""),
-    fraudCheckEnabled: formData.get("fraudCheckEnabled") === "on",
+    fraudCheckEnabled: aiFeaturesAllowedForSave && formData.get("fraudCheckEnabled") === "on",
     fraudTagDefinition: String(formData.get("fraudTagDefinition") || DEFAULT_COURIER_OPERATIONS_SETTINGS.fraudTagDefinition),
-    duplicateCheckEnabled: formData.get("duplicateCheckEnabled") === "on",
+    duplicateCheckEnabled: aiFeaturesAllowedForSave && formData.get("duplicateCheckEnabled") === "on",
     duplicateCheckDurationMinutes: Number(formData.get("duplicateCheckDurationMinutes") || 30),
     labelWebsite: String(formData.get("labelWebsite") || ""),
     labelLogoUrl: String(formData.get("labelLogoUrl") || ""),
@@ -203,7 +209,7 @@ export async function action({ request }: Route.ActionArgs) {
 
 // ===== COMPONENT =====
 export default function Settings() {
-  const { settings, policyRule, portal } = useLoaderData<typeof loader>();
+  const { settings, policyRule, portal, aiFeaturesAvailable } = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   const [copied, setCopied] = React.useState(false);
   const [copiedTracking, setCopiedTracking] = React.useState(false);
