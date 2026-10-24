@@ -187,18 +187,20 @@ test("Courier registry offers PostEx, Leopards, DHL, FedEx, and TCS", async () =
 });
 
 test("Courier configuration exposes only essential production credentials", () => {
-  const configs = new Map(CourierRegistry.getRegisteredAdapters().map((adapter) => [
-    adapter.providerName,
-    adapter.fields.map((field) => field.key),
-  ]));
+  const configs: Record<string, string[]> = Object.fromEntries(
+    CourierRegistry.getRegisteredAdapters().map((adapter) => [
+      adapter.providerName,
+      adapter.fields.map((field) => field.key),
+    ]),
+  );
 
-  assert.deepStrictEqual(configs.get("POSTEX"), ["apiToken"]);
-  assert.deepStrictEqual(configs.get("LEOPARDS"), ["apiKey", "apiPassword"]);
-  assert.deepStrictEqual(configs.get("DHL"), ["username", "password", "accountNumber"]);
-  assert.deepStrictEqual(configs.get("FEDEX"), ["clientId", "clientSecret", "accountNumber"]);
-  assert.deepStrictEqual(configs.get("TCS"), ["clientId", "userName", "password", "costCenterCode"]);
+  assert.deepStrictEqual(configs.POSTEX, ["apiToken"]);
+  assert.deepStrictEqual(configs.LEOPARDS, ["apiKey", "apiPassword"]);
+  assert.deepStrictEqual(configs.DHL, ["username", "password", "accountNumber"]);
+  assert.deepStrictEqual(configs.FEDEX, ["clientId", "clientSecret", "accountNumber"]);
+  assert.deepStrictEqual(configs.TCS, ["clientId", "userName", "password", "costCenterCode"]);
 
-  for (const [provider, fields] of configs) {
+  for (const [provider, fields] of Object.entries(configs)) {
     assert.ok(!fields.includes("environment"), `${provider} should not expose a test/production selector`);
     assert.ok(!fields.includes("warehouseAddress"), `${provider} should use the shared shipper profile`);
     assert.ok(!fields.includes("warehouseCity"), `${provider} should use the shared shipper profile`);
