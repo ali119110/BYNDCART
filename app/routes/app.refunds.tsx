@@ -5,8 +5,7 @@ import { requireTenantContext } from "../utils/tenant.server";
 import { assertPermission } from "../services/permissions.server";
 import prisma from "../db.server";
 import { triggerLifecycleNotification } from "../services/notifications.server";
-import { validateEvidence, saveEvidence } from "../services/evidence.server";
-import { listEvidence, saveEvidence } from "../services/evidence.server";
+import { validateEvidence, saveEvidence, listEvidence } from "../services/evidence.server";
 import {
   confirmRefundRecord,
   convertExchangeToManualRefund,
@@ -250,6 +249,12 @@ export async function action({ request }: ActionFunctionArgs) {
 
     const method = String(form.get("method") || "");
     if (!isRefundMethod(method)) return { ok: false, message: "Choose a refund method." };
+    if (method === "SHOPIFY") {
+      return {
+        ok: false,
+        message: "This form records external refund payments only. To issue a Shopify payment refund, open the order in Shopify Admin and use Shopify's refund action, then record the confirmed result here.",
+      };
+    }
     const amount = Number(form.get("amount"));
     const returnRequestId = String(form.get("returnRequestId") || "").trim() || undefined;
     const exchangeRequestId = String(form.get("exchangeRequestId") || "").trim() || undefined;
