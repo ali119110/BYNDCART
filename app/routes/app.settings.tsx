@@ -451,7 +451,7 @@ export default function Settings() {
             <div className="bco-field">
               <label htmlFor="deliveryUpdateTemplate">Message template</label>
               <textarea id="deliveryUpdateTemplate" name="deliveryUpdateTemplate" rows={5} defaultValue={settings.courierOperationsSettings?.deliveryUpdateTemplate || DEFAULT_COURIER_OPERATIONS_SETTINGS.deliveryUpdateTemplate} />
-              <span className="bco-help">Variables: {"{{customer_name}}"}, {"{{customer_phone}}"}, {"{{order_number}}"}, {"{{order_amount}}"}, {"{{courier_name}}"}, {"{{tracking_number}}"}, {"{{tracking_url}}"}.</span>
+              <span className="bco-help">Variables: [customer_name], [customer_phone], [order_number], [order_amount], [courier_name], [tracking_number], [tracking_url], and [line] for a new line. Curly-brace placeholders are also supported.</span>
             </div>
           </div>
         </section>
