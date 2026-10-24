@@ -10,16 +10,24 @@ import {
   isRefundMethod,
   listRefundRecords,
 } from "../services/refunds.server";
+import { triggerLifecycleNotification } from "../services/notifications.server";
+import prisma from "../db.server";
 
 const REFUND_METHODS = ["SHOPIFY", "STORE_CREDIT", "BANK_TRANSFER", "EASYPAISA", "JAZZCASH", "MANUAL"] as const;
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { shopifyStoreId } = await requireTenantContext(request);
-  const [refunds, evidence] = await Promise.all([
+  const [refunds, evidence, returnRequests] = await Promise.all([
     listRefundRecords(shopifyStoreId),
     listEvidence(shopifyStoreId),
+    prisma.returnRequest.findMany({
+      where: { shopifyStoreId, status: { notIn: ["CANCELLED", "REJECTED"] } },
+      include: { items: true },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    }),
   ]);
-  return { refunds, evidence };
+  return { refunds, evidence, returnRequests };
 }
 
 export async function action({ request }: ActionFunctionArgs) {
@@ -32,6 +40,73 @@ export async function action({ request }: ActionFunctionArgs) {
     if (intent === "CONFIRM_REFUND") {
       await confirmRefundRecord(String(form.get("refundId") || ""), shopifyStoreId);
       return { ok: true, message: "Refund marked confirmed by a merchant. This is not a payment-provider receipt." };
+    }
+
+    if (intent === "SEND_REFUND_NOTIFICATION") {
+      const refundId = String(form.get("refundId") || "").trim();
+      const refund = await prisma.refundRecord.findFirst({ where: { id: refundId, shopifyStoreId } });
+      if (!refund) return { ok: false, message: "Refund record not found for this store." };
+      if (refund.status !== "CONFIRMED") return { ok: false, message: "Confirm the refund payment record before notifying the customer." };
+      if (!refund.returnRequestId) return { ok: false, message: "Customer notifications are currently available for refunds linked to a return request." };
+
+      const returnRequest = await prisma.returnRequest.findFirst({
+        where: { id: refund.returnRequestId, shopifyStoreId },
+        select: { id: true, shopifyOrderId: true, orderNumber: true, customerEmail: true, customerName: true },
+      });
+      if (!returnRequest) return { ok: false, message: "Linked return request was not found for this store." };
+      const attachedEvidence = await listEvidence(shopifyStoreId, returnRequest.id);
+      if (!attachedEvidence.length) return { ok: false, message: "Attach the refund transfer screenshot/receipt before sending customer notifications." };
+
+      const order = await prisma.order.findFirst({
+        where: { shopifyStoreId, shopifyOrderId: returnRequest.shopifyOrderId },
+        select: { customerEmail: true, customerPhone: true, customerName: true, currency: true },
+      });
+      const email = String(returnRequest.customerEmail || order?.customerEmail || "").trim();
+      const phone = String(order?.customerPhone || "").trim();
+      if (!email && !phone) return { ok: false, message: "The linked order has no customer email or phone number." };
+
+      const variables = {
+        customer_name: returnRequest.customerName || order?.customerName || "Customer",
+        order_number: returnRequest.orderNumber,
+        refund_amount: String(refund.amount),
+        refund_currency: refund.currency || "PKR",
+        refund_method: refund.method.replaceAll("_", " "),
+        refund_reference: refund.reference || "Not provided",
+        refund_reason: refund.reason || "Return refund",
+      };
+      const tasks: Array<Promise<any>> = [];
+      if (email) tasks.push(triggerLifecycleNotification({
+        shopifyStoreId,
+        eventType: "REFUND_INITIATED",
+        entityId: refund.id,
+        recipientEmail: email,
+        recipientPhone: phone,
+        channel: "EMAIL",
+        variables,
+      }));
+      if (phone) tasks.push(triggerLifecycleNotification({
+        shopifyStoreId,
+        eventType: "REFUND_INITIATED",
+        entityId: refund.id,
+        recipientEmail: email,
+        recipientPhone: phone,
+        channel: "WHATSAPP",
+        variables,
+      }));
+      const results = await Promise.all(tasks);
+      await prisma.auditLog.create({
+        data: {
+          shopifyStoreId,
+          action: "REFUND_CUSTOMER_NOTIFICATIONS_REQUESTED",
+          entityType: "RefundRecord",
+          entityId: refund.id,
+          metadata: { emailRequested: Boolean(email), whatsappRequested: Boolean(phone), statuses: results.map((result) => result.status || "UNKNOWN") },
+        },
+      });
+      return {
+        ok: true,
+        message: `Customer notifications queued for ${[email ? "email" : "", phone ? "WhatsApp" : ""].filter(Boolean).join(" and ")}. Check Notifications → Logs for delivery status.`,
+      };
     }
 
     if (intent === "ATTACH_EVIDENCE") {
@@ -84,14 +159,21 @@ export async function action({ request }: ActionFunctionArgs) {
       return { ok: true, message: "Exchange cancelled and a pending refund record was opened. Shopify was not refunded." };
     }
 
-    await createRefundRecord({
+    const confirmed = form.get("confirmed") === "yes";
+    const refund = await createRefundRecord({
       ...payload,
       returnRequestId,
       exchangeRequestId,
-      confirmed: form.get("confirmed") === "yes",
+      confirmed,
     });
-    return { ok: true, message: form.get("confirmed") === "yes"
-      ? "Refund recorded as merchant-confirmed."
+    if (confirmed && returnRequestId) {
+      await prisma.returnRequest.updateMany({
+        where: { id: returnRequestId, shopifyStoreId },
+        data: { refundAmount: amount },
+      });
+    }
+    return { ok: true, message: confirmed
+      ? `Refund record ${refund.id} marked merchant-confirmed. Attach the receipt screenshot, then send customer notifications. This does not prove a payment-provider settlement.`
       : "Refund saved as pending. It is not marked paid." };
   } catch (error: unknown) {
     if (error instanceof Response) throw error;
@@ -106,7 +188,7 @@ function badgeClass(status: string) {
 }
 
 export default function RefundsPage() {
-  const { refunds, evidence } = useLoaderData<typeof loader>();
+  const { refunds, evidence, returnRequests } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
 
   return (
@@ -119,6 +201,86 @@ export default function RefundsPage() {
         </div>
       </header>
       {actionData?.message && <div className={actionData.ok ? "bc-note ok" : "bc-note bad"}>{actionData.message}</div>}
+      <section className="bc-card bc-stack">
+        <div>
+          <p className="bc-eyebrow">REFUND WORK QUEUE</p>
+          <h2 className="bc-title">Return requests awaiting refund review</h2>
+          <p className="bc-muted">Open a request to review the reason and item details submitted through the customer portal. After recording the payout, attach a screenshot or receipt before notifying the customer.</p>
+        </div>
+        <div className="bc-table-wrap">
+          <table className="bc-table">
+            <thead><tr><th>Order</th><th>Customer</th><th>Reason / note</th><th>Items</th><th>Status</th><th>Review / give refund</th></tr></thead>
+            <tbody>
+              {returnRequests.length === 0 && <tr><td colSpan={6}>No return requests to review.</td></tr>}
+              {returnRequests.map((request) => {
+                const requestEvidence = evidence.filter((item) => item.returnRequestId === request.id);
+                const existingRefund = refunds.find((item) => item.returnRequestId === request.id && item.status !== "CANCELLED");
+                return (
+                  <tr key={request.id}>
+                    <td><strong>{request.orderNumber}</strong><div className="bc-hint">{new Date(request.createdAt).toLocaleDateString("en-PK")}</div></td>
+                    <td>{request.customerName || "Customer"}<div className="bc-hint">{request.customerEmail}</div></td>
+                    <td>{request.reason || "Reason not specified"}<div className="bc-hint">{request.customerNote || "No additional customer note"}</div></td>
+                    <td>{(request.items || []).map((item: any) => <div key={item.id} className="bc-hint">{item.quantity} × {item.reason}{item.reasonNote ? `: ${item.reasonNote}` : ""}</div>)}</td>
+                    <td><span className={badgeClass(request.status)}>{request.status}</span>{existingRefund && <div className="bc-hint">Refund: {existingRefund.currency} {String(existingRefund.amount)} · {existingRefund.status}</div>}</td>
+                    <td>
+                      <details className="bc-refund-review">
+                        <summary>{existingRefund ? "Review / continue" : "Give refund"}</summary>
+                        <div className="bc-refund-review-body">
+                          <p><strong>Customer-submitted details</strong></p>
+                          <p className="bc-muted">Reason: {request.reason || "—"}<br />Note: {request.customerNote || "—"}<br />Admin note: {request.adminNote || "—"}<br />Policy override: {request.policyOverrideReason || "—"}</p>
+                          <p className="bc-muted">{requestEvidence.length} receipt/evidence file(s) saved.</p>
+                          {!existingRefund && (
+                            <Form method="post" className="bc-refund-inline-form">
+                              <input type="hidden" name="intent" value="CREATE_REFUND" />
+                              <input type="hidden" name="returnRequestId" value={request.id} />
+                              <label>Refund method
+                                <select name="method" defaultValue="BANK_TRANSFER">
+                                  {REFUND_METHODS.map((method) => <option key={method} value={method}>{method.replaceAll("_", " ")}</option>)}
+                                </select>
+                              </label>
+                              <label>Amount (PKR)
+                                <input name="amount" type="number" min="0.01" step="0.01" required defaultValue={request.refundAmount ? String(request.refundAmount) : ""} />
+                              </label>
+                              <label>Transaction / payment reference<input name="reference" placeholder="Bank, wallet, or Shopify reference" /></label>
+                              <label>Reason / note<input name="reason" defaultValue={request.reason || "Return refund"} /></label>
+                              <label>Payment status
+                                <select name="confirmed" defaultValue="no"><option value="no">Pending — not paid yet</option><option value="yes">Paid — I have sent the amount</option></select>
+                              </label>
+                              <button type="submit" className="bc-btn primary">Save refund record</button>
+                            </Form>
+                          )}
+                          {existingRefund?.status === "CONFIRMED" && (
+                            <div className="bc-refund-next-steps">
+                              {requestEvidence.length === 0 && (
+                                <Form method="post" encType="multipart/form-data" className="bc-refund-inline-form">
+                                  <input type="hidden" name="intent" value="ATTACH_EVIDENCE" />
+                                  <input type="hidden" name="returnRequestId" value={request.id} />
+                                  <label>Upload transfer screenshot / receipt (JPEG, PNG, WebP, MP4; max 1.5 MB)
+                                    <input name="file" type="file" accept="image/jpeg,image/png,image/webp,video/mp4" required />
+                                  </label>
+                                  <button type="submit" className="bc-btn">Attach receipt</button>
+                                </Form>
+                              )}
+                              {requestEvidence.length > 0 && (
+                                <Form method="post">
+                                  <input type="hidden" name="intent" value="SEND_REFUND_NOTIFICATION" />
+                                  <input type="hidden" name="refundId" value={existingRefund.id} />
+                                  <button type="submit" className="bc-btn primary">Send email / WhatsApp update</button>
+                                </Form>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </details>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       <div className="bc-split">
         <Form method="post" className="bc-form">
           <h2 className="bc-title">Record a refund</h2>
