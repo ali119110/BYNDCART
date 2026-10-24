@@ -163,7 +163,7 @@ export async function renderTrackPageHtml(
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Track Your Order — ${brandName}</title>
+  <title>Track Your Order — ${safeBrandName}</title>
   <style>
     :root {
       --bg: #f9fafb;
@@ -337,12 +337,12 @@ export async function renderTrackPageHtml(
     <div class="track-card">
       <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 14px; margin-bottom: 14px;">
         <div>
-          <span style="font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 700;">Order ${shipment.orderNumber}</span>
-          <h2 style="margin: 2px 0 0; font-size: 18px; font-weight: 800;">Status: ${statusLabel}</h2>
+          <span style="font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 700;">Order ${escapeTrackHtml(shipment.orderNumber)}</span>
+          <h2 style="margin: 2px 0 0; font-size: 18px; font-weight: 800;">Status: ${escapeTrackHtml(statusLabel)}</h2>
         </div>
         <div style="text-align: right;">
-          <span style="font-size: 11px; color: var(--muted);">Courier: <strong>${shipment.courier}</strong></span>
-          <div style="font-size: 13px; font-weight: 700; letter-spacing: 0.5px;">CN: ${shipment.trackingNumber}</div>
+          <span style="font-size: 11px; color: var(--muted);">Courier: <strong>${escapeTrackHtml(shipment.courier)}</strong></span>
+          <div style="font-size: 13px; font-weight: 700; letter-spacing: 0.5px;">CN: ${escapeTrackHtml(shipment.trackingNumber)}</div>
         </div>
       </div>
 
@@ -372,7 +372,7 @@ export async function renderTrackPageHtml(
 
       ${shipment.destinationCity ? `
       <div style="background: var(--bg); padding: 10px 14px; border-radius: 8px; font-size: 12px; margin: 16px 0; display: flex; justify-content: space-between;">
-        <span>Destination: <strong>${shipment.destinationCity}</strong></span>
+        <span>Destination: <strong>${escapeTrackHtml(shipment.destinationCity)}</strong></span>
         <span>COD Amount: <strong>${shipment.codAmount ? `PKR ${Math.round(Number(shipment.codAmount)).toLocaleString("en-PK")}` : "Paid"}</strong></span>
       </div>
       ` : ""}
@@ -384,9 +384,9 @@ export async function renderTrackPageHtml(
           <div class="timeline-item">
             <div class="timeline-date">${new Date(ev.timestamp).toLocaleDateString("en-PK", { month: "short", day: "numeric" })}<br/><span style="font-size: 10px;">${new Date(ev.timestamp).toLocaleTimeString("en-PK", { hour: "2-digit", minute: "2-digit" })}</span></div>
             <div class="timeline-info">
-              <strong>${ev.status.replace(/_/g, " ")}</strong>
-              ${ev.description ? `<div style="color: var(--muted); font-size: 12px;">${ev.description}</div>` : ""}
-              ${ev.location ? `<div style="font-size: 11px; color: var(--muted);">Location: ${ev.location}</div>` : ""}
+              <strong>${escapeTrackHtml(ev.status.replace(/_/g, " "))}</strong>
+              ${ev.description ? `<div style="color: var(--muted); font-size: 12px;">${escapeTrackHtml(ev.description)}</div>` : ""}
+              ${ev.location ? `<div style="font-size: 11px; color: var(--muted);">Location: ${escapeTrackHtml(ev.location)}</div>` : ""}
             </div>
           </div>
         `).join("") : `
