@@ -478,7 +478,14 @@ export async function dispatchWhatsAppNotification(input: SendWhatsAppInput): Pr
     }
   }
 
-  // Fallback to global registry (for unit tests / mock environment)
-  const registryAdapter = WhatsAppRegistry.getAdapter();
-  return await registryAdapter.sendWhatsAppMessage(input);
+  // The mock adapter is strictly test-only. Never mark a real merchant notification
+  // as sent when this store has not connected its own WhatsApp Business account.
+  if (process.env.NODE_ENV === "test" || process.env.SKIP_AUTH === "true") {
+    const registryAdapter = WhatsAppRegistry.getAdapter();
+    return await registryAdapter.sendWhatsAppMessage(input);
+  }
+  return {
+    success: false,
+    error: "This merchant has not connected a WhatsApp Business number. Connect WhatsApp in Notifications before trying again.",
+  };
 }
