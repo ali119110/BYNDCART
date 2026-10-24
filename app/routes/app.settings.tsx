@@ -431,20 +431,11 @@ export default function Settings() {
             <div><h2 id="bco-message-title">WhatsApp delivery message</h2><p>One shared message template for courier events, instead of configuring the same text separately for each provider.</p></div>
           </div>
           <div className="bco-body">
-            <div className="bco-grid">
-              <div className="bco-field">
-                <label htmlFor="deliveryUpdatePage">Apply updates from</label>
-                <select id="deliveryUpdatePage" name="deliveryUpdatePage" defaultValue={settings.courierOperationsSettings?.deliveryUpdatePage || "COURIER_LOGS"}>
-                  <option value="COURIER_LOGS">Courier Logs</option>
-                  <option value="SHIPMENTS">Shipments</option>
-                </select>
-                <span className="bco-help">Choose which BYNDCART tracking workflow uses this shared template.</span>
-              </div>
-              <div className="bco-field">
-                <label htmlFor="deliveryUpdateTemplate">Message template</label>
-                <textarea id="deliveryUpdateTemplate" name="deliveryUpdateTemplate" rows={5} defaultValue={settings.courierOperationsSettings?.deliveryUpdateTemplate || DEFAULT_COURIER_OPERATIONS_SETTINGS.deliveryUpdateTemplate} />
-                <span className="bco-help">Variables: {"{{customer_name}}"}, {"{{customer_phone}}"}, {"{{order_number}}"}, {"{{order_amount}}"}, {"{{courier_name}}"}, {"{{tracking_number}}"}, {"{{tracking_url}}"}.</span>
-              </div>
+            <p style={{ margin: "0 0 9px", color: "#64748b", fontSize: "12px", fontWeight: 700 }}>Page: Courier Logs</p>
+            <div className="bco-field">
+              <label htmlFor="deliveryUpdateTemplate">Message template</label>
+              <textarea id="deliveryUpdateTemplate" name="deliveryUpdateTemplate" rows={5} defaultValue={settings.courierOperationsSettings?.deliveryUpdateTemplate || DEFAULT_COURIER_OPERATIONS_SETTINGS.deliveryUpdateTemplate} />
+              <span className="bco-help">Variables: {"{{customer_name}}"}, {"{{customer_phone}}"}, {"{{order_number}}"}, {"{{order_amount}}"}, {"{{courier_name}}"}, {"{{tracking_number}}"}, {"{{tracking_url}}"}.</span>
             </div>
           </div>
         </section>
