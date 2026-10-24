@@ -393,7 +393,8 @@ export async function exchangeMetaEmbeddedSignupCode(
   shopifyStoreId: string,
   code: string,
   metaAppId?: string,
-  metaAppSecret?: string
+  metaAppSecret?: string,
+  sessionInfo?: { wabaId?: string; phoneNumberId?: string; businessId?: string },
 ) {
   const appId = metaAppId || process.env.META_APP_ID || process.env.WHATSAPP_APP_ID;
   const appSecret = metaAppSecret || process.env.META_APP_SECRET || process.env.WHATSAPP_APP_SECRET;
@@ -424,22 +425,34 @@ export async function exchangeMetaEmbeddedSignupCode(
   }
 
   const granularScopes = Array.isArray(debugData?.data?.granular_scopes) ? debugData.data.granular_scopes : [];
-  const hasManagementScope = granularScopes.some((scope: any) => scope?.scope === "whatsapp_business_management");
   const wabaScope = granularScopes.find((scope: any) => scope?.scope === "whatsapp_business_management");
-  const targetWabaId = wabaScope?.target_ids?.[0];
-  if (!hasManagementScope || !targetWabaId) {
-    throw new Error("Meta did not grant WhatsApp Business Account management access. Confirm BYNDCART's Embedded Signup configuration and the merchant's permissions, then reconnect.");
+  const wabaIdFromToken = String(wabaScope?.target_ids?.[0] || "").trim();
+  const requestedWabaId = String(sessionInfo?.wabaId || "").trim();
+  const targetWabaId = requestedWabaId || wabaIdFromToken;
+  if (!targetWabaId) {
+    throw new Error("Meta did not return the WhatsApp Business Account ID. Finish Embedded Signup and retry; the WABA ID is needed to connect the merchant's own account.");
+  }
+  if (wabaIdFromToken && requestedWabaId && wabaIdFromToken !== requestedWabaId) {
+    // Some partner flows do not expose WABA IDs in granular scopes; when they do, enforce the match.
+    throw new Error("The WhatsApp Business Account returned by Embedded Signup does not match the account authorized in Meta.");
   }
 
-  // 3. Discover a real phone number under the exact WABA returned by Embedded Signup.
-  const phoneUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(String(targetWabaId))}/phone_numbers`);
+  // 3. Discover the exact merchant phone number returned by the Embedded Signup session.
+  const phoneUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(targetWabaId)}/phone_numbers`);
   phoneUrl.searchParams.set("access_token", userAccessToken);
   const phoneRes = await fetch(phoneUrl);
   const phoneData = await phoneRes.json();
   if (!phoneRes.ok || phoneData?.error) {
     throw new Error(phoneData?.error?.message || "Meta could not list phone numbers for the connected WhatsApp Business Account.");
   }
-  const primaryPhone = Array.isArray(phoneData?.data) ? phoneData.data[0] : null;
+  const phoneNumbers = Array.isArray(phoneData?.data) ? phoneData.data : [];
+  const requestedPhoneNumberId = String(sessionInfo?.phoneNumberId || "").trim();
+  const primaryPhone = requestedPhoneNumberId
+    ? phoneNumbers.find((phone: any) => String(phone?.id || "") === requestedPhoneNumberId)
+    : phoneNumbers[0];
+  if (requestedPhoneNumberId && !primaryPhone) {
+    throw new Error("The phone number returned by Embedded Signup does not belong to the authorized WhatsApp Business Account.");
+  }
   const phoneNumberId = String(primaryPhone?.id || "").trim();
   const displayPhoneNumber = String(primaryPhone?.display_phone_number || "").trim();
   const verifiedName = String(primaryPhone?.verified_name || "").trim();
