@@ -608,9 +608,11 @@ export default function Notifications() {
                     type="button"
                     className="bc-btn primary"
                     onClick={launchMetaEmbeddedSignup}
+                    disabled={Boolean(metaAppId && metaConfigId && !metaSdkReady)}
+                    title={!metaAppId || !metaConfigId ? "Meta App ID and Embedded Signup Config ID are required in the server environment." : ""}
                     style={{ padding: "10px 24px", fontSize: "14px" }}
                   >
-                    Connect WhatsApp
+                    {!metaAppId || !metaConfigId ? "Meta setup required" : metaSdkReady ? "Connect WhatsApp" : "Loading Meta…"}
                   </button>
 
                   <button
