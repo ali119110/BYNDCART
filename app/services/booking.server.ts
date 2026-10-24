@@ -783,6 +783,7 @@ export async function bookCourierShipment(
           status: "LABEL_CREATED",
           destinationCity: input.cityName,
           codAmount: input.codAmountPKR.toFixed(2),
+          shipperProfileIndex: input.shipperProfileIndex,
         },
         create: {
           shopifyStoreId,
@@ -794,6 +795,7 @@ export async function bookCourierShipment(
           status: "LABEL_CREATED",
           destinationCity: input.cityName,
           codAmount: input.codAmountPKR.toFixed(2),
+          shipperProfileIndex: input.shipperProfileIndex,
         },
       });
 
@@ -930,6 +932,7 @@ export async function bookCourierShipment(
         labelUrl: labelResult.labelUrl,
         destinationCity: input.cityName,
         codAmount: (shipmentType === "RETURN" ? 0 : input.codAmountPKR).toFixed(2),
+        shipperProfileIndex: input.shipperProfileIndex,
       },
       create: {
         shopifyStoreId,
@@ -942,6 +945,7 @@ export async function bookCourierShipment(
         status: "LABEL_CREATED",
         destinationCity: input.cityName,
         codAmount: (shipmentType === "RETURN" ? 0 : input.codAmountPKR).toFixed(2),
+        shipperProfileIndex: input.shipperProfileIndex,
       },
     });
 
