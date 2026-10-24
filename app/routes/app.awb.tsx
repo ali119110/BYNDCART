@@ -51,8 +51,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const barcodeSvg = generateCode128Svg(s.trackingNumber, 55, 2);
     const storeSettings = s.shopifyStore?.storeSettings || {};
     const operations = normalizeCourierOperationsSettings(storeSettings.courierOperationsSettings);
-    const shipper = operations.shipperProfiles[operations.defaultShipperProfileIndex]
-      || operations.shipperProfiles[0];
+    const selectedProfileIndex = Number.isInteger(s.shipperProfileIndex)
+      && Number(s.shipperProfileIndex) >= 0
+      && Number(s.shipperProfileIndex) < operations.shipperProfiles.length
+      ? Number(s.shipperProfileIndex)
+      : operations.defaultShipperProfileIndex;
+    const shipper = operations.shipperProfiles[selectedProfileIndex] || operations.shipperProfiles[0];
     const storeDomain = s.shopifyStore?.shop?.replace(".myshopify.com", "") || "";
     const storeName = shipper?.name || (storeSettings.storeLogoUrl ? "Store" : storeDomain.toUpperCase() || "STORE");
     return {
@@ -172,6 +176,7 @@ export default function AwbPrintPage() {
                 <strong style={{ textTransform: "uppercase", fontSize: "9px", borderBottom: "1px solid #ccc", display: "block", marginBottom: "3px" }}>Shipper / Return To:</strong>
                 <div>{item.storeName}</div>
                 <div style={{ color: "#333", fontSize: "9px" }}>{item.returnAddress}</div>
+                {item.shipperCity && <div>{item.shipperCity}</div>}
                 <div style={{ marginTop: "3px" }}>Contact: {item.supportPhone}</div>
               </div>
               <div>
@@ -213,19 +218,35 @@ export default function AwbPrintPage() {
           }
           .awb-card--a4_3 {
             width: 7.8in !important;
+            height: 3.55in !important;
             min-height: 3.55in !important;
-            max-height: 3.65in !important;
-            margin-bottom: 0.1in !important;
+            max-height: 3.55in !important;
+            margin-bottom: 0.08in !important;
           }
           .awb-card--a4_4 {
             width: 3.85in !important;
-            min-height: 5.8in !important;
+            height: 5.55in !important;
+            min-height: 5.55in !important;
+            max-height: 5.55in !important;
+            margin-bottom: 0 !important;
+          }
+          .awb-container--a4_3 {
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 0.08in !important;
+            max-width: 8.1in !important;
           }
           .awb-container--a4_4 {
             display: grid !important;
             grid-template-columns: repeat(2, 3.85in) !important;
+            grid-auto-rows: 5.55in !important;
             gap: 0.1in !important;
             max-width: 8.1in !important;
+          }
+          .awb-card--thermal_4x6 {
+            page-break-after: always !important;
+            width: 3.85in !important;
+            min-height: 5.8in !important;
           }
           @page {
             size: ${labels[0]?.labelSize === "THERMAL_4X6" ? "4in 6in" : "A4 portrait"};
