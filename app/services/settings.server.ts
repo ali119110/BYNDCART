@@ -12,7 +12,6 @@ export type {
 } from "../utils/courierOperationsSettings";
 
 import {
-  DEFAULT_COURIER_OPERATIONS_SETTINGS,
   normalizeCourierOperationsSettings,
   type CourierOperationsSettings,
 } from "../utils/courierOperationsSettings";
