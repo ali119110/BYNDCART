@@ -130,13 +130,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   // 3. Connect Meta Embedded Signup (OAuth Code)
   if (actionType === "connectMetaEmbeddedSignup") {
-    const code = formData.get("code") as string;
+    const code = String(formData.get("code") || "").trim();
+    const wabaId = String(formData.get("wabaId") || "").trim();
+    const phoneNumberId = String(formData.get("phoneNumberId") || "").trim();
     if (!code) {
       return { success: false, error: "Missing Meta authorization code." };
     }
+    if (!wabaId || !phoneNumberId) {
+      return { success: false, error: "Meta did not return the selected WhatsApp Business Account and phone number. Reconnect WhatsApp and complete the Embedded Signup flow before closing the popup." };
+    }
 
     try {
-      const connected = await exchangeMetaEmbeddedSignupCode(store.id, code);
+      const connected = await exchangeMetaEmbeddedSignupCode(store.id, code, { wabaId, phoneNumberId });
       const templateSetup = (connected as any)?.templateSetup;
       if (templateSetup?.failed) {
         return {
@@ -353,6 +358,8 @@ export default function Notifications() {
   const [showTestModal, setShowTestModal] = useState(false);
   const [metaSdkReady, setMetaSdkReady] = useState(false);
   const [metaSignupError, setMetaSignupError] = useState("");
+  const [pendingMetaCode, setPendingMetaCode] = useState<string | null>(null);
+  const [metaSignupDetails, setMetaSignupDetails] = useState<{ wabaId: string; phoneNumberId: string } | null>(null);
 
   const isWaConnected = Boolean(
     whatsappConfig?.enabled && whatsappConfig?.phoneNumberId && whatsappConfig?.accessToken
@@ -410,6 +417,47 @@ export default function Notifications() {
     return () => { disposed = true; };
   }, [metaAppId]);
 
+  // Meta Embedded Signup sends the selected WABA/phone in a postMessage event,
+  // while FB.login returns the one-time authorization code separately.
+  React.useEffect(() => {
+    const onMetaMessage = (event: MessageEvent) => {
+      if (event.origin !== "https://www.facebook.com" && event.origin !== "https://web.facebook.com") return;
+      let payload: any = event.data;
+      if (typeof payload === "string") {
+        try { payload = JSON.parse(payload); } catch { return; }
+      }
+      if (payload?.type !== "WA_EMBEDDED_SIGNUP") return;
+      if (payload?.event === "FINISH") {
+        const data = payload?.data || {};
+        const wabaId = String(data.waba_id || data.wabaId || "").trim();
+        const phoneNumberId = String(data.phone_number_id || data.phoneNumberId || "").trim();
+        if (!wabaId || !phoneNumberId) {
+          setMetaSignupError("Meta completed signup without returning both the WhatsApp Business Account ID and phone-number ID. Reopen signup and finish phone selection.");
+          return;
+        }
+        setMetaSignupDetails({ wabaId, phoneNumberId });
+      } else if (payload?.event === "CANCEL") {
+        setMetaSignupError("WhatsApp setup was cancelled in Meta. No connection was saved.");
+      } else if (payload?.event === "ERROR") {
+        setMetaSignupError("Meta reported an error during WhatsApp setup. Review the Meta popup and try again.");
+      }
+    };
+
+    window.addEventListener("message", onMetaMessage);
+    return () => window.removeEventListener("message", onMetaMessage);
+  }, []);
+
+  React.useEffect(() => {
+    if (!pendingMetaCode || !metaSignupDetails) return;
+    const fd = new FormData();
+    fd.append("actionType", "connectMetaEmbeddedSignup");
+    fd.append("code", pendingMetaCode);
+    fd.append("wabaId", metaSignupDetails.wabaId);
+    fd.append("phoneNumberId", metaSignupDetails.phoneNumberId);
+    fetcher.submit(fd, { method: "post" });
+    setPendingMetaCode(null);
+  }, [pendingMetaCode, metaSignupDetails, fetcher]);
+
   // Launch Meta Embedded Signup Popup
   const launchMetaEmbeddedSignup = () => {
     if (typeof window === "undefined") return;
@@ -426,10 +474,7 @@ export default function Notifications() {
       fb.login(
         (response: any) => {
           if (response.authResponse?.code) {
-            const fd = new FormData();
-            fd.append("actionType", "connectMetaEmbeddedSignup");
-            fd.append("code", response.authResponse.code);
-            fetcher.submit(fd, { method: "post" });
+            setPendingMetaCode(String(response.authResponse.code));
           } else {
             console.warn("Meta login cancelled or no code returned", response);
           }
