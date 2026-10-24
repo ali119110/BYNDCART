@@ -8,6 +8,7 @@ import {
   StandardShipmentStatus,
 } from "./courier.server";
 import { triggerLifecycleNotification } from "./notifications.server";
+import { getCourierOperationsSettings } from "./settings.server";
 
 export interface RegisterShipmentInput {
   shopifyStoreId: string;
@@ -381,6 +382,9 @@ export async function syncShipmentTrackingStatus(trackingNumber: string, shopify
   const normalizedStatus = carrierNormalizedStatus === "UNKNOWN"
     ? shipment.status as StandardShipmentStatus
     : carrierNormalizedStatus;
+  const previousStatus = String(shipment.status || "").toUpperCase();
+  const shipmentStatusChanged = carrierNormalizedStatus !== "UNKNOWN"
+    && String(normalizedStatus).toUpperCase() !== previousStatus;
 
   // Keep the last known useful state when the carrier returns an unrecognized status.
   const updatedShipment = await prisma.shipmentTrack.update({
@@ -405,6 +409,56 @@ export async function syncShipmentTrackingStatus(trackingNumber: string, shopify
         rawPayload: trackingInfo.rawPayload || null,
       },
     });
+  }
+
+  // Send a single WhatsApp update per confirmed status transition, using merchant-level
+  // template settings shared by all courier integrations. This is non-blocking for tracking.
+  if (shipmentStatusChanged) {
+    try {
+      const courierSettings = await getCourierOperationsSettings(shipment.shopifyStoreId);
+      if (courierSettings.sendDeliveryUpdates) {
+        const order = await prisma.order.findFirst({
+          where: {
+            shopifyStoreId: shipment.shopifyStoreId,
+            shopifyOrderId: shipment.shopifyOrderId,
+          },
+          select: { customerName: true, customerPhone: true, customerEmail: true, totalPrice: true },
+        });
+        if (order?.customerPhone) {
+          const trackingUrl = (() => {
+            const normalizedCourier = String(shipment.courier || "").toUpperCase();
+            if (normalizedCourier.includes("POSTEX")) return `https://postex.pk/tracking?cn=${encodeURIComponent(trackingNumber)}`;
+            if (normalizedCourier.includes("LEOPARD")) return `https://www.leopardscourier.com/tracking?track_number=${encodeURIComponent(trackingNumber)}`;
+            if (normalizedCourier.includes("TCS")) return `https://www.tcsexpress.com/tracking?consignment=${encodeURIComponent(trackingNumber)}`;
+            if (normalizedCourier.includes("TRAX")) return `https://trax.pk/tracking?cn=${encodeURIComponent(trackingNumber)}`;
+            return `/apps/track?tracking=${encodeURIComponent(trackingNumber)}`;
+          })();
+          const amount = Number(shipment.codAmount ?? order.totalPrice ?? 0);
+          await triggerLifecycleNotification({
+            shopifyStoreId: shipment.shopifyStoreId,
+            eventType: "TRACKING_UPDATE",
+            channel: "WHATSAPP",
+            entityId: `${trackingNumber}:${normalizedStatus}`,
+            recipientPhone: order.customerPhone,
+            recipientEmail: order.customerEmail || "",
+            variables: {
+              customer_name: order.customerName || "Customer",
+              customer_phone: order.customerPhone,
+              order_number: shipment.orderNumber,
+              order_amount: Number.isFinite(amount) ? amount.toLocaleString("en-PK") : "0",
+              cod_amount: Number.isFinite(amount) ? amount.toLocaleString("en-PK") : "0",
+              courier_name: adapter.displayName,
+              carrier: adapter.displayName,
+              tracking_number: trackingNumber,
+              tracking_url: trackingUrl,
+              status: normalizedStatus,
+            },
+          });
+        }
+      }
+    } catch (notificationError) {
+      console.warn(`[Shipment Service] Tracking notification failed for ${trackingNumber}:`, notificationError);
+    }
   }
 
   // Automated Exchange Delivery Transition:
