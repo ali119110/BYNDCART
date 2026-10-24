@@ -1,7 +1,7 @@
 import prisma from "../db.server";
 import { getSettings, getCourierOperationsSettings } from "./settings.server";
 import { enqueueJob } from "./jobs.server";
-import { WhatsAppRegistry, dispatchWhatsAppNotification, getWhatsAppConfig, DEFAULT_WHATSAPP_AUTOMATIONS } from "./whatsapp.server";
+import { WhatsAppRegistry, dispatchWhatsAppNotification, getWhatsAppConfig, DEFAULT_WHATSAPP_AUTOMATIONS, buildMetaTemplatePayload } from "./whatsapp.server";
 
 export interface SendEmailInput {
   to: string;
@@ -400,11 +400,19 @@ export async function processNotificationJob(payload: {
         replyTo: merchantReplyTo,
       });
     } else if (channel === "WHATSAPP") {
-      sendResult = await dispatchWhatsAppNotification({
-        to: recipient,
-        message: renderedBody,
-        shopifyStoreId,
-      });
+      const metaTemplate = buildMetaTemplatePayload(eventType, templateVariables);
+      sendResult = metaTemplate
+        ? await dispatchWhatsAppNotification({
+            to: recipient,
+            message: renderedBody,
+            shopifyStoreId,
+            templateName: metaTemplate.templateName,
+            templateVariables: metaTemplate.templateVariables,
+          })
+        : {
+            success: false,
+            error: `No Meta template is configured for ${eventType}. This business-initiated WhatsApp notification was not sent.`,
+          };
     }
 
     if (sendResult.success) {
