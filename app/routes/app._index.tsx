@@ -185,6 +185,22 @@ export async function loader({ request }: LoaderFunctionArgs) {
       prisma.codSettlement.count({ where: { shopifyStoreId, status: "DISPUTED" } }),
       prisma.backgroundJob.count({ where: { shopifyStoreId, status: "FAILED" } }),
       prisma.webhookEvent.count({ where: { shopifyStoreId, processed: false } }),
+      prisma.returnRequest.groupBy({
+        by: ["status"],
+        where: { shopifyStoreId },
+        _count: { _all: true },
+      }),
+      prisma.exchangeRequest.groupBy({
+        by: ["status"],
+        where: { shopifyStoreId },
+        _count: { _all: true },
+      }),
+      prisma.shipmentTrack.groupBy({
+        by: ["courier", "status"],
+        where: { shopifyStoreId, ...requestDateFilter },
+        _count: { _all: true },
+        orderBy: { courier: "asc" },
+      }),
     ]);
 
     const [rows, identity] = await Promise.all([queryPromise, identityPromise]);
@@ -210,7 +226,46 @@ export async function loader({ request }: LoaderFunctionArgs) {
       disputedCod,
       failedJobs,
       unprocessedWebhooks,
+      returnLifecycleRaw,
+      exchangeLifecycleRaw,
+      courierSnapshotRaw,
     ] = rows;
+
+    const summarizeLifecycle = (entries: typeof returnLifecycleRaw) =>
+      entries
+        .map((entry) => ({ status: entry.status, count: entry._count._all }))
+        .sort((a, b) => b.count - a.count);
+
+    const courierMap = new Map<string, {
+      courier: string;
+      total: number;
+      inTransit: number;
+      delivered: number;
+      failed: number;
+      labelCreated: number;
+      other: number;
+    }>();
+    for (const entry of courierSnapshotRaw) {
+      const courier = entry.courier || "Unknown courier";
+      const summary = courierMap.get(courier) ?? {
+        courier,
+        total: 0,
+        inTransit: 0,
+        delivered: 0,
+        failed: 0,
+        labelCreated: 0,
+        other: 0,
+      };
+      const count = entry._count._all;
+      summary.total += count;
+      if (entry.status === "IN_TRANSIT" || entry.status === "OUT_FOR_DELIVERY") summary.inTransit += count;
+      else if (entry.status === "DELIVERED") summary.delivered += count;
+      else if (entry.status === "FAILED") summary.failed += count;
+      else if (entry.status === "LABEL_CREATED") summary.labelCreated += count;
+      else summary.other += count;
+      courierMap.set(courier, summary);
+    }
+    const courierSnapshot = Array.from(courierMap.values()).sort((a, b) => b.total - a.total).slice(0, 8);
 
     return {
       shop: identity.name,
@@ -237,6 +292,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
         replacementOrderRequests,
         returnIntake,
       },
+      lifecycle: {
+        returns: summarizeLifecycle(returnLifecycleRaw),
+        exchanges: summarizeLifecycle(exchangeLifecycleRaw),
+      },
+      courierSnapshot,
       operations: {
         pendingReturns,
         pendingExchanges,
@@ -294,6 +354,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
         replacementOrderRequests: 0,
         returnIntake: 0,
       },
+      lifecycle: { returns: [], exchanges: [] },
+      courierSnapshot: [],
       operations: {
         pendingReturns: 0,
         pendingExchanges: 0,
@@ -368,6 +430,8 @@ export default function Dashboard() {
     unreconciledCodAmount: 0,
     disputedCod: 0,
   };
+  const lifecycle = loaderData?.lifecycle ?? { returns: [], exchanges: [] };
+  const courierSnapshot = loaderData?.courierSnapshot ?? [];
   const health = loaderData?.health ?? {
     syncStatus: "UNKNOWN",
     lastSyncAt: null,
@@ -702,6 +766,101 @@ export default function Dashboard() {
             <span className="bc-health-detail">Last COD reconciliation: {health.lastReconciledAt ? new Date(health.lastReconciledAt).toLocaleString() : "Not recorded"}</span>
           </article>
         </div>
+      </section>
+
+      {/* Current request lifecycle */}
+      <section className="bc-dashboard-section" aria-labelledby="bc-lifecycle-title">
+        <div className="bc-dashboard-section-heading">
+          <div>
+            <h2 id="bc-lifecycle-title">Request lifecycle</h2>
+            <p>Current stage snapshot across all open and completed requests; use it to spot work accumulating at a stage.</p>
+          </div>
+        </div>
+        <div className="bc-lifecycle-grid">
+          <article className="bc-health-card">
+            <div className="bc-lifecycle-heading">
+              <h3>Returns by stage</h3>
+              <Link className="bc-text-link" to={withRangeContext("/app/returns")}>View returns</Link>
+            </div>
+            {!dataAvailable ? (
+              <p className="bc-muted">Lifecycle data unavailable.</p>
+            ) : lifecycle.returns.length === 0 ? (
+              <p className="bc-muted">No return requests recorded yet.</p>
+            ) : (
+              <div className="bc-lifecycle-rows">
+                {lifecycle.returns.map((stage: { status: string; count: number }) => (
+                  <div className="bc-lifecycle-row" key={stage.status}>
+                    <span>{stage.status.replaceAll("_", " ")}</span>
+                    <strong>{formatCount(stage.count)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
+          <article className="bc-health-card">
+            <div className="bc-lifecycle-heading">
+              <h3>Exchanges by stage</h3>
+              <Link className="bc-text-link" to={withRangeContext("/app/exchanges")}>View exchanges</Link>
+            </div>
+            {!dataAvailable ? (
+              <p className="bc-muted">Lifecycle data unavailable.</p>
+            ) : lifecycle.exchanges.length === 0 ? (
+              <p className="bc-muted">No exchange requests recorded yet.</p>
+            ) : (
+              <div className="bc-lifecycle-rows">
+                {lifecycle.exchanges.map((stage: { status: string; count: number }) => (
+                  <div className="bc-lifecycle-row" key={stage.status}>
+                    <span>{stage.status.replaceAll("_", " ")}</span>
+                    <strong>{formatCount(stage.count)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </article>
+        </div>
+      </section>
+
+      {/* Courier shipment snapshot */}
+      <section className="bc-dashboard-section" aria-labelledby="bc-courier-title">
+        <div className="bc-dashboard-section-heading">
+          <div>
+            <h2 id="bc-courier-title">Courier snapshot</h2>
+            <p>Bookings created in the selected period, grouped by their latest stored status. Carrier data can lag based on integration coverage.</p>
+          </div>
+          <Link className="bc-text-link" to={withRangeContext("/app/shipments")}>View shipments</Link>
+        </div>
+        {!dataAvailable ? (
+          <div className="bc-empty-state"><strong>Courier data unavailable</strong><p>Retry loading dashboard data to view courier statuses.</p></div>
+        ) : courierSnapshot.length === 0 ? (
+          <div className="bc-empty-state"><strong>No shipment records in this period</strong><p>Shipment status summaries appear here after bookings are recorded.</p></div>
+        ) : (
+          <div className="bc-dashboard-table-wrap">
+            <table className="bc-dashboard-table bc-courier-snapshot-table">
+              <thead>
+                <tr>
+                  <th scope="col">Courier</th>
+                  <th scope="col">Shipments</th>
+                  <th scope="col">In transit</th>
+                  <th scope="col">Delivered</th>
+                  <th scope="col">Failed</th>
+                  <th scope="col">Awaiting first scan</th>
+                </tr>
+              </thead>
+              <tbody>
+                {courierSnapshot.map((row: { courier: string; total: number; inTransit: number; delivered: number; failed: number; labelCreated: number }) => (
+                  <tr key={row.courier}>
+                    <td><span className="bc-table-primary">{row.courier}</span></td>
+                    <td>{formatCount(row.total)}</td>
+                    <td>{formatCount(row.inTransit)}</td>
+                    <td>{formatCount(row.delivered)}</td>
+                    <td><span className={row.failed > 0 ? "bc-status-badge bc-status-danger" : "bc-status-badge bc-status-neutral"}>{formatCount(row.failed)}</span></td>
+                    <td>{formatCount(row.labelCreated)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       {/* Recent Activity */}
