@@ -2,7 +2,13 @@ import React from "react";
 import { useLoaderData, useFetcher } from "react-router";
 import type { Route } from "./+types/app.settings";
 import { requireTenantContext } from "../utils/tenant.server";
-import { buildCustomerPortalUrl, getSettings, updateSettings } from "../services/settings.server";
+import {
+  buildCustomerPortalUrl,
+  getSettings,
+  updateSettings,
+  DEFAULT_COURIER_OPERATIONS_SETTINGS,
+  normalizeCourierOperationsSettings,
+} from "../services/settings.server";
 import { getReturnPolicyRule, saveReturnPolicyRule } from "../services/policyEngine.server";
 
 // ===== LOADER: Fetch settings & policy rules from database =====
@@ -43,6 +49,7 @@ export async function loader({ request }: Route.LoaderArgs) {
         exchangeReplacementTiming: "AFTER_INSPECTION",
         codTaxPercent: 4,
         codDeliveryCharge: 280,
+        courierOperationsSettings: DEFAULT_COURIER_OPERATIONS_SETTINGS,
       },
       portal,
       policyRule: {
@@ -112,6 +119,38 @@ export async function action({ request }: Route.ActionArgs) {
   const whatsappNumber = String(formData.get("whatsappNumber") || "").trim() || null;
   const returnAddress = String(formData.get("returnAddress") || "").trim() || null;
 
+  const shipperProfiles = [0, 1, 2].map((index) => ({
+    name: String(formData.get(`shipperProfile${index}Name`) || "").trim(),
+    phone: String(formData.get(`shipperProfile${index}Phone`) || "").trim(),
+    city: String(formData.get(`shipperProfile${index}City`) || "").trim(),
+    address: String(formData.get(`shipperProfile${index}Address`) || "").trim(),
+  }));
+  const courierOperationsSettings = normalizeCourierOperationsSettings({
+    autoCourierTracking: formData.get("autoCourierTracking") === "on",
+    sendDeliveryUpdates: formData.get("sendDeliveryUpdates") === "on",
+    deliveryUpdatePage: String(formData.get("deliveryUpdatePage") || "COURIER_LOGS"),
+    deliveryUpdateTemplate: String(formData.get("deliveryUpdateTemplate") || ""),
+    fraudCheckEnabled: formData.get("fraudCheckEnabled") === "on",
+    fraudTagDefinition: String(formData.get("fraudTagDefinition") || DEFAULT_COURIER_OPERATIONS_SETTINGS.fraudTagDefinition),
+    duplicateCheckEnabled: formData.get("duplicateCheckEnabled") === "on",
+    duplicateCheckDurationMinutes: Number(formData.get("duplicateCheckDurationMinutes") || 30),
+    labelWebsite: String(formData.get("labelWebsite") || ""),
+    labelLogoUrl: String(formData.get("labelLogoUrl") || ""),
+    labelSize: String(formData.get("labelSize") || "A4_3"),
+    defaultShipperProfileIndex: Number(formData.get("defaultShipperProfileIndex") || 0),
+    shipperProfiles,
+  });
+  if (courierOperationsSettings.labelLogoUrl && !/^https:\/\//i.test(courierOperationsSettings.labelLogoUrl)) {
+    return { error: "Label logo URL must start with https://." };
+  }
+  if (
+    courierOperationsSettings.shipperProfiles.some((profile) =>
+      profile.phone && !/^[+0-9() .-]{7,40}$/.test(profile.phone)
+    )
+  ) {
+    return { error: "Enter a valid phone number for each shipper profile." };
+  }
+
   try {
     let freshPolicies = undefined;
     if (admin) {
@@ -138,6 +177,7 @@ export async function action({ request }: Route.ActionArgs) {
       supportEmail,
       whatsappNumber,
       returnAddress,
+      courierOperationsSettings: courierOperationsSettings as any,
       ...(freshPolicies ? { policies: freshPolicies } : {}),
     });
 
@@ -325,6 +365,207 @@ export default function Settings() {
       </section>
 
       <fetcher.Form method="POST" className="bc-settings-form">
+        <style>{`
+          .bco-section { border: 1px solid #dbe3ee; border-radius: 12px; background: #fff; margin-bottom: 16px; overflow: hidden; }
+          .bco-heading { padding: 16px 20px; display: flex; align-items: flex-start; gap: 12px; border-bottom: 1px solid #e2e8f0; background: #f8fafc; }
+          .bco-heading h2 { margin: 0; color: #0f172a; font-size: 16px; line-height: 1.35; font-weight: 750; }
+          .bco-heading p { margin: 4px 0 0; color: #64748b; font-size: 12px; line-height: 1.5; }
+          .bco-icon { display: flex; align-items: center; justify-content: center; flex: 0 0 34px; width: 34px; height: 34px; border: 1px solid #dbeafe; border-radius: 9px; color: #2563eb; background: #eff6ff; font-size: 17px; }
+          .bco-body { padding: 18px 20px; }
+          .bco-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+          .bco-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+          .bco-field label, .bco-field-label { color: #334155; font-size: 12px; line-height: 1.35; font-weight: 700; }
+          .bco-field input:not([type="checkbox"]), .bco-field textarea, .bco-field select { box-sizing: border-box; width: 100%; min-width: 0; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; color: #0f172a; padding: 9px 10px; font: inherit; font-size: 13px; }
+          .bco-field textarea { resize: vertical; min-height: 130px; line-height: 1.45; }
+          .bco-help { color: #64748b; font-size: 11px; line-height: 1.45; }
+          .bco-toggle-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+          .bco-toggle { display: flex; align-items: flex-start; gap: 11px; padding: 12px; border: 1px solid #e2e8f0; border-radius: 9px; background: #fff; cursor: pointer; }
+          .bco-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+          .bco-switch { position: relative; flex: 0 0 38px; width: 38px; height: 22px; border-radius: 999px; background: #cbd5e1; transition: background 120ms ease; margin-top: 1px; }
+          .bco-switch::after { content: ""; position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); transition: transform 120ms ease; }
+          .bco-toggle input:checked + .bco-switch { background: #1677ff; }
+          .bco-toggle input:checked + .bco-switch::after { transform: translateX(16px); }
+          .bco-toggle input:focus-visible + .bco-switch { outline: 3px solid #bfdbfe; outline-offset: 2px; }
+          .bco-toggle-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+          .bco-toggle-title { color: #0f172a; font-size: 13px; font-weight: 750; }
+          .bco-note { margin-top: 14px; padding: 10px 12px; border-radius: 8px; background: #f8fafc; color: #64748b; font-size: 11px; line-height: 1.5; }
+          .bco-profile { padding: 14px; border: 1px solid #e2e8f0; border-radius: 10px; background: #fff; min-width: 0; }
+          .bco-profile h3 { margin: 0 0 12px; font-size: 13px; font-weight: 750; color: #0f172a; }
+          .bco-profile-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
+          @media (max-width: 760px) { .bco-grid, .bco-toggle-list, .bco-profile-grid { grid-template-columns: minmax(0, 1fr); } .bco-heading { padding: 14px; } .bco-body { padding: 14px; } }
+        `}</style>
+
+        <div style={{ margin: "2px 0 14px" }}>
+          <p className="bc-eyebrow" style={{ marginBottom: "5px" }}>COURIER WORKSPACE</p>
+          <h2 style={{ margin: 0, color: "#0f172a", fontSize: "20px", fontWeight: 800 }}>Courier &amp; label settings</h2>
+          <p className="bc-muted" style={{ margin: "5px 0 0", maxWidth: "760px" }}>
+            Configure shared defaults once. These preferences belong to your store and are available across all configured courier integrations.
+          </p>
+        </div>
+
+        <section className="bco-section" aria-labelledby="bco-tracking-title">
+          <div className="bco-heading">
+            <span className="bco-icon" aria-hidden="true">♧</span>
+            <div><h2 id="bco-tracking-title">Tracking &amp; customer notifications</h2><p>Control live tracking and when shipment updates are sent to customers.</p></div>
+          </div>
+          <div className="bco-body">
+            <div className="bco-toggle-list">
+              <label className="bco-toggle">
+                <input type="checkbox" name="autoCourierTracking" defaultChecked={Boolean(settings.courierOperationsSettings?.autoCourierTracking ?? true)} />
+                <span className="bco-switch" aria-hidden="true" />
+                <span className="bco-toggle-copy"><span className="bco-toggle-title">Auto Courier Tracking</span><span className="bco-help">Refresh live shipment status on the customer tracking page for supported couriers.</span></span>
+              </label>
+              <label className="bco-toggle">
+                <input type="checkbox" name="sendDeliveryUpdates" defaultChecked={Boolean(settings.courierOperationsSettings?.sendDeliveryUpdates ?? true)} />
+                <span className="bco-switch" aria-hidden="true" />
+                <span className="bco-toggle-copy"><span className="bco-toggle-title">Send delivery updates to customers</span><span className="bco-help">Use your saved WhatsApp template for courier tracking updates when the channel is connected.</span></span>
+              </label>
+            </div>
+            <div className="bco-note">WhatsApp delivery messages require a connected WhatsApp Business API account and an eligible message type. These settings apply across the courier providers you enable.</div>
+          </div>
+        </section>
+
+        <section className="bco-section" aria-labelledby="bco-message-title">
+          <div className="bco-heading">
+            <span className="bco-icon" aria-hidden="true">◉</span>
+            <div><h2 id="bco-message-title">WhatsApp delivery message</h2><p>One shared message template for courier events, instead of configuring the same text separately for each provider.</p></div>
+          </div>
+          <div className="bco-body">
+            <div className="bco-grid">
+              <div className="bco-field">
+                <label htmlFor="deliveryUpdatePage">Apply updates from</label>
+                <select id="deliveryUpdatePage" name="deliveryUpdatePage" defaultValue={settings.courierOperationsSettings?.deliveryUpdatePage || "COURIER_LOGS"}>
+                  <option value="COURIER_LOGS">Courier Logs</option>
+                  <option value="SHIPMENTS">Shipments</option>
+                </select>
+                <span className="bco-help">Choose which BYNDCART tracking workflow uses this shared template.</span>
+              </div>
+              <div className="bco-field">
+                <label htmlFor="deliveryUpdateTemplate">Message template</label>
+                <textarea id="deliveryUpdateTemplate" name="deliveryUpdateTemplate" rows={5} defaultValue={settings.courierOperationsSettings?.deliveryUpdateTemplate || DEFAULT_COURIER_OPERATIONS_SETTINGS.deliveryUpdateTemplate} />
+                <span className="bco-help">Variables: {"{{customer_name}}"}, {"{{customer_phone}}"}, {"{{order_number}}"}, {"{{order_amount}}"}, {"{{courier_name}}"}, {"{{tracking_number}}"}, {"{{tracking_url}}"}.</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="bco-section" aria-labelledby="bco-ai-title">
+          <div className="bco-heading">
+            <span className="bco-icon" aria-hidden="true">✧</span>
+            <div><h2 id="bco-ai-title">AI assistant &amp; order checks</h2><p>Shared rules for customer history and repeat-order review across the courier workspace.</p></div>
+          </div>
+          <div className="bco-body">
+            <div className="bco-toggle-list">
+              <label className="bco-toggle">
+                <input type="checkbox" name="fraudCheckEnabled" defaultChecked={Boolean(settings.courierOperationsSettings?.fraudCheckEnabled)} />
+                <span className="bco-switch" aria-hidden="true" />
+                <span className="bco-toggle-copy"><span className="bco-toggle-title">Fraud / trust check</span><span className="bco-help">Use delivery history from BYNDCART shipment records to identify trusted customers.</span></span>
+              </label>
+              <label className="bco-toggle">
+                <input type="checkbox" name="duplicateCheckEnabled" defaultChecked={Boolean(settings.courierOperationsSettings?.duplicateCheckEnabled)} />
+                <span className="bco-switch" aria-hidden="true" />
+                <span className="bco-toggle-copy"><span className="bco-toggle-title">Duplicate order check</span><span className="bco-help">Flag multiple orders from the same phone number within the selected time window.</span></span>
+              </label>
+            </div>
+            <div className="bco-grid">
+              <div className="bco-field">
+                <label htmlFor="fraudTagDefinition">Trust tag rule</label>
+                <select id="fraudTagDefinition" name="fraudTagDefinition" defaultValue={settings.courierOperationsSettings?.fraudTagDefinition || DEFAULT_COURIER_OPERATIONS_SETTINGS.fraudTagDefinition}>
+                  <option value="courier: Trusted - if customer delivery ratio > 85%">courier: Trusted — delivery ratio above 85%</option>
+                  <option value="courier: Trusted - if customer delivery ratio > 90%">courier: Trusted — delivery ratio above 90%</option>
+                  <option value="courier: Review - low delivery ratio">courier: Review — low delivery ratio</option>
+                </select>
+                <span className="bco-help">Select the tag/rule definition to use for cross-courier customer history checks.</span>
+              </div>
+              <div className="bco-field">
+                <label htmlFor="duplicateCheckDurationMinutes">Duplicate time window</label>
+                <select id="duplicateCheckDurationMinutes" name="duplicateCheckDurationMinutes" defaultValue={String(settings.courierOperationsSettings?.duplicateCheckDurationMinutes || 30)}>
+                  <option value="15">15 minutes</option>
+                  <option value="30">30 minutes</option>
+                  <option value="60">1 hour</option>
+                  <option value="120">2 hours</option>
+                  <option value="240">4 hours</option>
+                </select>
+                <span className="bco-help">Orders with the same customer phone inside this period can be flagged.</span>
+              </div>
+            </div>
+            <div className="bco-note">These controls are store-wide, not tied to a particular courier. Checks use available BYNDCART order and shipment history; the merchant's selected rule determines the tag behavior.</div>
+          </div>
+        </section>
+
+        <section className="bco-section" aria-labelledby="bco-label-title">
+          <div className="bco-heading">
+            <span className="bco-icon" aria-hidden="true">▱</span>
+            <div><h2 id="bco-label-title">Label settings</h2><p>Set the default branding and print format for BYNDCART airway-bill labels.</p></div>
+          </div>
+          <div className="bco-body">
+            <div className="bco-grid">
+              <div className="bco-field">
+                <label htmlFor="labelWebsite">Website</label>
+                <input id="labelWebsite" name="labelWebsite" type="text" maxLength={200} placeholder="yourstore.com" defaultValue={settings.courierOperationsSettings?.labelWebsite || ""} />
+                <span className="bco-help">Printed on the shared BYNDCART label template.</span>
+              </div>
+              <div className="bco-field">
+                <label htmlFor="labelLogoUrl">Logo URL (recommended 300 × 100 px)</label>
+                <input id="labelLogoUrl" name="labelLogoUrl" type="url" maxLength={1000} placeholder="https://cdn.shopify.com/..." defaultValue={settings.courierOperationsSettings?.labelLogoUrl || ""} />
+                <span className="bco-help">Use a public HTTPS image URL. If empty, the portal/store logo can be used.</span>
+              </div>
+              <div className="bco-field">
+                <label htmlFor="labelSize">Label size</label>
+                <select id="labelSize" name="labelSize" defaultValue={settings.courierOperationsSettings?.labelSize || "A4_3"}>
+                  <option value="A4_3">A4 — 3 labels per page</option>
+                  <option value="A4_4">A4 — 4 labels per page</option>
+                  <option value="THERMAL_4X6">Thermal — 4 × 6 inches</option>
+                </select>
+              </div>
+              <div className="bco-field">
+                <label htmlFor="defaultShipperProfileIndex">Default shipper profile</label>
+                <select id="defaultShipperProfileIndex" name="defaultShipperProfileIndex" defaultValue={String(settings.courierOperationsSettings?.defaultShipperProfileIndex ?? 0)}>
+                  {(settings.courierOperationsSettings?.shipperProfiles || DEFAULT_COURIER_OPERATIONS_SETTINGS.shipperProfiles).map((profile, index) => (
+                    <option key={index} value={index}>{profile.name || `Shipper profile #${index + 1}`}{profile.city ? ` — ${profile.city}` : ""}</option>
+                  ))}
+                </select>
+                <span className="bco-help">Used as the initial shipper profile in the Booking panel and on shared labels.</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="bco-section" aria-labelledby="bco-shipper-title">
+          <div className="bco-heading">
+            <span className="bco-icon" aria-hidden="true">▤</span>
+            <div><h2 id="bco-shipper-title">Shipper profiles</h2><p>Save up to three sender profiles, then use the same profiles in Booking across every configured courier.</p></div>
+          </div>
+          <div className="bco-body">
+            <div className="bco-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))" }}>
+              {(settings.courierOperationsSettings?.shipperProfiles || DEFAULT_COURIER_OPERATIONS_SETTINGS.shipperProfiles).map((profile, index) => (
+                <div className="bco-profile" key={index}>
+                  <h3>{profile.name || `Profile #${index + 1}`}</h3>
+                  <div className="bco-profile-grid">
+                    <div className="bco-field">
+                      <label htmlFor={`shipperProfile${index}Name`}>Name</label>
+                      <input id={`shipperProfile${index}Name`} name={`shipperProfile${index}Name`} maxLength={100} defaultValue={profile.name} placeholder={`Profile #${index + 1}`} />
+                    </div>
+                    <div className="bco-field">
+                      <label htmlFor={`shipperProfile${index}Phone`}>Phone</label>
+                      <input id={`shipperProfile${index}Phone`} name={`shipperProfile${index}Phone`} maxLength={40} defaultValue={profile.phone} placeholder="03XXXXXXXXX" />
+                    </div>
+                    <div className="bco-field">
+                      <label htmlFor={`shipperProfile${index}City`}>City</label>
+                      <input id={`shipperProfile${index}City`} name={`shipperProfile${index}City`} maxLength={100} defaultValue={profile.city} placeholder="Karachi" />
+                    </div>
+                    <div className="bco-field">
+                      <label htmlFor={`shipperProfile${index}Address`}>Address</label>
+                      <input id={`shipperProfile${index}Address`} name={`shipperProfile${index}Address`} maxLength={500} defaultValue={profile.address} placeholder="Warehouse, street, area" />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="bco-note">Sender profiles and label settings are shared across couriers. Courier API pickup-address codes remain provider-specific because each carrier registers its own pickup locations.</div>
+          </div>
+        </section>
+
         <section className="bc-card bc-form" aria-labelledby="bc-return-rules-title">
           <div className="bc-section-heading">
             <div className="bc-section-icon bc-icon-return" aria-hidden="true">
