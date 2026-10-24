@@ -162,7 +162,7 @@ const FULFILLMENT_ORDERS_QUERY = `#graphql
     order(id: $orderId) {
       id
       displayFulfillmentStatus
-      fulfillments(first: 100) {
+      fulfillments(first: 30) {
         nodes {
           id
           trackingInfo {
@@ -170,7 +170,7 @@ const FULFILLMENT_ORDERS_QUERY = `#graphql
           }
         }
       }
-      fulfillmentOrders(first: 100) {
+      fulfillmentOrders(first: 20, includeClosed: true) {
         nodes {
           id
           status
@@ -182,7 +182,7 @@ const FULFILLMENT_ORDERS_QUERY = `#graphql
               id
             }
           }
-          fulfillments(first: 100) {
+          fulfillments(first: 10) {
             nodes {
               id
               trackingInfo {
