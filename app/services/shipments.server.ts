@@ -90,7 +90,9 @@ export async function registerShipmentTrack(input: RegisterShipmentInput) {
           shopifyStoreId: input.shopifyStoreId,
           shopifyOrderId: input.orderId,
           type: shipmentType,
+          status: { notIn: ["FAILED", "CANCELLED"] },
         },
+        orderBy: { createdAt: "desc" },
       });
 
       if (existingShipment) {
