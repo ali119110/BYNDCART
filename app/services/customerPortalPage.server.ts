@@ -468,7 +468,7 @@ function htmlPage(branding: StoreBranding, title: string, body: string, status =
     .portal-header {
       background: var(--bc-p-surface);
       border-bottom: 1px solid var(--bc-p-line);
-      padding: 20px 24px;
+      padding: 26px 32px;
       text-align: center;
     }
     .portal-logo {
@@ -493,9 +493,10 @@ function htmlPage(branding: StoreBranding, title: string, body: string, status =
       margin-top: 6px;
     }
     main {
-      max-width: 760px;
+      width: min(100%, 1120px);
+      max-width: 1120px;
       margin: 0 auto;
-      padding: 24px 16px 64px;
+      padding: 32px 24px 72px;
     }
     h1 { font-size: 24px; letter-spacing: -0.02em; margin: 0 0 8px; }
     h2 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
@@ -505,14 +506,14 @@ function htmlPage(branding: StoreBranding, title: string, body: string, status =
     .portal-card {
       background: var(--bc-p-surface);
       border: 1px solid var(--bc-p-line);
-      border-radius: var(--bc-p-radius);
-      padding: 20px;
-      margin: 16px 0;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      border-radius: 16px;
+      padding: 24px;
+      margin: 18px 0;
+      box-shadow: 0 8px 28px rgba(15, 23, 42, 0.055);
     }
     .portal-login-card {
-      max-width: 480px;
-      margin: 32px auto;
+      max-width: 560px;
+      margin: 38px auto;
     }
     .portal-login-header {
       margin-bottom: 20px;
@@ -806,6 +807,37 @@ function htmlPage(branding: StoreBranding, title: string, body: string, status =
       color: #9ca3af;
     }
     .portal-footer-right strong { color: #4b5563; }
+    /* Improved customer portal hierarchy and tracking/returns layout */
+    .portal-header { box-shadow: 0 2px 14px rgba(15, 23, 42, 0.035); }
+    .portal-logo { max-height: 54px; max-width: min(240px, 70vw); }
+    main { width: min(100%, 1120px); }
+    .portal-card { overflow-wrap: anywhere; }
+    .portal-card h1, .portal-card h2, .portal-card h3 { letter-spacing: -0.02em; }
+    .portal-card h2 { font-size: 20px; line-height: 1.3; }
+    .portal-card p { line-height: 1.55; }
+    .portal-card + .portal-card { margin-top: 18px; }
+    .portal-login-card { border-radius: 20px; padding: 28px; }
+    .portal-login-header { padding-bottom: 14px; border-bottom: 1px solid var(--bc-p-line); }
+    .field-title { font-size: 12px; letter-spacing: .015em; }
+    .btn { min-height: 42px; padding: 9px 17px; border-radius: 10px; }
+    .btn:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+      outline: 3px solid rgba(37, 99, 235, .3); outline-offset: 2px;
+    }
+    .portal-banner { border-radius: 12px; padding: 14px 16px; line-height: 1.55; }
+    .order-history-row, .history-row { padding: 16px 0; }
+    .order-history-row:hover { background: linear-gradient(90deg, rgba(37,99,235,.035), transparent); }
+    .order-row-main { gap: 16px; }
+    .order-total { font-size: 16px; font-weight: 750; }
+    .history-row-header { flex-wrap: wrap; }
+    .tracking-form { border: 1px solid var(--bc-p-line); border-radius: 12px; padding: 16px; }
+    .tracking-summary-pill { border-radius: 999px; padding: 6px 11px; }
+    .request-type-badge { border-radius: 999px; padding: 4px 10px; letter-spacing: .03em; }
+    .guidelines-steps { line-height: 1.7; }
+    @media (max-width: 900px) {
+      main { width: 100%; padding: 24px 18px 56px; }
+      .portal-card { padding: 20px; }
+    }
+
     @media (max-width: 600px) {
       .item-fields { grid-template-columns: 1fr; }
       .portal-footer-inner { flex-direction: column; align-items: flex-start; }

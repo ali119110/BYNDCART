@@ -164,6 +164,39 @@ prisma.auditLog.create = (async (args: any) => {
   return log;
 }) as any;
 
+// Shopify Billing API responses are mocked explicitly; the production service must never
+// fabricate a paid subscription or approval URL when this API is unavailable.
+function mockBillingAdmin() {
+  return {
+    graphql: async (query: string) => {
+      if (query.includes("AppSubscriptionCreate")) {
+        return new Response(JSON.stringify({
+          data: {
+            appSubscriptionCreate: {
+              userErrors: [],
+              confirmationUrl: "https://admin.shopify.com/store/test/charges/confirm",
+              appSubscription: { id: `gid://shopify/AppSubscription/${Date.now()}`, status: "PENDING" },
+            },
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (query.includes("AppSubscriptionCancel")) {
+        return new Response(JSON.stringify({
+          data: {
+            appSubscriptionCancel: {
+              userErrors: [],
+              appSubscription: { id: "gid://shopify/AppSubscription/cancel-test", status: "CANCELLED" },
+            },
+          },
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ errors: [{ message: "Unexpected billing query in test." }] }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    },
+  };
+}
+
 // Helper to create test merchants & stores
 async function createTestStore(shopName: string) {
   const merchant = await prisma.merchant.create({
@@ -200,7 +233,8 @@ test("Billing & PlanGate — New Subscription Initiation", async () => {
   const result = await createAppSubscription(
     store.id,
     "GROWTH",
-    "https://test.myshopify.com/app/billing"
+    "https://test.myshopify.com/app/billing",
+    mockBillingAdmin()
   );
 
   assert.equal(result.success, true);
@@ -213,6 +247,17 @@ test("Billing & PlanGate — New Subscription Initiation", async () => {
   assert.ok(sub);
   assert.equal(sub.planCode, "GROWTH");
   assert.equal(sub.monthlyReturnLimit, 500);
+});
+
+test("Billing refuses to invent a paid subscription when Shopify Admin API is unavailable", async () => {
+  const { store } = await createTestStore(`test-billing-no-admin-${Date.now()}.myshopify.com`);
+  await assert.rejects(
+    createAppSubscription(store.id, "GROWTH", "https://example.com/app/billing"),
+    /Shopify Billing is unavailable/,
+  );
+  const local = await prisma.billingSubscription.findUnique({ where: { shopifyStoreId: store.id } });
+  assert.equal(local?.planCode, "FREE", "The existing Free plan should remain unchanged without Shopify confirmation.");
+  assert.ok(!local?.shopifySubscriptionId, "No local Shopify paid subscription ID should be written without API confirmation.");
 });
 
 test("Billing & PlanGate — Existing Active Subscription Query", async () => {
@@ -255,7 +300,7 @@ test("Billing & PlanGate — Subscription Cancellation", async () => {
     },
   });
 
-  const cancelResult = await cancelAppSubscription(store.id);
+  const cancelResult = await cancelAppSubscription(store.id, mockBillingAdmin());
   assert.equal(cancelResult.success, true);
   assert.equal(cancelResult.status, "CANCELLED");
 
@@ -371,8 +416,8 @@ test("Billing & PlanGate — Cross-Merchant Tenant Isolation", async () => {
   const { store: storeA } = await createTestStore(`test-tenant-a-${Date.now()}.myshopify.com`);
   const { store: storeB } = await createTestStore(`test-tenant-b-${Date.now()}.myshopify.com`);
 
-  await createAppSubscription(storeA.id, "PRO", "http://storea.com");
-  await createAppSubscription(storeB.id, "BASIC", "http://storeb.com");
+  await createAppSubscription(storeA.id, "PRO", "https://storea.com", mockBillingAdmin());
+  await createAppSubscription(storeB.id, "BASIC", "https://storeb.com", mockBillingAdmin());
 
   const planA = await getStorePlan(storeA.id);
   const planB = await getStorePlan(storeB.id);

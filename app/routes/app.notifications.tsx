@@ -17,6 +17,7 @@ import {
   seedDefaultWhatsAppTemplates,
   exchangeMetaEmbeddedSignupCode,
   dispatchWhatsAppNotification,
+  ensureMetaUtilityTemplates,
 } from "../services/whatsapp.server";
 import prisma from "../db.server";
 
@@ -28,10 +29,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   try {
-    const [emailTemplates, waTemplates, whatsappConfig, logs] = await Promise.all([
+    const whatsappConfig = await getWhatsAppConfig(store.id);
+    if (whatsappConfig?.enabled && whatsappConfig.phoneNumberId && whatsappConfig.accessToken) {
+      // Repair any missing default rows on later logins without overwriting merchant edits.
+      await seedDefaultWhatsAppTemplates(store.id);
+    }
+    const [emailTemplates, waTemplates, logs] = await Promise.all([
       getStoreNotificationTemplates(store.id, "EMAIL"),
       getStoreNotificationTemplates(store.id, "WHATSAPP"),
-      getWhatsAppConfig(store.id),
       getNotificationLogs(store.id, 40),
     ]);
 
@@ -43,6 +48,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig,
       metaAppId: process.env.META_APP_ID || process.env.WHATSAPP_APP_ID || "",
       metaConfigId: process.env.META_CONFIG_ID || "",
+      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY),
+      emailFromConfigured: Boolean(process.env.NOTIFICATIONS_FROM_EMAIL),
       logs: logs.map((l) => ({
         ...l,
         createdAt: l.createdAt.toISOString(),
@@ -60,6 +67,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig: null,
       metaAppId: "",
       metaConfigId: "",
+      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY),
+      emailFromConfigured: Boolean(process.env.NOTIFICATIONS_FROM_EMAIL),
       logs: [],
       loadError:
         "Notification settings could not be loaded. Details: " +
@@ -121,14 +130,29 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   // 3. Connect Meta Embedded Signup (OAuth Code)
   if (actionType === "connectMetaEmbeddedSignup") {
-    const code = formData.get("code") as string;
+    const code = String(formData.get("code") || "").trim();
+    const wabaId = String(formData.get("wabaId") || "").trim();
+    const phoneNumberId = String(formData.get("phoneNumberId") || "").trim();
     if (!code) {
       return { success: false, error: "Missing Meta authorization code." };
     }
+    if (!wabaId || !phoneNumberId) {
+      return { success: false, error: "Meta did not return the selected WhatsApp Business Account and phone number. Reconnect WhatsApp and complete the Embedded Signup flow before closing the popup." };
+    }
 
     try {
-      await exchangeMetaEmbeddedSignupCode(store.id, code);
-      return { success: true, message: "WhatsApp Business connected successfully! Default templates installed." };
+      const connected = await exchangeMetaEmbeddedSignupCode(store.id, code, { wabaId, phoneNumberId });
+      const templateSetup = (connected as any)?.templateSetup;
+      if (templateSetup?.failed) {
+        return {
+          success: true,
+          message: `WhatsApp Business connected to ${connected.displayPhoneNumber || "the merchant's number"}. ${templateSetup.created} template(s) submitted and ${templateSetup.approved} already approved, but ${templateSetup.failed} template(s) could not be configured. See the template setup warning and server logs; Meta approval is still required before a template can send.`,
+        };
+      }
+      return {
+        success: true,
+        message: `WhatsApp Business connected to ${connected.displayPhoneNumber || "the merchant's number"}. ${templateSetup?.created || 0} dedicated template(s) submitted, ${templateSetup?.approved || 0} already approved, and ${templateSetup?.pending || 0} pending review. Outbound notifications use approved Meta templates only.`,
+      };
     } catch (err: any) {
       return { success: false, error: err.message || "Failed to link Meta WhatsApp account." };
     }
@@ -136,29 +160,57 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   // 4. Save manual WhatsApp credentials (Phone Number ID, WABA ID, Access Token)
   if (actionType === "saveWhatsAppConfig") {
-    const phoneNumberId = (formData.get("phoneNumberId") as string) || "";
-    const wabaId = (formData.get("wabaId") as string) || "";
-    const accessToken = (formData.get("accessToken") as string) || "";
-    const displayPhoneNumber = (formData.get("displayPhoneNumber") as string) || "";
-    const verifiedName = (formData.get("verifiedName") as string) || "";
+    const phoneNumberId = (formData.get("phoneNumberId") as string || "").trim();
+    const wabaId = (formData.get("wabaId") as string || "").trim();
+    const accessToken = (formData.get("accessToken") as string || "").trim();
+    const displayPhoneNumber = (formData.get("displayPhoneNumber") as string || "").trim();
+    const verifiedName = (formData.get("verifiedName") as string || "").trim();
 
-    if (!phoneNumberId || !accessToken) {
-      return { success: false, error: "Phone Number ID and Access Token are required." };
+    if (!phoneNumberId || !wabaId || !accessToken) {
+      return { success: false, error: "Phone Number ID, WhatsApp Business Account ID, and Access Token are required to verify the merchant's account and create dedicated templates." };
     }
 
     try {
-      await saveWhatsAppConfig(store.id, {
+      // Verify the actual merchant-owned phone number and token before enabling dispatch.
+      const phoneUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(phoneNumberId)}`);
+      phoneUrl.searchParams.set("fields", "id,display_phone_number,verified_name");
+      const phoneResponse = await fetch(phoneUrl, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+      const phonePayload = await phoneResponse.json().catch(() => ({}));
+      if (!phoneResponse.ok || String(phonePayload?.id || "") !== phoneNumberId) {
+        return { success: false, error: phonePayload?.error?.message || "Meta could not verify this Phone Number ID with the supplied token." };
+      }
+      const linkedNumbersUrl = new URL(`https://graph.facebook.com/v21.0/${encodeURIComponent(wabaId)}/phone_numbers`);
+      const linkedNumbersResponse = await fetch(linkedNumbersUrl, { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+      const linkedNumbers = await linkedNumbersResponse.json().catch(() => ({}));
+      if (!linkedNumbersResponse.ok || !Array.isArray(linkedNumbers?.data)
+        || !linkedNumbers.data.some((item: any) => String(item?.id || "") === phoneNumberId)) {
+        return { success: false, error: linkedNumbers?.error?.message || "The Phone Number ID is not linked to the supplied WABA ID." };
+      }
+
+      const saved = await saveWhatsAppConfig(store.id, {
         phoneNumberId,
         wabaId,
         accessToken,
-        displayPhoneNumber,
-        verifiedName,
+        displayPhoneNumber: displayPhoneNumber || phonePayload.display_phone_number || "",
+        verifiedName: verifiedName || phonePayload.verified_name || "",
         connectionType: "MANUAL_TOKEN",
         enabled: true,
       });
-      return { success: true, message: "WhatsApp API connected and default automation templates installed!" };
+      let setup: any = null;
+      try {
+        setup = await ensureMetaUtilityTemplates(wabaId, accessToken);
+      } catch (templateError) {
+        return {
+          success: true,
+          message: `WhatsApp API credentials were verified and saved for ${saved.displayPhoneNumber || "the merchant's number"}, but Meta template setup failed: ${templateError instanceof Error ? templateError.message : "unknown error"}. Fix WhatsApp Business Management permissions and retry connection/template setup. Outbound messages require approved Meta templates.`,
+        };
+      }
+      return {
+        success: true,
+        message: `WhatsApp connected for ${saved.displayPhoneNumber || "the merchant's number"}. ${setup.created} dedicated template(s) submitted, ${setup.approved} already approved, and ${setup.pending} pending Meta review. Only approved templates can send.`,
+      };
     } catch (err: any) {
-      return { success: false, error: err.message || "Failed to save WhatsApp configuration." };
+      return { success: false, error: err.message || "Failed to verify WhatsApp configuration." };
     }
   }
 
@@ -206,7 +258,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     try {
       const testResult = await dispatchWhatsAppNotification({
         to: testPhone,
-        message: "Hello! This is a test alert from BYNDCART WhatsApp Cloud API. Your store notifications are functioning properly.",
+        message: "Hello! This is a test alert from BYNDCART.",
+        eventType: "LIFECYCLE_COMPLETED",
+        templateVariables: { customer_name: "BYNDCART test", order_number: "#TEST" },
         shopifyStoreId: store.id,
       });
 
@@ -258,6 +312,8 @@ export default function Notifications() {
     whatsappConfig,
     metaAppId,
     metaConfigId,
+    emailProviderConfigured,
+    emailFromConfigured,
     logs,
     loadError,
   } = useLoaderData<typeof loader>();
@@ -300,6 +356,10 @@ export default function Notifications() {
 
   const [testPhone, setTestPhone] = useState("");
   const [showTestModal, setShowTestModal] = useState(false);
+  const [metaSdkReady, setMetaSdkReady] = useState(false);
+  const [metaSignupError, setMetaSignupError] = useState("");
+  const [pendingMetaCode, setPendingMetaCode] = useState<string | null>(null);
+  const [metaSignupDetails, setMetaSignupDetails] = useState<{ wabaId: string; phoneNumberId: string } | null>(null);
 
   const isWaConnected = Boolean(
     whatsappConfig?.enabled && whatsappConfig?.phoneNumberId && whatsappConfig?.accessToken
@@ -319,25 +379,102 @@ export default function Notifications() {
     setWaEditingBody((prev) => `${prev} {{${varName}}}`);
   };
 
+  React.useEffect(() => {
+    if (!metaAppId || typeof window === "undefined") return;
+    const browserWindow = window as any;
+    let disposed = false;
+
+    const initializeFacebookSdk = () => {
+      if (!browserWindow.FB) return;
+      browserWindow.FB.init({
+        appId: metaAppId,
+        cookie: true,
+        xfbml: false,
+        version: "v21.0",
+      });
+      if (!disposed) setMetaSdkReady(true);
+    };
+
+    if (browserWindow.FB) {
+      initializeFacebookSdk();
+      return () => { disposed = true; };
+    }
+
+    browserWindow.fbAsyncInit = initializeFacebookSdk;
+    let script = document.getElementById("facebook-jssdk") as HTMLScriptElement | null;
+    if (!script) {
+      script = document.createElement("script");
+      script.id = "facebook-jssdk";
+      script.src = "https://connect.facebook.net/en_US/sdk.js";
+      script.async = true;
+      script.defer = true;
+      script.onerror = () => {
+        if (!disposed) setMetaSignupError("Meta's login SDK could not load. Check your Content Security Policy and allow connect.facebook.net, then retry.");
+      };
+      document.head.appendChild(script);
+    }
+
+    return () => { disposed = true; };
+  }, [metaAppId]);
+
+  // Meta Embedded Signup sends the selected WABA/phone in a postMessage event,
+  // while FB.login returns the one-time authorization code separately.
+  React.useEffect(() => {
+    const onMetaMessage = (event: MessageEvent) => {
+      if (event.origin !== "https://www.facebook.com" && event.origin !== "https://web.facebook.com") return;
+      let payload: any = event.data;
+      if (typeof payload === "string") {
+        try { payload = JSON.parse(payload); } catch { return; }
+      }
+      if (payload?.type !== "WA_EMBEDDED_SIGNUP") return;
+      if (payload?.event === "FINISH") {
+        const data = payload?.data || {};
+        const wabaId = String(data.waba_id || data.wabaId || "").trim();
+        const phoneNumberId = String(data.phone_number_id || data.phoneNumberId || "").trim();
+        if (!wabaId || !phoneNumberId) {
+          setMetaSignupError("Meta completed signup without returning both the WhatsApp Business Account ID and phone-number ID. Reopen signup and finish phone selection.");
+          return;
+        }
+        setMetaSignupDetails({ wabaId, phoneNumberId });
+      } else if (payload?.event === "CANCEL") {
+        setMetaSignupError("WhatsApp setup was cancelled in Meta. No connection was saved.");
+      } else if (payload?.event === "ERROR") {
+        setMetaSignupError("Meta reported an error during WhatsApp setup. Review the Meta popup and try again.");
+      }
+    };
+
+    window.addEventListener("message", onMetaMessage);
+    return () => window.removeEventListener("message", onMetaMessage);
+  }, []);
+
+  React.useEffect(() => {
+    if (!pendingMetaCode || !metaSignupDetails) return;
+    const fd = new FormData();
+    fd.append("actionType", "connectMetaEmbeddedSignup");
+    fd.append("code", pendingMetaCode);
+    fd.append("wabaId", metaSignupDetails.wabaId);
+    fd.append("phoneNumberId", metaSignupDetails.phoneNumberId);
+    fetcher.submit(fd, { method: "post" });
+    setPendingMetaCode(null);
+  }, [pendingMetaCode, metaSignupDetails, fetcher]);
+
   // Launch Meta Embedded Signup Popup
   const launchMetaEmbeddedSignup = () => {
     if (typeof window === "undefined") return;
 
-    if (!metaAppId) {
-      alert("Meta App ID is not configured in server environment. Please use manual credentials entry.");
+    setMetaSignupError("");
+    if (!metaAppId || !metaConfigId) {
+      setMetaSignupError("Configure META_APP_ID and META_CONFIG_ID for your approved Meta WhatsApp Embedded Signup setup. You can use manual API credentials in the meantime.");
       setShowManualModal(true);
       return;
     }
 
     const fb = (window as any).FB;
-    if (fb) {
+    if (fb && metaSdkReady) {
       fb.login(
         (response: any) => {
           if (response.authResponse?.code) {
-            const fd = new FormData();
-            fd.append("actionType", "connectMetaEmbeddedSignup");
-            fd.append("code", response.authResponse.code);
-            fetcher.submit(fd, { method: "post" });
+            setPendingMetaCode(String(response.authResponse.code));
           } else {
             console.warn("Meta login cancelled or no code returned", response);
           }
@@ -354,13 +491,19 @@ export default function Notifications() {
         }
       );
     } else {
-      // Fallback to manual setup modal if FB JS SDK is not loaded
-      setShowManualModal(true);
+      setMetaSignupError("Meta login is still loading. Wait a moment and click Connect WhatsApp again.");
     }
   };
 
   return (
     <div className="bc-page">
+      {metaSignupError && <div className="bc-note bad" role="alert">{metaSignupError}</div>}
+      {actionData?.message && <div className={`bc-note ${actionData.success ? "ok" : "bad"}`} role={actionData.success ? "status" : "alert"}>{actionData.message}</div>}
+      {activeTab === "email" && (!emailProviderConfigured || !emailFromConfigured) && (
+        <div className="bc-note warn" role="alert">
+          Email delivery needs production configuration: {!emailProviderConfigured ? "RESEND_API_KEY is missing. " : ""}{!emailFromConfigured ? "NOTIFICATIONS_FROM_EMAIL is missing; set it to a sender verified with your email provider." : ""}
+        </div>
+      )}
       <header className="bc-header">
         <div className="bc-header-copy">
           <p className="bc-eyebrow">CUSTOMER MESSAGING & ALERTS</p>
@@ -501,9 +644,10 @@ export default function Notifications() {
                     type="button"
                     className="bc-btn primary"
                     onClick={launchMetaEmbeddedSignup}
-                    style={{ padding: "10px 24px", fontSize: "14px" }}
+                    disabled={Boolean(metaAppId && metaConfigId && !metaSdkReady) || isSubmitting}
+                    style={{ padding: "10px 24px", fontSize: "14px", opacity: Boolean(metaAppId && metaConfigId && !metaSdkReady) ? 0.65 : 1 }}
                   >
-                    Connect WhatsApp
+                    {isSubmitting ? "Connecting…" : metaAppId && metaConfigId && !metaSdkReady ? "Loading Meta…" : "Connect WhatsApp"}
                   </button>
 
                   <button
@@ -645,7 +789,7 @@ export default function Notifications() {
               <div>
                 <h2 className="bc-title" style={{ margin: 0 }}>Automated WhatsApp Alerts</h2>
                 <p className="bc-muted" style={{ fontSize: "13px", marginTop: "2px" }}>
-                  Enable or customize automated customer messages triggered during order fulfillment, courier delivery, and returns.
+                  Enable merchant-facing automation settings for order, courier, return, and exchange events. Meta approval is required for every WhatsApp Business template; edited local text does not instantly change a previously approved Meta template.
                 </p>
               </div>
             </div>

@@ -747,9 +747,17 @@ export default function BookingsPage() {
           type="button"
           className="bc-btn"
           style={{ marginLeft: "auto" }}
-          onClick={() => window.open("/app/awb", "_blank")}
+          disabled={!Array.isArray(unassignedShipments) || unassignedShipments.length === 0}
+          title={Array.isArray(unassignedShipments) && unassignedShipments.length ? "Print airway bills for saved, unassigned shipments" : "No saved shipments are available to print"}
+          onClick={() => {
+            const ids = Array.isArray(unassignedShipments)
+              ? unassignedShipments.map((shipment: any) => String(shipment.id || "")).filter(Boolean)
+              : [];
+            if (!ids.length) return;
+            window.open(`/app/awb?ids=${encodeURIComponent(ids.join(","))}`, "_blank", "noopener,noreferrer");
+          }}
         >
-          Print Airway Bills
+          Print Airway Bills{Array.isArray(unassignedShipments) && unassignedShipments.length ? ` (${unassignedShipments.length})` : ""}
         </button>
       </div>
 
@@ -1219,6 +1227,12 @@ export default function BookingsPage() {
                               Booked ({order.existingCourier || "previously"})
                             </div>
                           )}
+                          {!order.alreadyBooked && ["CANCELLED", "FAILED"].includes(String(order.previousShipmentStatus || "").toUpperCase()) && (
+                            <div style={{ fontSize: "10px", color: "#92400e", fontWeight: 700, marginTop: "3px" }}>
+                              Previous {String(order.previousShipmentStatus).toLowerCase()} booking — safe to rebook
+                              {order.existingTracking ? <span style={{ display: "block", fontWeight: 500 }}>Old CN: {order.existingTracking}</span> : null}
+                            </div>
+                          )}
                           {order.alreadyBooked && !order.existingShipmentId && (
                             <div style={{ fontSize: "10px", color: "#92400e", marginTop: "2px" }}>
                               Existing booking tag — review before rebooking
@@ -1522,12 +1536,14 @@ export default function BookingsPage() {
                               )}
                             </fulfillmentSyncFetcher.Form>
                           ) : order.alreadyBooked ? (
-                            <a
-                              href={`/app/shipments?search=${encodeURIComponent(order.name)}`}
-                              style={{ color: "#92400e", fontSize: "10px", fontWeight: 700, textDecoration: "underline" }}
+                            <button
+                              type="button"
+                              onClick={() => setViewingOrder(order)}
+                              style={{ color: "#92400e", fontSize: "10px", fontWeight: 700, textDecoration: "underline", background: "transparent", border: 0, padding: 0, cursor: "pointer" }}
+                              aria-label={`Review existing booking information for ${order.name}`}
                             >
-                              Review
-                            </a>
+                              Review order
+                            </button>
                           ) : (
                             <span style={{ color: "#94a3b8" }}>—</span>
                           )}
@@ -1980,6 +1996,17 @@ export default function BookingsPage() {
                 ✕
               </button>
             </div>
+
+            {viewingOrder.alreadyBooked && !viewingOrder.existingShipmentId && (
+              <div className="bc-note warn" role="note" style={{ marginBottom: "14px" }}>
+                Shopify has a booking tag, but BYNDCART has no matching saved shipment record. Verify the carrier portal and tracking number before making a new booking.
+              </div>
+            )}
+            {!viewingOrder.alreadyBooked && ["CANCELLED", "FAILED"].includes(String(viewingOrder.previousShipmentStatus || "").toUpperCase()) && (
+              <div className="bc-note warn" role="note" style={{ marginBottom: "14px" }}>
+                The previous carrier record is {String(viewingOrder.previousShipmentStatus).toLowerCase()}. A new booking is allowed, but first confirm the old parcel is not still active with the carrier.
+              </div>
+            )}
 
             <div style={{ marginBottom: "14px", fontSize: "13px", color: "#475569" }}>
               <strong>Customer:</strong> {viewingOrder.customerName} ({viewingOrder.customerPhone || "No Phone"})<br />

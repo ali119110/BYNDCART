@@ -233,7 +233,8 @@ textarea {
 
 /* Page shell and header */
 .bc-page {
-  width: min(100%, 1080px);
+  width: 100%;
+  max-width: 1440px;
   margin: 0 auto;
   padding: 26px 24px 44px;
   box-sizing: border-box;
@@ -2652,4 +2653,98 @@ a.bc-btn svg {
   .bc-courier-snapshot-table {
     min-width: 640px;
   }
+}
+
+
+/* Cross-app layout consistency */
+.bc-page { width: 100%; max-width: 1440px; margin-inline: auto; }
+.bc-header, .bc-page-bar { width: 100%; min-width: 0; }
+.bc-table-wrap { min-width: 0; max-width: 100%; overflow-x: auto; }
+
+/* Analytics dashboard: balanced metrics, deeper operational breakdowns, responsive charts */
+.bc-analytics-page { display: flex; flex-direction: column; gap: 20px; }
+.bc-analytics-page .bc-header { margin-bottom: 0; }
+.bc-analytics-page .bc-kpi-grid {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; align-items: stretch;
+}
+.bc-analytics-page .bc-kpi-card {
+  min-width: 0; min-height: 148px; padding: 20px; border-radius: 16px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.045);
+}
+.bc-analytics-page .bc-kpi-label {
+  display: block; min-height: 34px; line-height: 1.35; overflow-wrap: anywhere;
+}
+.bc-analytics-page .bc-kpi-value {
+  margin: 12px 0 8px; font-size: clamp(25px, 2.1vw, 34px); line-height: 1.08;
+  letter-spacing: -0.035em; overflow-wrap: anywhere;
+}
+.bc-analytics-page .bc-kpi-sub {
+  margin: 8px 0 0; color: var(--bc-muted, #667085); font-size: 12px;
+  line-height: 1.45; overflow-wrap: anywhere;
+}
+.bc-analytics-section { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.bc-analytics-section-heading {
+  display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px;
+}
+.bc-analytics-section-heading .bc-title { margin-bottom: 4px; }
+.bc-analytics-ops-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.bc-analytics-secondary-kpis {
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; min-width: 0;
+}
+.bc-analytics-secondary-kpis > .bc-card {
+  min-width: 0; padding: 16px; border-radius: 14px; box-shadow: 0 2px 10px rgba(15, 23, 42, 0.035);
+}
+.bc-analytics-secondary-kpis .bc-kpi-value {
+  margin: 10px 0 6px; font-size: clamp(20px, 1.7vw, 28px); font-weight: 750;
+  line-height: 1.15; overflow-wrap: anywhere;
+}
+.bc-analytics-currency-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.bc-analytics-currency-list > div { display: flex; flex-direction: column; gap: 2px; }
+.bc-analytics-currency-list strong {
+  color: var(--bc-ink, #101828); font-size: 14px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+}
+.bc-analytics-currency-list span { color: var(--bc-muted, #667085); font-size: 11px; }
+.bc-analytics-pipeline-grid {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; min-width: 0;
+}
+.bc-analytics-pipeline-grid > .bc-card {
+  min-width: 0; padding: 20px; border-radius: 16px; box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
+}
+.bc-analytics-status-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.bc-analytics-status-list > div {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 9px 0; border-bottom: 1px solid var(--bc-line, #eaecf0); min-width: 0;
+}
+.bc-analytics-status-list > div:last-child { border-bottom: 0; }
+.bc-analytics-status-list > div > span {
+  display: flex; flex-direction: column; min-width: 0; gap: 2px; overflow-wrap: anywhere;
+  color: var(--bc-ink, #101828); font-size: 12px;
+}
+.bc-analytics-status-list small { color: var(--bc-muted, #667085); font-size: 11px; }
+.bc-analytics-status-list > div > strong {
+  flex: 0 0 auto; font-size: 15px; color: var(--bc-ink, #101828); font-variant-numeric: tabular-nums;
+}
+.bc-analytics-page .bc-split {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; gap: 16px; min-width: 0;
+}
+.bc-analytics-page .bc-card { min-width: 0; }
+.bc-analytics-page .bc-table { width: 100%; min-width: 0; }
+.bc-analytics-page .bc-table th, .bc-analytics-page .bc-table td {
+  padding: 10px 8px; overflow-wrap: anywhere;
+}
+@media (max-width: 1150px) {
+  .bc-analytics-page .bc-kpi-grid, .bc-analytics-ops-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bc-analytics-secondary-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .bc-analytics-pipeline-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .bc-page { padding-inline: 14px; }
+  .bc-analytics-secondary-kpis, .bc-analytics-pipeline-grid, .bc-analytics-page .bc-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bc-analytics-page .bc-kpi-card { min-height: 0; padding: 16px; }
+  .bc-analytics-page .bc-kpi-label { min-height: 0; }
+}
+@media (max-width: 480px) {
+  .bc-analytics-page .bc-kpi-grid, .bc-analytics-ops-grid { grid-template-columns: minmax(0, 1fr); }
 }
