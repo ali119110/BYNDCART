@@ -494,6 +494,49 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
 
   const orderSnapshot = await prisma.order.findFirst({ where: { shopifyStoreId, shopifyOrderId: exchangeRequest.shopifyOrderId } });
   if (!orderSnapshot) throw new Error("Original Shopify order snapshot is missing; refresh/sync the order before creating a replacement.");
+
+  // Draft orders must preserve the original buyer and delivery destination. The cached
+  // Order model intentionally stores a minimal snapshot, so read addresses directly from
+  // Shopify rather than building a replacement order with email alone.
+  const customerResponse = await client.graphql(
+    `#graphql
+    query replacementOrderCustomerDetails($id: ID!) {
+      order(id: $id) {
+        id
+        email
+        phone
+        customer { id email phone firstName lastName }
+        shippingAddress {
+          firstName lastName name company address1 address2 city province zip country countryCodeV2 phone
+        }
+        billingAddress {
+          firstName lastName name company address1 address2 city province zip country countryCodeV2 phone
+        }
+      }
+    }`,
+    { variables: { id: exchangeRequest.shopifyOrderId } },
+  );
+  const customerPayload = await customerResponse.json();
+  const customerErrors = Array.isArray(customerPayload?.errors)
+    ? customerPayload.errors.map((error: any) => error?.message).filter(Boolean)
+    : [];
+  if (customerErrors.length) {
+    throw new Error(`Could not read customer/shipping details for replacement order: ${customerErrors.join("; ")}`);
+  }
+  const originalShopifyOrder = customerPayload?.data?.order;
+  if (!originalShopifyOrder?.id) throw new Error("Original order details could not be loaded from Shopify.");
+  const toDraftAddress = (address: any) => {
+    if (!address) return undefined;
+    const keys = ["firstName", "lastName", "name", "company", "address1", "address2", "city", "province", "zip", "phone"];
+    const normalized = Object.fromEntries(keys
+      .map((key) => [key, typeof address[key] === "string" ? address[key].trim() : ""])
+      .filter(([, value]) => Boolean(value)));
+    const countryCode = String(address.countryCodeV2 || "").trim().toUpperCase();
+    const country = String(address.country || "").trim();
+    if (countryCode) normalized.countryCode = countryCode;
+    else if (country) normalized.country = country;
+    return Object.keys(normalized).length ? normalized : undefined;
+  };
   const originalLines = Array.isArray(orderSnapshot.lineItems) ? orderSnapshot.lineItems as any[] : [];
   const replacementVariantIds = [...new Set(exchangeRequest.items.map((item: any) => item.replacementVariantId))];
   const variants = await prisma.productCache.findMany({ where: { shopifyStoreId, shopifyVariantId: { in: replacementVariantIds } } });
@@ -533,7 +576,11 @@ export async function executeShopifyDraftOrderCreate({ shopifyStoreId, entityId,
     return { success: true, replacementOrderId: alreadyCreatedOrderId, replacementOrderNumber: alreadyCreatedOrderNumber, idempotent: true, netDifference, settlement, originalReturnError };
   }
   const input: any = {
-    email: exchangeRequest.customerEmail || undefined,
+    customerId: originalShopifyOrder.customer?.id || undefined,
+    email: originalShopifyOrder.email || originalShopifyOrder.customer?.email || exchangeRequest.customerEmail || undefined,
+    phone: originalShopifyOrder.phone || originalShopifyOrder.shippingAddress?.phone || originalShopifyOrder.customer?.phone || undefined,
+    shippingAddress: toDraftAddress(originalShopifyOrder.shippingAddress),
+    billingAddress: toDraftAddress(originalShopifyOrder.billingAddress),
     note: `BYNDCART exchange replacement for original order ${exchangeRequest.orderNumber} (request ${exchangeRequest.id}). Net difference: ${netDifference.toFixed(2)} ${orderSnapshot.currency}. A positive balance remains unpaid until collected by the merchant.`,
     tags: [REPLACEMENT_ORDER_TAG],
     lineItems,
