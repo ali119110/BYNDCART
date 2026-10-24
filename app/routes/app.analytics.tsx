@@ -2,6 +2,7 @@ import React from "react";
 import { useLoaderData, useSearchParams, useFetcher } from "react-router";
 import type { Route } from "./+types/app.analytics";
 import { requireTenantContext } from "../utils/tenant.server";
+import { assertPermission } from "../services/permissions.server";
 import { getAnalytics, exportFinancialCSV } from "../services/analytics.server";
 
 // ===== LOADER: Fetch analytics from database with date-range filter =====
@@ -52,7 +53,9 @@ export async function loader({ request }: Route.LoaderArgs) {
 
 // ===== ACTION: Handle CSV Export Download =====
 export async function action({ request }: Route.ActionArgs) {
-  const { shopifyStoreId } = await requireTenantContext(request);
+  const { shopifyStoreId, session } = await requireTenantContext(request);
+  // The ledger includes customer identifiers and refund/exchange financial records.
+  await assertPermission(shopifyStoreId, session, "refunds");
   const csvData = await exportFinancialCSV(shopifyStoreId);
 
   return new Response(csvData, {
