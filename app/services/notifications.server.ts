@@ -183,22 +183,15 @@ export const DEFAULT_TEMPLATES: Record<NotificationEventType, DefaultTemplateCon
  */
 export function renderTemplate(template: string, variables: Record<string, any>): string {
   let result = String(template || "");
-  const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\function renderTemplate(template: string, variables: Record<string, any>): string {
-  let result = template;
   for (const [key, val] of Object.entries(variables)) {
     const valueStr = val !== undefined && val !== null ? String(val) : "";
-    const reg = new RegExp(`{{\\s*${key}\\s*}}`, "g");
-    result = result.replace(reg, valueStr);
+    // Template variable names are defined by BYNDCART and consist of letters/underscores.
+    result = result.replace(new RegExp("\\{\\{\\s*" + key + "\\s*\\}\\}", "g"), valueStr);
+    result = result.replace(new RegExp("\\[\\s*" + key + "\\s*\\]", "g"), valueStr);
   }
-  return result;
-}");
-  for (const [key, val] of Object.entries(variables)) {
-    const valueStr = val !== undefined && val !== null ? String(val) : "";
-    const safeKey = escapeRegExp(key);
-    result = result.replace(new RegExp(`{{\\s*${safeKey}\\s*}}`, "g"), valueStr);
-    result = result.replace(new RegExp(`\\[\\s*${safeKey}\\s*\\]`, "g"), valueStr);
-  }
-  return result.replace(/\\[line\\]/gi, "\\n").replace(/{{\\s*line\\s*}}/gi, "\\n");
+  return result
+    .replace(/\[line\]/gi, "\n")
+    .replace(/\{\{\s*line\s*\}\}/gi, "\n");
 }
 
 /**
