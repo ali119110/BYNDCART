@@ -2676,3 +2676,132 @@ a.bc-btn svg {
 .bc-shipments-table-wrap .bc-table {
   min-width: 980px;
 }
+
+
+/* Analytics: avoid equal-height KPI cards when one metric has a longer note. */
+.bc-kpi-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 205px), 1fr));
+  align-items: start;
+  grid-auto-rows: min-content;
+}
+.bc-kpi-card {
+  height: auto;
+  align-self: start;
+}
+.bc-kpi-label {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.bc-kpi-card .bc-muted {
+  line-height: 1.45;
+  font-size: 12px;
+}
+.bc-analytics-definition {
+  margin: -6px 0 0;
+  max-width: 1000px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.bc-analytics-operations {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.bc-analytics-section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.bc-analytics-section-heading .bc-title {
+  margin: 0 0 4px;
+  font-size: 21px;
+}
+.bc-analytics-section-heading .bc-muted {
+  margin: 0;
+  max-width: 760px;
+}
+.bc-analytics-ops-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+  gap: 14px;
+  align-items: start;
+}
+.bc-analytics-ops-kpi {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid var(--bc-line);
+  border-radius: var(--bc-radius-lg);
+  background: var(--bc-surface);
+  box-shadow: var(--bc-shadow);
+}
+.bc-analytics-ops-kpi > span {
+  color: var(--bc-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+.bc-analytics-ops-kpi > strong {
+  color: var(--bc-ink);
+  font-size: clamp(25px, 3vw, 34px);
+  line-height: 1.1;
+  letter-spacing: -0.035em;
+}
+.bc-analytics-ops-kpi > small {
+  color: var(--bc-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.bc-analytics-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+}
+.bc-analytics-status-card {
+  min-width: 0;
+  align-self: start;
+}
+.bc-analytics-status-card > .bc-title {
+  margin: 0 0 16px;
+}
+.bc-analytics-status-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 12px 0;
+}
+.bc-analytics-status-row > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+.bc-analytics-status-row > div:first-child span {
+  overflow-wrap: anywhere;
+  color: var(--bc-muted);
+}
+.bc-analytics-status-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eef0f3;
+}
+.bc-analytics-status-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #4b61b3;
+}
+@media (max-width: 760px) {
+  .bc-analytics-status-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bc-analytics-section-heading .bc-title {
+    font-size: 19px;
+  }
+}
