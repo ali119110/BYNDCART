@@ -3,6 +3,7 @@ import { CourierRegistry, getDecryptedCourierCredentials, type LabelResult } fro
 import { logAction } from "./audit.server";
 import { triggerLifecycleNotification } from "./notifications.server";
 import { getCourierOperationsSettings } from "./settings.server";
+import { checkFeatureAccess } from "./planGate.server";
 import {
   matchPakistaniCity,
   normalizePakistaniMobile,
@@ -551,6 +552,10 @@ async function sharedCourierRuleTags(
   const rules = await getCourierOperationsSettings(shopifyStoreId);
   const variants = customerPhoneVariants(customerPhone);
   if (!variants.length || (!rules.fraudCheckEnabled && !rules.duplicateCheckEnabled)) return [];
+
+  // Enforce the paid-plan gate at runtime too, so saved settings cannot keep running after downgrade.
+  const aiChecksAllowed = await checkFeatureAccess(shopifyStoreId, "COURIER_AI_CHECKS").catch(() => false);
+  if (!aiChecksAllowed) return [];
 
   const tags = new Set<string>();
 
