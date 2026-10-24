@@ -32,7 +32,7 @@ export const DEFAULT_COURIER_OPERATIONS_SETTINGS: CourierOperationsSettings = {
   sendDeliveryUpdates: false,
   deliveryUpdatePage: "COURIER_LOGS",
   deliveryUpdateTemplate:
-    "Dear {{customer_name}}, your order #{{order_number}} of amount Rs {{order_amount}} has been shipped.\n\nCourier: {{courier_name}}\nTracking: {{tracking_number}}\nTrack your parcel: {{tracking_url}}",
+    "Dear [customer_name] - [customer_phone], your order # [order_number] of amount Rs [order_amount] has been shipped.[line][line]*Courier:* [courier_name][line]*Tracking:* [tracking_number][line][line]Track your parcel: [tracking_url]",
   fraudCheckEnabled: false,
   fraudTagDefinition: "courier: Trusted - if customer delivery ratio > 85%",
   duplicateCheckEnabled: false,
