@@ -211,6 +211,7 @@ test("Booking list shows every Shopify-unfulfilled order even if a courier shipm
       orderNumber: "FR4947",
       trackingNumber: "PX-FR4947",
       courier: "POSTEX",
+      type: "FORWARD",
       status: "LABEL_CREATED",
     },
     {
@@ -219,7 +220,8 @@ test("Booking list shows every Shopify-unfulfilled order even if a courier shipm
       orderNumber: "FR4946",
       trackingNumber: "PX-FR4946",
       courier: "POSTEX",
-      status: "LABEL_CREATED",
+      type: "EXCHANGE",
+      status: "CANCELLED",
     },
   ];
 
@@ -248,9 +250,10 @@ test("Booking list shows every Shopify-unfulfilled order even if a courier shipm
     assert.strictEqual(booked4947?.alreadyBooked, true);
     assert.strictEqual(booked4947?.existingShipmentId, "shipment-fr4947");
     assert.strictEqual(booked4947?.existingTracking, "PX-FR4947");
-    assert.strictEqual(booked4946?.alreadyBooked, true);
+    assert.strictEqual(booked4946?.alreadyBooked, false, "cancelled exchange labels should not block rebooking");
     assert.strictEqual(booked4946?.existingShipmentId, "shipment-fr4946");
     assert.strictEqual(booked4946?.existingTracking, "PX-FR4946");
+    assert.strictEqual(booked4946?.existingShipmentStatus, "CANCELLED");
   } finally {
     shipmentTrack.findMany = originalFindMany;
   }
