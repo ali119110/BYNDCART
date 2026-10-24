@@ -129,6 +129,9 @@ export async function action({ request }: Route.ActionArgs) {
     phone: String(formData.get(`shipperProfile${index}Phone`) || "").trim(),
     email: String(formData.get(`shipperProfile${index}Email`) || "").trim(),
     city: String(formData.get(`shipperProfile${index}City`) || "").trim(),
+    state: String(formData.get(`shipperProfile${index}State`) || "").trim(),
+    postalCode: String(formData.get(`shipperProfile${index}PostalCode`) || "").trim(),
+    countryCode: String(formData.get(`shipperProfile${index}CountryCode`) || "PK").trim().toUpperCase(),
     address: String(formData.get(`shipperProfile${index}Address`) || "").trim(),
   }));
   const courierOperationsSettings = normalizeCourierOperationsSettings({
@@ -575,6 +578,18 @@ export default function Settings() {
                     <div className="bco-field">
                       <label htmlFor={`shipperProfile${index}Address`}>Address</label>
                       <input id={`shipperProfile${index}Address`} name={`shipperProfile${index}Address`} maxLength={500} defaultValue={profile.address} placeholder="Warehouse, street, area" />
+                    </div>
+                    <div className="bco-field">
+                      <label htmlFor={`shipperProfile${index}State`}>State / Province (optional)</label>
+                      <input id={`shipperProfile${index}State`} name={`shipperProfile${index}State`} maxLength={100} defaultValue={profile.state} placeholder="Sindh" />
+                    </div>
+                    <div className="bco-field">
+                      <label htmlFor={`shipperProfile${index}PostalCode`}>Postal code (optional)</label>
+                      <input id={`shipperProfile${index}PostalCode`} name={`shipperProfile${index}PostalCode`} maxLength={24} defaultValue={profile.postalCode} placeholder="74000" />
+                    </div>
+                    <div className="bco-field">
+                      <label htmlFor={`shipperProfile${index}CountryCode`}>Country code</label>
+                      <input id={`shipperProfile${index}CountryCode`} name={`shipperProfile${index}CountryCode`} maxLength={2} minLength={2} pattern="[A-Za-z]{2}" defaultValue={profile.countryCode || "PK"} placeholder="PK" />
                     </div>
                   </div>
                 </div>
