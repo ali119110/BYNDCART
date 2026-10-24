@@ -70,6 +70,7 @@ export async function ensureCourierTrackingScheduled(shopifyStoreId: string) {
     where: {
       shopifyStoreId,
       status: { notIn: ["DELIVERED", "CANCELLED", "FAILED"] },
+      warehouseIntakes: { none: {} },
     },
     select: { id: true },
   });
@@ -168,6 +169,7 @@ registerJobHandler("COURIER_TRACKING_SYNC", async (_payload: any, shopifyStoreId
     where: {
       shopifyStoreId,
       status: { notIn: ["DELIVERED", "CANCELLED", "FAILED"] },
+      warehouseIntakes: { none: {} },
     },
     orderBy: { updatedAt: "asc" },
     take: COURIER_TRACKING_SYNC_BATCH_SIZE,

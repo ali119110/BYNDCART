@@ -464,6 +464,31 @@ export async function syncShipmentTrackingStatus(trackingNumber: string, shopify
   if (!shipment) {
     throw new Error(`Shipment with tracking number ${trackingNumber} not found.`);
   }
+  if (["DELIVERED", "CANCELLED", "FAILED"].includes(String(shipment.status).toUpperCase())) {
+    return {
+      success: true,
+      trackingNumber,
+      status: shipment.status as StandardShipmentStatus,
+      location: shipment.location,
+      skipped: true,
+      reason: "Shipment is already in a terminal status.",
+    };
+  }
+
+  const warehouseIntake = await prisma.warehouseIntake.findFirst({
+    where: { shopifyStoreId: shipment.shopifyStoreId, shipmentTrackId: shipment.id },
+    select: { id: true },
+  });
+  if (warehouseIntake) {
+    return {
+      success: true,
+      trackingNumber,
+      status: shipment.status as StandardShipmentStatus,
+      location: shipment.location,
+      skipped: true,
+      reason: "Shipment has already been received at the warehouse.",
+    };
+  }
 
   const adapter = CourierRegistry.get(shipment.courier);
   if (!adapter.isLive) throw new Error(`${adapter.displayName} tracking is disabled in BYNDCART.`);
@@ -628,8 +653,15 @@ export async function cancelShipmentTrack(shopifyStoreId: string, shipmentId: st
     select: { id: true, shopifyStoreId: true, trackingNumber: true, courier: true, status: true, orderNumber: true },
   });
   if (!shipment) throw new Error("Shipment not found for this store.");
-  if (["DELIVERED", "CANCELLED"].includes(String(shipment.status))) {
+  if (["DELIVERED", "CANCELLED", "FAILED"].includes(String(shipment.status).toUpperCase())) {
     throw new Error(`A shipment with status ${shipment.status} cannot be cancelled from BYNDCART.`);
+  }
+  const warehouseIntake = await prisma.warehouseIntake.findFirst({
+    where: { shopifyStoreId, shipmentTrackId: shipment.id },
+    select: { id: true },
+  });
+  if (warehouseIntake) {
+    throw new Error("This shipment has already been received at the warehouse and cannot be cancelled.");
   }
   if (!CourierRegistry.has(shipment.courier)) {
     throw new Error(`${shipment.courier} is disabled in BYNDCART. Cancellation is unavailable for this carrier.`);
@@ -729,6 +761,7 @@ export async function getStoreShipments(shopifyStoreId: string, options: GetShip
 
   const mapped: any = shipments.map((s) => ({
     id: s.id,
+    shopifyOrderId: s.shopifyOrderId,
     orderNumber: s.orderNumber,
     type: s.type,
     courier: s.courier,
@@ -766,6 +799,7 @@ export async function syncAllActiveShipments(shopifyStoreId: string) {
     where: {
       shopifyStoreId,
       status: { in: ["LABEL_CREATED", "IN_TRANSIT", "OUT_FOR_DELIVERY"] },
+      warehouseIntakes: { none: {} },
     },
     select: { trackingNumber: true },
     take: 25,
