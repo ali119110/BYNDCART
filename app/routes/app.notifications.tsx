@@ -46,8 +46,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig,
       metaAppId: process.env.META_APP_ID || process.env.WHATSAPP_APP_ID || "",
       metaConfigId: process.env.META_CONFIG_ID || "",
-      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY),
-      emailFromAddress: process.env.NOTIFICATIONS_FROM_EMAIL || "BYNDCART <notifications@byndcart.app>",
+      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY && process.env.NOTIFICATIONS_FROM_EMAIL),
+      emailFromAddress: process.env.NOTIFICATIONS_FROM_EMAIL || "Not configured",
       merchantReplyTo: storeSettings?.notificationEmail || storeSettings?.supportEmail || "",
       logs: logs.map((l) => ({
         ...l,
@@ -66,8 +66,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       whatsappConfig: null,
       metaAppId: "",
       metaConfigId: "",
-      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY),
-      emailFromAddress: process.env.NOTIFICATIONS_FROM_EMAIL || "BYNDCART <notifications@byndcart.app>",
+      emailProviderConfigured: Boolean(process.env.RESEND_API_KEY && process.env.NOTIFICATIONS_FROM_EMAIL),
+      emailFromAddress: process.env.NOTIFICATIONS_FROM_EMAIL || "Not configured",
       merchantReplyTo: "",
       logs: [],
       loadError:
