@@ -2,6 +2,119 @@ import db from "../db.server";
 
 type ShopMetadata = { email: string | null; name: string | null };
 
+export type ShipperProfile = {
+  name: string;
+  phone: string;
+  city: string;
+  address: string;
+};
+
+export type CourierOperationsSettings = {
+  autoCourierTracking: boolean;
+  sendDeliveryUpdates: boolean;
+  deliveryUpdatePage: string;
+  deliveryUpdateTemplate: string;
+  fraudCheckEnabled: boolean;
+  fraudTagDefinition: string;
+  duplicateCheckEnabled: boolean;
+  duplicateCheckDurationMinutes: number;
+  labelWebsite: string;
+  labelLogoUrl: string;
+  labelSize: "A4_3" | "A4_4" | "THERMAL_4X6";
+  defaultShipperProfileIndex: number;
+  shipperProfiles: ShipperProfile[];
+};
+
+export const DEFAULT_COURIER_OPERATIONS_SETTINGS: CourierOperationsSettings = {
+  // Preserve BYNDCART's existing on-demand live tracking behavior for stores not yet configured.
+  autoCourierTracking: true,
+  // Keep outbound customer messaging enabled by default to preserve existing notification behavior.
+  sendDeliveryUpdates: true,
+  deliveryUpdatePage: "COURIER_LOGS",
+  deliveryUpdateTemplate:
+    "Dear {{customer_name}}, your order #{{order_number}} of amount Rs {{order_amount}} has been shipped.\n\nCourier: {{courier_name}}\nTracking: {{tracking_number}}\nTrack your parcel: {{tracking_url}}",
+  fraudCheckEnabled: false,
+  fraudTagDefinition: "courier: Trusted - if customer delivery ratio > 85%",
+  duplicateCheckEnabled: false,
+  duplicateCheckDurationMinutes: 30,
+  labelWebsite: "",
+  labelLogoUrl: "",
+  labelSize: "A4_3",
+  defaultShipperProfileIndex: 0,
+  shipperProfiles: [
+    { name: "", phone: "", city: "", address: "" },
+    { name: "", phone: "", city: "", address: "" },
+    { name: "", phone: "", city: "", address: "" },
+  ],
+};
+
+function asRecord(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, any>
+    : {};
+}
+
+function boundedSettingText(value: unknown, maxLength: number): string {
+  return String(value ?? "").trim().slice(0, maxLength);
+}
+
+/** Normalize the JSON settings so older stores always receive a complete, safe shape. */
+export function normalizeCourierOperationsSettings(value: unknown): CourierOperationsSettings {
+  const raw = asRecord(value);
+  const profilesValue = Array.isArray(raw.shipperProfiles) ? raw.shipperProfiles : [];
+  const shipperProfiles = Array.from({ length: 3 }, (_, index) => {
+    const profile = asRecord(profilesValue[index]);
+    return {
+      name: boundedSettingText(profile.name, 100),
+      phone: boundedSettingText(profile.phone, 40),
+      city: boundedSettingText(profile.city, 100),
+      address: boundedSettingText(profile.address, 500),
+    };
+  });
+  const duration = Number(raw.duplicateCheckDurationMinutes);
+  const labelSize = ["A4_3", "A4_4", "THERMAL_4X6"].includes(String(raw.labelSize))
+    ? String(raw.labelSize) as CourierOperationsSettings["labelSize"]
+    : DEFAULT_COURIER_OPERATIONS_SETTINGS.labelSize;
+  const defaultIndex = Number(raw.defaultShipperProfileIndex);
+
+  return {
+    autoCourierTracking: typeof raw.autoCourierTracking === "boolean"
+      ? raw.autoCourierTracking
+      : DEFAULT_COURIER_OPERATIONS_SETTINGS.autoCourierTracking,
+    sendDeliveryUpdates: typeof raw.sendDeliveryUpdates === "boolean"
+      ? raw.sendDeliveryUpdates
+      : DEFAULT_COURIER_OPERATIONS_SETTINGS.sendDeliveryUpdates,
+    deliveryUpdatePage: raw.deliveryUpdatePage === "SHIPMENTS" ? "SHIPMENTS" : "COURIER_LOGS",
+    deliveryUpdateTemplate: boundedSettingText(
+      raw.deliveryUpdateTemplate ?? DEFAULT_COURIER_OPERATIONS_SETTINGS.deliveryUpdateTemplate,
+      4000,
+    ),
+    fraudCheckEnabled: raw.fraudCheckEnabled === true,
+    fraudTagDefinition: boundedSettingText(
+      raw.fraudTagDefinition ?? DEFAULT_COURIER_OPERATIONS_SETTINGS.fraudTagDefinition,
+      160,
+    ),
+    duplicateCheckEnabled: raw.duplicateCheckEnabled === true,
+    duplicateCheckDurationMinutes: [15, 30, 60, 120, 240].includes(duration)
+      ? duration
+      : DEFAULT_COURIER_OPERATIONS_SETTINGS.duplicateCheckDurationMinutes,
+    labelWebsite: boundedSettingText(raw.labelWebsite, 200),
+    labelLogoUrl: boundedSettingText(raw.labelLogoUrl, 1000),
+    labelSize,
+    defaultShipperProfileIndex: Number.isInteger(defaultIndex) && defaultIndex >= 0 && defaultIndex < 3 ? defaultIndex : 0,
+    shipperProfiles,
+  };
+}
+
+/** Shared merchant-level preferences used by booking, labels and all configured couriers. */
+export async function getCourierOperationsSettings(shopifyStoreId: string): Promise<CourierOperationsSettings> {
+  const row = await db.storeSettings.findUnique({
+    where: { shopifyStoreId },
+    select: { courierOperationsSettings: true },
+  });
+  return normalizeCourierOperationsSettings(row?.courierOperationsSettings);
+}
+
 export async function getSettings(shopifyStoreId: string, admin?: any) {
   const store = process.env.NODE_ENV === "test"
     ? null
@@ -223,6 +336,7 @@ export async function updateSettings(
     supportEmail?: string | null;
     whatsappNumber?: string | null;
     returnAddress?: string | null;
+    courierOperationsSettings?: CourierOperationsSettings | any;
     policies?: any;
   }
 ) {
@@ -245,5 +359,6 @@ function serializeSettings(settings: any) {
     exchangeShippingCost: Number(settings.exchangeShippingCost),
     codTaxPercent: Number(settings.codTaxPercent ?? 4),
     codDeliveryCharge: Number(settings.codDeliveryCharge ?? 280),
+    courierOperationsSettings: normalizeCourierOperationsSettings(settings.courierOperationsSettings),
   };
 }
