@@ -77,6 +77,7 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
         SELECT o."shopifyOrderId", o."lineItems"
         FROM "Order" o
         WHERE o."shopifyStoreId" = ${shopifyStoreId}
+          AND COALESCE(o."fulfillmentStatus", '') <> 'CANCELLED'
           AND (${filters.startDate ? filters.startDate : new Date(0)} <= o."shopifyCreatedAt")
           AND (${filters.endDate ? filters.endDate : new Date("2100-01-01")} >= o."shopifyCreatedAt")
       ),
@@ -151,6 +152,7 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
         SELECT o."shopifyOrderId", o."lineItems"
         FROM "Order" o
         WHERE o."shopifyStoreId" = ${shopifyStoreId}
+          AND COALESCE(o."fulfillmentStatus", '') <> 'CANCELLED'
           AND (${filters.startDate ? filters.startDate : new Date(0)} <= o."shopifyCreatedAt")
           AND (${filters.endDate ? filters.endDate : new Date("2100-01-01")} >= o."shopifyCreatedAt")
       ),
@@ -218,7 +220,7 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
   ]);
 
   const totalRequests = totalReturns + totalExchanges;
-  const soldUnits = Number(unitReturnMetricsRaw[0]?.sold_units ?? 0);
+  const orderedUnits = Number(unitReturnMetricsRaw[0]?.sold_units ?? 0);
   const receivedReturnUnits = Number(unitReturnMetricsRaw[0]?.received_return_units ?? 0);
   // This is a warehouse-confirmed unit rate for the selected order cohort. A
   // complete Order sync and accurate ReturnItem statuses are required.
@@ -244,9 +246,9 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
       totalRequests,
       returnRequestShare: Number(returnRequestShare.toFixed(1)),
       exchangeRequestShare: Number(exchangeRequestShare.toFixed(1)),
-      soldUnits,
+      orderedUnits,
       receivedReturnUnits,
-      unitReturnRate: soldUnits > 0 ? Number(((receivedReturnUnits / soldUnits) * 100).toFixed(1)) : null,
+      unitReturnRate: orderedUnits > 0 ? Number(((receivedReturnUnits / orderedUnits) * 100).toFixed(1)) : null,
       totalRefunded,
       confirmedRefundsByCurrency,
       revenueFromExchanges,
@@ -277,7 +279,7 @@ export async function getAnalytics(shopifyStoreId: string, filters: AnalyticsFil
       productKey: p.product_key,
       title: p.title ?? "Unknown Product",
       sku: p.sku,
-      soldUnits: Number(p.sold_units),
+      orderedUnits: Number(p.sold_units),
       requestedUnits: Number(p.requested_units),
       receivedUnits: Number(p.received_units),
       unitReturnRate: p.unit_return_rate == null ? null : Number(p.unit_return_rate),
