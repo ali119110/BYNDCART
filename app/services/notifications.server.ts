@@ -297,6 +297,16 @@ export async function processNotificationJob(payload: {
   const { notificationLogId, shopifyStoreId, eventType, channel, recipient, variables } = payload;
 
   try {
+    // The event is executed in-band and also enqueued for retry. Skip the queued duplicate
+    // if the in-band dispatch already delivered or deliberately skipped this exact notification.
+    const currentLog = await prisma.notificationLog.findUnique({
+      where: { id: notificationLogId },
+      select: { status: true },
+    });
+    if (currentLog?.status === "SENT" || currentLog?.status === "SKIPPED") {
+      return { success: true, status: "SKIPPED" };
+    }
+
     // Courier delivery messaging is one shared merchant-level setting for every provider.
     let sharedCourierSettings = null as Awaited<ReturnType<typeof getCourierOperationsSettings>> | null;
     if (eventType === "TRACKING_UPDATE" && channel === "WHATSAPP") {
