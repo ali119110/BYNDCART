@@ -230,11 +230,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
       entries.find((entry) => entry.status === status)?._count._all ?? 0;
     const pendingReturns = countForStatus(returnLifecycleRaw, "PENDING");
     const pendingExchanges = countForStatus(exchangeLifecycleRaw, "PENDING");
+    const returnsAwaitingInboundParcel = countForStatus(returnLifecycleRaw, "APPROVED");
+    const exchangesAwaitingInboundParcel = countForStatus(exchangeLifecycleRaw, "APPROVED");
     const inTransit = countForStatus(shipmentStatusRaw, "IN_TRANSIT") + countForStatus(shipmentStatusRaw, "OUT_FOR_DELIVERY");
     const failedShipments = countForStatus(shipmentStatusRaw, "FAILED");
     const bookedParcels = countForStatus(shipmentStatusRaw, "LABEL_CREATED");
     const pendingRefunds = refundFinancialRaw
       .filter((entry) => entry.status === "PENDING")
+      .reduce((sum, entry) => sum + entry._count._all, 0);
+    const failedRefunds = refundFinancialRaw
+      .filter((entry) => entry.status === "FAILED")
       .reduce((sum, entry) => sum + entry._count._all, 0);
     const pendingRefundAmountPkr = refundFinancialRaw
       .filter((entry) => entry.status === "PENDING" && entry.currency === "PKR")
@@ -313,6 +318,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       operations: {
         pendingReturns,
         pendingExchanges,
+        returnsAwaitingInboundParcel,
+        exchangesAwaitingInboundParcel,
+        failedRefunds,
         inTransit,
         awaitingInspection,
         pendingRefunds,
@@ -372,6 +380,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       operations: {
         pendingReturns: 0,
         pendingExchanges: 0,
+        returnsAwaitingInboundParcel: 0,
+        exchangesAwaitingInboundParcel: 0,
+        failedRefunds: 0,
         inTransit: 0,
         awaitingInspection: 0,
         pendingRefunds: 0,
@@ -432,6 +443,9 @@ export default function Dashboard() {
   const operations = loaderData?.operations ?? {
     pendingReturns: 0,
     pendingExchanges: 0,
+    returnsAwaitingInboundParcel: 0,
+    exchangesAwaitingInboundParcel: 0,
+    failedRefunds: 0,
     inTransit: 0,
     awaitingInspection: 0,
     pendingRefunds: 0,
@@ -472,8 +486,11 @@ export default function Dashboard() {
   const attentionItems = [
     { label: "Failed shipments", count: operations.failedShipments, detail: "Carrier status needs review", to: withRangeContext("/app/shipments"), priority: 1 },
     { label: "COD disputes", count: operations.disputedCod, detail: "Settlement values do not match", to: withRangeContext("/app/reconciliation"), priority: 1 },
+    { label: "Failed refunds", count: operations.failedRefunds, detail: "A refund record is marked failed", to: withRangeContext("/app/refunds"), priority: 1 },
     { label: "Stale tracking", count: operations.staleShipments, detail: "No shipment update for 48+ hours", to: withRangeContext("/app/shipments"), priority: 2 },
     { label: "Refunds awaiting confirmation", count: operations.pendingRefunds, detail: "Confirm only after checking payment evidence", to: withRangeContext("/app/refunds"), priority: 2 },
+    { label: "Return parcels not yet received", count: operations.returnsAwaitingInboundParcel, detail: "Approved returns awaiting inbound receipt", to: withRangeContext("/app/returns"), priority: 2 },
+    { label: "Exchange parcels not yet received", count: operations.exchangesAwaitingInboundParcel, detail: "Approved exchanges awaiting inbound receipt", to: withRangeContext("/app/exchanges"), priority: 2 },
     { label: "Warehouse inspection", count: operations.awaitingInspection, detail: "Received parcels awaiting inspection", to: withRangeContext("/app/warehouse"), priority: 2 },
     { label: "Returns awaiting review", count: operations.pendingReturns, detail: "Return requests still pending", to: withRangeContext("/app/returns"), priority: 3 },
     { label: "Exchanges awaiting review", count: operations.pendingExchanges, detail: "Exchange requests still pending", to: withRangeContext("/app/exchanges"), priority: 3 },
@@ -767,15 +784,15 @@ export default function Dashboard() {
           <article className="bc-health-card">
             <span className="bc-kpi-label">Webhook registration</span>
             <strong className="bc-health-value">{dataAvailable ? health.webhookStatus : "Unavailable"}</strong>
-            <span className={health.webhookStatus === "FAILED" ? "bc-health-status is-problem" : "bc-health-status"}>
-              {health.webhookStatus === "FAILED" ? "Registration issue reported" : "Registration status"}
+            <span className={health.webhookStatus === "FAILED" || health.unprocessedWebhooks > 0 ? "bc-health-status is-problem" : "bc-health-status"}>
+              {health.webhookStatus === "FAILED" ? "Registration issue reported" : health.unprocessedWebhooks > 0 ? "Unprocessed events need review" : "Registration status"}
             </span>
             <span className="bc-health-detail">Unprocessed webhook events: {formatCount(health.unprocessedWebhooks)}</span>
           </article>
           <article className="bc-health-card">
             <span className="bc-kpi-label">Background jobs</span>
             <strong className="bc-health-value">{formatCount(health.failedJobs)}</strong>
-            <span className={health.failedJobs > 0 ? "bc-health-status is-problem" : "bc-health-status"}>Failed jobs for this store</span>
+            <span className={health.failedJobs > 0 ? "bc-health-status is-problem" : "bc-health-status"}>{health.failedJobs > 0 ? "Failed jobs need review" : "No failed jobs recorded"}</span>
             <span className="bc-health-detail">Last COD reconciliation: {health.lastReconciledAt ? new Date(health.lastReconciledAt).toLocaleString() : "Not recorded"}</span>
           </article>
         </div>
