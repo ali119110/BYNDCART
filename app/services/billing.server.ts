@@ -125,26 +125,29 @@ export async function createAppSubscription(
     };
   }
 
-  // Execute GraphQL appSubscriptionCreate
-  let confirmationUrl = `${returnUrl}?charge_id=mock_charge_${Date.now()}`;
+  // Test-only fallback is strictly opt-in to the automated test/dev harness. Never
+  // fabricate a Shopify subscription ID or report success in a real merchant install.
+  const isTestHarness = process.env.NODE_ENV === "test" || process.env.SKIP_AUTH === "true";
+  let confirmationUrl = "";
   let graphqlSubId: string | null = null;
   let subStatus = "PENDING";
 
-  try {
+  if (isTestHarness && !adminContext) {
+    confirmationUrl = returnUrl;
+    graphqlSubId = null;
+    subStatus = "PENDING";
+  } else {
     const admin = await getShopifyAdminClient(store.shop, adminContext);
+    if (!admin || typeof admin.graphql !== "function") {
+      throw new Error("Shopify Admin API is unavailable. Reopen BYNDCART through Shopify Admin and retry billing.");
+    }
     const response = await admin.graphql(
       `#graphql
       mutation AppSubscriptionCreate($name: String!, $returnUrl: String!, $lineItems: [AppSubscriptionLineItemInput!]!, $test: Boolean) {
         appSubscriptionCreate(name: $name, returnUrl: $returnUrl, lineItems: $lineItems, test: $test) {
-          userErrors {
-            field
-            message
-          }
+          userErrors { field message }
           confirmationUrl
-          appSubscription {
-            id
-            status
-          }
+          appSubscription { id status }
         }
       }`,
       {
@@ -152,44 +155,34 @@ export async function createAppSubscription(
           name: plan.name,
           returnUrl,
           test: process.env.NODE_ENV !== "production",
-          lineItems: [
-            {
-              plan: {
-                appRecurringPricingDetails: {
-                  price: { amount: plan.price, currencyCode: plan.currency },
-                  interval: plan.interval,
-                },
+          lineItems: [{
+            plan: {
+              appRecurringPricingDetails: {
+                price: { amount: plan.price, currencyCode: plan.currency },
+                interval: plan.interval,
               },
             },
-          ],
+          }],
         },
-      }
+      },
     );
-
     const result = await response.json();
+    const topErrors = Array.isArray(result?.errors) ? result.errors.map((error: any) => String(error?.message || "")).filter(Boolean) : [];
+    if (topErrors.length) throw new Error(`Shopify Billing API error: ${topErrors.join("; ")}`);
     const data = result?.data?.appSubscriptionCreate;
-
-    if (data?.userErrors && data.userErrors.length > 0) {
-      const errMsg = data.userErrors.map((e: any) => e.message).join(", ");
-      throw new Error(`Shopify Billing Error: ${errMsg}`);
+    if (Array.isArray(data?.userErrors) && data.userErrors.length) {
+      const messages = data.userErrors.map((error: any) => String(error?.message || "")).filter(Boolean);
+      throw new Error(`Shopify Billing Error: ${messages.join("; ") || "Shopify rejected the subscription request."}`);
     }
-
-    if (data?.confirmationUrl) {
-      confirmationUrl = data.confirmationUrl;
-    }
-    if (data?.appSubscription?.id) {
-      graphqlSubId = data.appSubscription.id;
-      subStatus = data.appSubscription.status || "PENDING";
-    }
-  } catch (err: any) {
-    console.warn(`[Billing Service] GraphQL appSubscriptionCreate execution note: ${err.message}`);
-    // If offline/test mode without GraphQL response, fallback to deterministic mock sub ID
-    if (!graphqlSubId) {
-      graphqlSubId = `gid://shopify/AppSubscription/sub_${Date.now()}`;
+    confirmationUrl = String(data?.confirmationUrl || "");
+    graphqlSubId = typeof data?.appSubscription?.id === "string" ? data.appSubscription.id : null;
+    subStatus = String(data?.appSubscription?.status || "PENDING").toUpperCase();
+    if (!confirmationUrl || !graphqlSubId) {
+      throw new Error("Shopify did not return a subscription confirmation URL and subscription ID. No billing plan was changed.");
     }
   }
 
-  // Persist pending or active billing subscription in database
+  // Persist only a real Shopify subscription, except in the explicit test harness.
   const subscription = await prisma.billingSubscription.upsert({
     where: { shopifyStoreId },
     create: {
@@ -202,7 +195,7 @@ export async function createAppSubscription(
       currency: plan.currency,
       interval: plan.interval,
       monthlyReturnLimit: plan.monthlyReturnLimit,
-      test: true,
+      test: process.env.NODE_ENV !== "production",
     },
     update: {
       shopifySubscriptionId: graphqlSubId,
@@ -213,6 +206,7 @@ export async function createAppSubscription(
       currency: plan.currency,
       interval: plan.interval,
       monthlyReturnLimit: plan.monthlyReturnLimit,
+      test: process.env.NODE_ENV !== "production",
     },
   });
 
@@ -248,27 +242,31 @@ export async function cancelAppSubscription(shopifyStoreId: string, adminContext
       });
       if (store) {
         const admin = await getShopifyAdminClient(store.shop, adminContext);
-        await admin.graphql(
+        if (!admin || typeof admin.graphql !== "function") {
+          throw new Error("Shopify Admin API is unavailable. Reopen BYNDCART through Shopify Admin and retry cancellation.");
+        }
+        const response = await admin.graphql(
           `#graphql
           mutation AppSubscriptionCancel($id: ID!) {
             appSubscriptionCancel(id: $id) {
-              userErrors {
-                field
-                message
-              }
-              appSubscription {
-                id
-                status
-              }
+              userErrors { field message }
+              appSubscription { id status }
             }
           }`,
-          {
-            variables: { id: sub.shopifySubscriptionId },
-          }
+          { variables: { id: sub.shopifySubscriptionId } },
         );
+        const payload = await response.json();
+        const topErrors = Array.isArray(payload?.errors) ? payload.errors.map((item: any) => String(item?.message || "")).filter(Boolean) : [];
+        const userErrors = payload?.data?.appSubscriptionCancel?.userErrors || [];
+        const messages = [...topErrors, ...userErrors.map((item: any) => String(item?.message || "")).filter(Boolean)];
+        if (messages.length) throw new Error(messages.join("; "));
+        const actualStatus = String(payload?.data?.appSubscriptionCancel?.appSubscription?.status || "").toUpperCase();
+        if (actualStatus && actualStatus !== "CANCELLED" && actualStatus !== "DECLINED") {
+          throw new Error(`Shopify returned subscription status ${actualStatus}; cancellation was not confirmed.`);
+        }
       }
     } catch (err: any) {
-      console.warn(`[Billing Service] Cancel GraphQL execution note: ${err.message}`);
+      throw new Error(`Shopify could not confirm subscription cancellation: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
