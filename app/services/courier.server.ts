@@ -2025,6 +2025,8 @@ export interface MerchantCourierBookingOptions {
   pickupCities: string[];
   deliveryCities: string[];
   serviceTypes: string[];
+  /** For carriers whose API provides city-specific services, key by the exact API city name. */
+  serviceTypesByCity?: Record<string, string[]>;
   citySource: "carrier_api" | "local";
   serviceTypeSource: "carrier_api" | "integration";
 }
@@ -2172,7 +2174,10 @@ async function fetchMerchantCourierBookingOptionsUncached(
     const deliveryCityRecords = cities
       .filter((city) => city.allow_as_destination !== false && String(city.allow_as_destination).toLowerCase() !== "false" && String(city.allow_as_destination) !== "0");
     const deliveryCities = uniqueOptionStrings(deliveryCityRecords.map((city) => city.name));
-    const serviceTypes = uniqueOptionStringsInOrder(deliveryCityRecords.flatMap((city) => leopardsCityShipmentTypes(city)));
+    const serviceTypesByCity = Object.fromEntries(deliveryCityRecords
+      .map((city) => [String(city.name || "").trim(), leopardsCityShipmentTypes(city)] as const)
+      .filter(([cityName, types]) => cityName.length > 0 && types.length > 0));
+    const serviceTypes = uniqueOptionStringsInOrder(Object.values(serviceTypesByCity).flat());
     if (!serviceTypes.length) {
       throw new Error("Leopards returned its city list but no shipment_type values. Refresh the courier connection or ask Leopards for the current eCom API city-list contract.");
     }
@@ -2181,6 +2186,7 @@ async function fetchMerchantCourierBookingOptionsUncached(
       pickupCities,
       deliveryCities,
       serviceTypes,
+      serviceTypesByCity,
       citySource: "carrier_api",
       serviceTypeSource: "carrier_api",
       cityRecords: cities,
@@ -2243,7 +2249,13 @@ function isValidPersistedBookingOptions(
     && Array.isArray(value.serviceTypes)
     && (value.pickupCities.length > 0 || value.deliveryCities.length > 0)
     && value.serviceTypes.length > 0
-    && (provider !== "LEOPARDS" || (Array.isArray(value.cityRecords) && value.cityRecords.length > 0))
+    && (provider !== "LEOPARDS" || (
+      Array.isArray(value.cityRecords)
+      && value.cityRecords.length > 0
+      && value.serviceTypesByCity
+      && typeof value.serviceTypesByCity === "object"
+      && !Array.isArray(value.serviceTypesByCity)
+    ))
   );
 }
 
@@ -2288,6 +2300,7 @@ export async function getMerchantCourierBookingOptions(
       pickupCities: cached.pickupCities,
       deliveryCities: cached.deliveryCities,
       serviceTypes: cached.serviceTypes,
+      ...(cached.serviceTypesByCity ? { serviceTypesByCity: cached.serviceTypesByCity } : {}),
       citySource: cached.citySource,
       serviceTypeSource: cached.serviceTypeSource,
     };
@@ -2321,6 +2334,7 @@ export async function getMerchantCourierBookingOptions(
     pickupCities: fetched.pickupCities,
     deliveryCities: fetched.deliveryCities,
     serviceTypes: fetched.serviceTypes,
+    ...(fetched.serviceTypesByCity ? { serviceTypesByCity: fetched.serviceTypesByCity } : {}),
     citySource: fetched.citySource,
     serviceTypeSource: fetched.serviceTypeSource,
   };
