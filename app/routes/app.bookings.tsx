@@ -1219,6 +1219,11 @@ export default function BookingsPage() {
                               Booked ({order.existingCourier || "previously"})
                             </div>
                           )}
+                          {order.existingShipmentStatus === "CANCELLED" && (
+                            <div style={{ fontSize: "10px", color: "#92400e", marginTop: "2px" }}>
+                              Previous shipment cancelled — available to rebook
+                            </div>
+                          )}
                           {order.alreadyBooked && !order.existingShipmentId && (
                             <div style={{ fontSize: "10px", color: "#92400e", marginTop: "2px" }}>
                               Existing booking tag — review before rebooking
@@ -1523,7 +1528,7 @@ export default function BookingsPage() {
                             </fulfillmentSyncFetcher.Form>
                           ) : order.alreadyBooked ? (
                             <a
-                              href={`/app/shipments?search=${encodeURIComponent(order.name)}`}
+                              href={`/app/shipments?search=${encodeURIComponent(order.name)}&type=All&status=ALL&page=1`}
                               style={{ color: "#92400e", fontSize: "10px", fontWeight: 700, textDecoration: "underline" }}
                             >
                               Review
