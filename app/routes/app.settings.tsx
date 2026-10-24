@@ -578,6 +578,13 @@ export default function Settings() {
               ))}
             </div>
             <div className="bco-note">Sender profiles and label settings are shared across couriers. Courier API pickup-address codes remain provider-specific because each carrier registers its own pickup locations.</div>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap", marginTop: "16px" }}>
+              <button type="submit" className="bc-btn primary" disabled={isSaving}>
+                {isSaving ? "Saving settings…" : "Save Settings"}
+              </button>
+              {savedRecently && <span role="status" style={{ color: "#047857", fontSize: "12px", fontWeight: 700 }}>Settings saved successfully.</span>}
+              {fetcher.data?.error && <span role="alert" style={{ color: "#b91c1c", fontSize: "12px" }}>{fetcher.data.error}</span>}
+            </div>
           </div>
         </section>
 
