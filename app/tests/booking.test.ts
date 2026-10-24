@@ -176,6 +176,86 @@ test("Booking service extracts COD from Shopify gateway and outstanding balance"
   }
 });
 
+test("Booking list shows every Shopify-unfulfilled order even if a courier shipment is already saved", async () => {
+  const mkOrder = (number: string, fulfillmentStatus = "UNFULFILLED") => ({
+    id: `gid://shopify/Order/${number.replace(/\D/g, "")}`,
+    name: number,
+    createdAt: "2026-10-24T07:00:00.000Z",
+    displayFinancialStatus: "PAID",
+    displayFulfillmentStatus: fulfillmentStatus,
+    paymentGatewayNames: ["Cash on Delivery (COD)"],
+    tags: [],
+    currentTotalPriceSet: { shopMoney: { amount: "3990.00" } },
+    totalPriceSet: { shopMoney: { amount: "3990.00" } },
+    totalOutstandingSet: { shopMoney: { amount: "0.00" } },
+    customer: { firstName: "Muhammad", lastName: "Ali", email: "test@example.com", phone: "03001234567" },
+    shippingAddress: {
+      name: "Muhammad Ali",
+      phone: "03001234567",
+      address1: "1 Test Street",
+      address2: "",
+      city: "Karachi",
+      province: "Sindh",
+      zip: "74000",
+      country: "Pakistan",
+    },
+    lineItems: { edges: [{ node: { id: `gid://shopify/LineItem/${number}`, title: "Test item", quantity: 1, sku: "TEST", weight: { value: 500, unit: "GRAMS" }, originalUnitPriceSet: { shopMoney: { amount: "3990.00" } } } }] },
+  });
+
+  const shipmentTrack = (prisma as any).shipmentTrack;
+  const originalFindMany = shipmentTrack.findMany;
+  shipmentTrack.findMany = async () => [
+    {
+      id: "shipment-fr4947",
+      shopifyOrderId: "gid://shopify/Order/4947",
+      orderNumber: "FR4947",
+      trackingNumber: "PX-FR4947",
+      courier: "POSTEX",
+      status: "LABEL_CREATED",
+    },
+    {
+      id: "shipment-fr4946",
+      shopifyOrderId: "gid://shopify/Order/4946",
+      orderNumber: "FR4946",
+      trackingNumber: "PX-FR4946",
+      courier: "POSTEX",
+      status: "LABEL_CREATED",
+    },
+  ];
+
+  try {
+    const { fetchUnfulfilledOrders } = await import("../services/booking.server");
+    const orders = await fetchUnfulfilledOrders({
+      graphql: async () => new Response(JSON.stringify({
+        data: {
+          orders: {
+            edges: [
+              { node: mkOrder("FR4948") },
+              { node: mkOrder("FR4947") },
+              { node: mkOrder("FR4946") },
+              { node: mkOrder("FR4945", "FULFILLED") },
+            ],
+          },
+        },
+      }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    }, "store-booking-visibility-test", 100);
+
+    assert.deepStrictEqual(orders.map((order) => order.name), ["FR4948", "FR4947", "FR4946"]);
+    const newBooking = orders.find((order) => order.name === "FR4948");
+    const booked4947 = orders.find((order) => order.name === "FR4947");
+    const booked4946 = orders.find((order) => order.name === "FR4946");
+    assert.strictEqual(newBooking?.alreadyBooked, false);
+    assert.strictEqual(booked4947?.alreadyBooked, true);
+    assert.strictEqual(booked4947?.existingShipmentId, "shipment-fr4947");
+    assert.strictEqual(booked4947?.existingTracking, "PX-FR4947");
+    assert.strictEqual(booked4946?.alreadyBooked, true);
+    assert.strictEqual(booked4946?.existingShipmentId, "shipment-fr4946");
+    assert.strictEqual(booked4946?.existingTracking, "PX-FR4946");
+  } finally {
+    shipmentTrack.findMany = originalFindMany;
+  }
+});
+
 test("Loadsheet Service - Loadsheet creation and parcel assignment", async () => {
   const mockShipments = [
     {
