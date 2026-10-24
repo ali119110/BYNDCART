@@ -338,6 +338,8 @@ model ShipmentTrack {
   exchangeRequestId  String?
   destinationCity    String?
   codAmount          Decimal?      @db.Decimal(12, 2)
+  // Shared merchant shipper profile selected when the booking was created.
+  shipperProfileIndex Int?
   loadsheetId        String?
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
